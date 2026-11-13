@@ -724,6 +724,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     {
         Camera& camera = scene.CameraRef();
         camera.SetPosition(float3(0.0f, 0.0f, 0.0f));
+        camera.SetYawPitchRoll(0.0f, 0.0f, 0.0f); // and level: a level without one does not inherit the last level's turn
         if (j.contains("camera"))
         {
             const json& cam = j["camera"];

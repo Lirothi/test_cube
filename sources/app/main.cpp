@@ -84,11 +84,12 @@ std::string ExtractArgValue(const char* cmd, const char* key)
 {
     const char* p = std::strstr(cmd, key);
     if (!p) { return {}; }
+    const bool wholeQuoted = p > cmd && p[-1] == '"'; // "--shot=C:\My Shots\a.png", quoted as one argument
     p += std::strlen(key);
     while (*p == '=' || std::isspace(static_cast<unsigned char>(*p))) { ++p; }
     std::string v;
-    if (*p == '"') {
-        ++p;
+    if (*p == '"' || wholeQuoted) {
+        if (*p == '"') { ++p; }
         while (*p && *p != '"') { v.push_back(*p); ++p; }
     } else {
         while (*p && !std::isspace(static_cast<unsigned char>(*p))) { v.push_back(*p); ++p; }
@@ -980,21 +981,13 @@ int WINAPI WinMain(
 
     // "--level=<path>" overrides the boot level (headless verification of a specific level).
     if (lpCmdLine) {
-        if (const char* flag = std::strstr(lpCmdLine, "--level=")) {
-            const char* p = flag + std::strlen("--level=");
-            std::string path;
-            const bool quoted = *p == '"';
-            if (quoted) { ++p; }
-            while (*p && (quoted ? *p != '"' : !std::isspace(static_cast<unsigned char>(*p)))) { path.push_back(*p); ++p; }
-            g_bootLevelPath = path;
+        if (std::strstr(lpCmdLine, "--level=")) {
+            g_bootLevelPath = ExtractArgValue(lpCmdLine, "--level="); // quoted or not
         }
         // "--shot=<path>" grabs the backbuffer to a PNG after "--shot-delay=<sec>" (default 7)
         // and exits — reliable headless verification on the flip-model swapchain.
-        if (const char* flag = std::strstr(lpCmdLine, "--shot=")) {
-            const char* p = flag + std::strlen("--shot=");
-            std::string path;
-            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
-            g_shotPath = path;
+        if (std::strstr(lpCmdLine, "--shot=")) {
+            g_shotPath = ExtractArgValue(lpCmdLine, "--shot="); // a path with a space comes quoted
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
             g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
@@ -1828,7 +1821,11 @@ int WINAPI WinMain(
                                   L" is not in the game's content.\n\nCopy the whole game folder again.");
             return 1;
         }
-        if (boot.startMode == "play") { g_bootPlay = true; }
+        if (boot.startMode == "play")
+        {
+            g_bootPlay = true;
+            g_playByLevelRule = true; // a level without a Player Start: the free camera (AppController)
+        }
         LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, g_bootLevelPath, boot.startMode);
     }
 #endif

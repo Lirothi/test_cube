@@ -117,6 +117,32 @@ bool BuildDistributionPanel::ValidateRequest(const dist::BuildRequest& request, 
         why = "no profile " + profile + " (tools/dist/<name>.json)";
         return false;
     }
+    // tools/build_dist.py's VERSION_RE: it becomes a folder name, a C string and a command-line value.
+    if (!request.version.empty())
+    {
+        const std::string& v = request.version;
+        std::size_t at = 0;
+        bool ok = true;
+        for (int part = 0; part < 3 && ok; ++part)
+        {
+            const std::size_t digits = at;
+            while (at < v.size() && std::isdigit(static_cast<unsigned char>(v[at]))) { ++at; }
+            ok = at > digits && (part == 2 || (at < v.size() && v[at++] == '.'));
+        }
+        if (ok && at < v.size())
+        {
+            ok = v[at] == '-' && at + 1 < v.size() && std::isalnum(static_cast<unsigned char>(v[at + 1]));
+            for (std::size_t i = at + 1; ok && i < v.size(); ++i)
+            {
+                ok = std::isalnum(static_cast<unsigned char>(v[i])) || v[i] == '.' || v[i] == '-';
+            }
+        }
+        if (!ok)
+        {
+            why = "version \"" + v + "\": digits a.b.c, optionally -suffix of letters, digits, dots and dashes";
+            return false;
+        }
+    }
     for (const std::string& level : request.levels)
     {
         if (!vfs::IsFile(level))

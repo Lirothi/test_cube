@@ -26,6 +26,7 @@ namespace
     std::filesystem::path g_folder;              // absolute, made at Install
     std::atomic<bool> g_installed{ false };
     std::atomic<bool> g_reporting{ false };      // the first crash reports; any other thread that crashes meanwhile waits
+    std::atomic<DWORD> g_reportingThread{ 0 };   // ... and a fault inside the report on that thread ends the process
     HANDLE g_request = nullptr;
     HANDLE g_done = nullptr;
     EXCEPTION_POINTERS* g_pointers = nullptr;
@@ -39,6 +40,10 @@ namespace
     DWORD WINAPI DumpWriter(void*)
     {
         WaitForSingleObject(g_request, INFINITE);
+        SYSTEMTIME t{};
+        GetLocalTime(&t);
+        swprintf_s(g_dumpPath, L"%s\\%04u%02u%02u_%02u%02u%02u_%lu.dmp", g_folder.c_str(), t.wYear, t.wMonth, t.wDay, t.wHour,
+                   t.wMinute, t.wSecond, GetCurrentProcessId());
         const HANDLE file = CreateFileW(g_dumpPath, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file != INVALID_HANDLE_VALUE)
         {
@@ -132,29 +137,34 @@ namespace
         return out;
     }
 
-    [[noreturn]] void Report(const std::string& what, EXCEPTION_POINTERS* pointers, unsigned exitCode)
+    // `what` null = described from `pointers`, after the dump. Nothing allocates, formats or calls into a module before the
+    // dump is asked for: a crash inside the heap, or a thread out of stack (only the main thread has a stack guarantee),
+    // faulted again in that work and the process ended with no dump. The writer thread names the file and writes it.
+    [[noreturn]] void Report(const char* what, EXCEPTION_POINTERS* pointers, unsigned exitCode)
     {
+        const DWORD self = GetCurrentThreadId();
         if (g_reporting.exchange(true))
         {
-            for (;;) { Sleep(INFINITE); } // the first report ends the process
+            // A fault inside this report on the reporting thread (the log's flush, the message box's modal loop running
+            // the window procedure over the broken frame): end at once -- sleeping there hung the process for good.
+            if (g_reportingThread.load() == self) { TerminateProcess(GetCurrentProcess(), exitCode); }
+            for (;;) { Sleep(INFINITE); } // another thread is reporting: its report ends the process
         }
-        SYSTEMTIME t{};
-        GetLocalTime(&t);
-        swprintf_s(g_dumpPath, L"%s\\%04u%02u%02u_%02u%02u%02u_%lu.dmp", g_folder.c_str(), t.wYear, t.wMonth, t.wDay, t.wHour,
-                   t.wMinute, t.wSecond, GetCurrentProcessId());
+        g_reportingThread.store(self);
         g_pointers = pointers;
-        g_threadId = GetCurrentThreadId();
+        g_threadId = self;
         bool dumped = false;
         if (g_request && g_done)
         {
             SetEvent(g_request);
             dumped = WaitForSingleObject(g_done, 60000) == WAIT_OBJECT_0 && g_dumpWritten;
         }
+        const std::string described = what ? std::string(what) : pointers ? Describe(pointers) : std::string("a crash");
         char dumpUtf8[1024] = {};
         WideCharToMultiByte(CP_UTF8, 0, g_dumpPath, -1, dumpUtf8, sizeof(dumpUtf8) - 1, nullptr, nullptr);
         char logPath[1024] = {};
         logging::GetSessionFilePath(logPath, sizeof(logPath));
-        LOG_FATAL(logging::LogCategory::Core, "crash: {} -- {} {}", what, dumped ? "minidump" : "NO minidump", dumpUtf8);
+        LOG_FATAL(logging::LogCategory::Core, "crash: {} -- {} {}", described, dumped ? "minidump" : "NO minidump", dumpUtf8);
         logging::Flush(2000);
         if (g_options.messageBox)
         {
@@ -164,7 +174,7 @@ namespace
                 swprintf_s(device, L"The graphics card stopped responding (device removed, 0x%08X) -- usually its driver. "
                                    L"Update the graphics driver and start the game again.\n\n", reason);
             }
-            const std::wstring text = std::wstring(device) + g_options.product + L" stopped unexpectedly: " + Widen(what) + L".\n\n" +
+            const std::wstring text = std::wstring(device) + g_options.product + L" stopped unexpectedly: " + Widen(described) + L".\n\n" +
                                       (dumped ? L"A crash report was saved:\n" + std::wstring(g_dumpPath) + L"\n\n" : std::wstring()) +
                                       L"The log:\n" + Widen(logPath);
             LOG_INFO(logging::LogCategory::Core, "crash: message box shown");
@@ -177,7 +187,7 @@ namespace
 
     LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* pointers)
     {
-        Report(Describe(pointers), pointers, pointers->ExceptionRecord->ExceptionCode);
+        Report(nullptr, pointers, pointers->ExceptionRecord->ExceptionCode);
     }
 
     // A stack overflow is reported where it happens, first chance: a handler further up might swallow it, and the thread
@@ -186,7 +196,7 @@ namespace
     {
         if (pointers->ExceptionRecord->ExceptionCode == EXCEPTION_STACK_OVERFLOW)
         {
-            Report(Describe(pointers), pointers, pointers->ExceptionRecord->ExceptionCode);
+            Report(nullptr, pointers, pointers->ExceptionRecord->ExceptionCode);
         }
         return EXCEPTION_CONTINUE_SEARCH;
     }
@@ -206,7 +216,7 @@ namespace
         {
             what += " (uncaught exception of an unknown type)";
         }
-        Report(what, nullptr, 3);
+        Report(what.c_str(), nullptr, 3);
     }
 
     void OnAbort(int) { Report("abort()", nullptr, 3); }

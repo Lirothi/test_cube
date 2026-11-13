@@ -27,11 +27,16 @@ public:
     void TogglePossess(Scene& scene);
     // Shift+F1: the mouse goes free (a click in the window takes it back).
     void ToggleFreeMouse() { mouseFree_ = !mouseFree_; }
+    // Shipping's Esc menu: the mouse is the menu's while it is up, the game's again when it closes.
+    void SetMouseFree(bool free) { mouseFree_ = free; }
     // Once a frame, before Scene::Tick: the mouse and the keys. `uiWantsCursor`: a window is open that wants the mouse.
     void Tick(InputManager& input, Scene& scene, float deltaTime, bool uiWantsCursor, bool uiCapturingMouse);
     bool AtHelm() const { return playing_ && atHelm_; }
     // After a level load: the session goes on from the new level's start, or ends if it was the editor's (returns false, nothing restored: the camera is the new level's).
     bool OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course);
+    // After a level load, the session ends where the new level put the camera (nothing put back: the old level's pose
+    // means nothing here) -- the editor's session, or Shipping's level rule on a level without a Player Start.
+    void StopForLevel(Scene& scene, InputManager& input);
     void SetStatus(std::string status, double untilSeconds);
     // The HUD's line.
     std::wstring HudLine(const Scene& scene, double nowSeconds) const;

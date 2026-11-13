@@ -52,6 +52,8 @@ private:
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene);
     // The play session's keys and requests (docs/play_mode_plan.md), and what it says to the world this frame.
     void TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed);
+    // Shipping's Esc menu (it has no Developer Controls): go on, the levels the packages hold, quit. A build with them draws nothing.
+    void DrawGameMenu(LevelManager& levelManager);
 
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;
@@ -70,6 +72,8 @@ private:
     std::vector<HudLine> hudLines_; // G6: the build task's output, published at the hand-over
     PlaySession playSession_;
     bool editorOpenBeforePlay_ = false;
+    bool gameMenuOpen_ = false;              // Shipping's Esc menu
+    std::vector<std::string> gameMenuLevels_; // listed the first time it opens: data/levels/*.json in the packages
     std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
     std::wstring hudRaceLine_;
     std::wstring hudBigText_; // the race's countdown, in the middle of the screen

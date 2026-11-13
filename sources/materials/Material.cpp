@@ -316,14 +316,13 @@ std::string CookedShaderPath(uint64_t identity)
     return name;
 }
 
+// Relative = under the content root, not the current directory: the same in dev (the cwd is the root), and in Shipping,
+// whose cwd is the user's folder, the source's absolute path is <exe>/shaders/x.hlsl -- which ShaderVirtualPath turns back
+// into the content path a package serves (FingerprintShaderFile). Against the cwd it was <user>/shaders/x.hlsl, read from
+// the disk, never there: no compiled permutation was ever cached and every launch compiled them again.
 std::filesystem::path NormalizeShaderPath(const std::filesystem::path& source)
 {
-    std::error_code ec;
-    std::filesystem::path path = std::filesystem::absolute(source, ec);
-    if (ec)
-    {
-        path = source;
-    }
+    const std::filesystem::path path = source.is_absolute() ? source : vfs::ContentRoot() / source;
     return path.lexically_normal();
 }
 
@@ -356,9 +355,11 @@ bool ShaderCacheEnabled()
     return enabled;
 }
 
-bool FingerprintShaderFile(const std::filesystem::path& path, ShaderDependencyFingerprint& out)
+// `content`: a shader source, read under the content root through the mounts (a package too); false = a file of this
+// machine (the compiler DLL), read where it is.
+bool FingerprintShaderFile(const std::filesystem::path& path, ShaderDependencyFingerprint& out, bool content = true)
 {
-    vfs::InStream file(path);
+    vfs::InStream file(content ? vfs::Path(ShaderVirtualPath(path.wstring())) : vfs::Path(path));
     if (!file)
     {
         return false;
@@ -396,7 +397,7 @@ const ShaderDependencyFingerprint& DxcCompilerFingerprint()
         const DWORD length = GetModuleFileNameW(
             module, modulePath.data(), static_cast<DWORD>(modulePath.size()));
         if (length == 0 || length >= modulePath.size() ||
-            !FingerprintShaderFile(std::wstring(modulePath.data(), length), result))
+            !FingerprintShaderFile(std::wstring(modulePath.data(), length), result, false))
         {
             return ShaderDependencyFingerprint{};
         }
@@ -1375,7 +1376,9 @@ static HRESULT CompileDXC(const std::wstring& file,
     const std::wstring target = BuildProfile(stage4cc, sm);
     const auto shaderBegin = std::chrono::steady_clock::now();
     const std::string shaderLabel = NarrowForLog(path.filename().wstring()) + ":" + entry;
-    if (Cooked().present && !cooking)
+    // A loose source over a mounted package (--vfs=both, the dev tree) is one being edited: the cooked blob carries no
+    // source hash, so it would win over the edit, hot reloads included -- "loose files over the packages" holds for shaders too.
+    if (Cooked().present && !cooking && !vfs::IsLooseFile(virtualPath))
     {
         const uint64_t cookedId = CookedShaderIdentity(virtualPath, entry, stage4cc, target, defines);
         std::vector<std::uint8_t> cooked;

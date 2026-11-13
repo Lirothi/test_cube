@@ -127,6 +127,9 @@ extern float g_timeScale;
 // WITH_EDITOR only; ignored elsewhere.
 extern bool g_bootEditor;
 extern bool g_bootPlay; // "--play": boot into the play session (docs/play_mode_plan.md)
+// Shipping, boot.json startMode "play": every level by its own rule -- a Player Start: first person from it; none: the free
+// camera at its freeCameraStart, else at the origin (owner, 2026-11-13). AppController::TickPlay / OnLevelLoaded.
+extern bool g_playByLevelRule;
 // "--edit-mesh=<models/x/x.mesh.json>": open the Mesh Editor on that asset at boot (implies
 // --editor). Same reason again: its preview is otherwise reachable only by a double-click in
 // the content browser, and a lighting change there is judged by LOOKING at it.

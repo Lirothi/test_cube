@@ -95,6 +95,7 @@ std::string g_bootDevTab;
 int g_bootMcpPort = 0;
 bool g_bootEditor = false;
 bool g_bootPlay = false;
+bool g_playByLevelRule = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
 bool g_bootBuildDist = false;
@@ -2472,22 +2473,14 @@ namespace
             // The file system the content comes through (docs/distribution_build_plan.md §2): counts since the start.
             {
                 const vfs::Counters vc = vfs::GetCounters();
-                const std::string root = vfs::Narrow(vfs::ContentRoot().generic_wstring());
-                std::string mounts;
-                for (const std::string& m : vfs::DescribeMounts())
-                {
-                    mounts += (mounts.empty() ? "\"" : ",\"") + m + "\"";
-                }
-                char vfsItem[768];
-                std::snprintf(vfsItem, sizeof(vfsItem),
-                              ",\"vfs\":{\"mounts\":[%s],\"root\":\"%s\",\"opens\":%llu,\"packageOpens\":%llu,\"misses\":%llu,\"stats\":%llu,\"lists\":%llu,"
-                              "\"reads\":%llu,\"bytesRead\":%llu,\"blocksDecoded\":%llu,\"damagedBlocks\":%llu}",
-                              mounts.c_str(), root.c_str(), static_cast<unsigned long long>(vc.opens),
-                              static_cast<unsigned long long>(vc.packageOpens), static_cast<unsigned long long>(vc.misses),
-                              static_cast<unsigned long long>(vc.stats), static_cast<unsigned long long>(vc.lists),
-                              static_cast<unsigned long long>(vc.reads), static_cast<unsigned long long>(vc.bytesRead),
-                              static_cast<unsigned long long>(vc.blocksDecoded), static_cast<unsigned long long>(vc.damagedBlocks));
-                out += vfsItem;
+                // Through the JSON library: a package's name or the root may hold a quote, a backslash or anything long
+                // (a fixed buffer of printf cut it into invalid JSON).
+                const nlohmann::json vfsItem = {
+                    { "mounts", vfs::DescribeMounts() }, { "root", vfs::Narrow(vfs::ContentRoot().generic_wstring()) },
+                    { "opens", vc.opens }, { "packageOpens", vc.packageOpens }, { "misses", vc.misses }, { "stats", vc.stats },
+                    { "lists", vc.lists }, { "reads", vc.reads }, { "bytesRead", vc.bytesRead }, { "blocksDecoded", vc.blocksDecoded },
+                    { "damagedBlocks", vc.damagedBlocks } };
+                out += ",\"vfs\":" + vfsItem.dump();
                 const Material::DistributionShaderStats shaders = Material::GetDistributionShaderStats();
                 char shaderItem[128];
                 std::snprintf(shaderItem, sizeof(shaderItem), ",\"shaders\":{\"cooked\":%u,\"notCooked\":%u}",

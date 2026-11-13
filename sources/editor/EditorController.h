@@ -271,8 +271,8 @@ private:
             if (!dist::TheBuildJob().Start(request, outText)) { return false; }
             owner_.showBuildDistPanel_ = true;
             const dist::BuildStatus status = dist::TheBuildJob().Status();
-            outText = "{\"id\":" + std::to_string(status.id) + ",\"mode\":\"" + request.mode + "\",\"profile\":\"" +
-                      request.profile + "\",\"started\":true}";
+            outText = nlohmann::json{ { "id", status.id }, { "mode", request.mode }, { "profile", request.profile }, { "started", true } }
+                          .dump(); // a profile given as a path has backslashes
             return true;
         }
         std::string Status(int id) override { return dist::TheBuildJob().StatusJson(id); }

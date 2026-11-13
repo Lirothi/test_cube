@@ -83,14 +83,33 @@ namespace vfs::pak
 
         // The last two blocks this thread decoded: an InStream's 64 KB window rarely lines up with the blocks, so the
         // next window starts in the block the last one ended in.
+        // Keyed by the package's serial, not its address: a package closed and another opened at the same address (the
+        // cook verifies two in turn, the self-test opens and drops many) would have been handed the old one's bytes.
         struct CachedBlock
         {
-            const Package* package = nullptr;
+            std::uint64_t serial = 0;
             std::uint32_t block = UINT32_MAX;
             std::vector<std::uint8_t> bytes;
         };
         thread_local CachedBlock t_blocks[2];
         thread_local int t_nextBlock = 0;
+        std::atomic<std::uint64_t> g_packageSerial{ 1 };
+
+        // A mapped view's pages come from the disk on first touch: a read error there (a bad sector, a drive pulled) is an
+        // EXCEPTION_IN_PAGE_ERROR, not a return code. Every block's bytes are first touched by its CRC: caught here, the
+        // block reads as damaged instead of ending the game.
+        bool CrcOfMapped(const std::uint8_t* p, std::size_t n, std::uint32_t& out)
+        {
+            __try
+            {
+                out = Crc32c(p, n);
+                return true;
+            }
+            __except (GetExceptionCode() == EXCEPTION_IN_PAGE_ERROR ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+            {
+                return false;
+            }
+        }
 
         template <typename T>
         void AppendPod(std::vector<std::uint8_t>& out, const T& value)
@@ -184,6 +203,18 @@ namespace vfs::pak
         temp += L".tmp";
         std::ofstream file(temp, std::ios::binary | std::ios::trunc);
         if (!file) { return fail("cannot write " + vfs::Narrow(temp.wstring())); }
+        // Whatever way this returns, no <out>.tmp is left behind (after the rename it is gone already).
+        struct TempGone
+        {
+            std::ofstream& file;
+            const std::filesystem::path& path;
+            ~TempGone()
+            {
+                if (file.is_open()) { file.close(); }
+                std::error_code ignored;
+                std::filesystem::remove(path, ignored);
+            }
+        } tempGone{ file, temp };
         std::vector<char> zeros(kAlign, 0);
         file.write(zeros.data(), kHeaderBytes);
         std::uint64_t offset = kHeaderBytes;
@@ -283,8 +314,8 @@ namespace vfs::pak
                         aad.method = static_cast<std::uint8_t>(job.method);
                         aad.rawSize = static_cast<std::uint32_t>(job.rawSize);
                         const auto* a = reinterpret_cast<const std::uint8_t*>(&aad);
-                        cipher->Nonce(a, sizeof(aad), job.stored.data(), job.stored.size(), job.nonce);
-                        job.sealed = cipher->Encrypt(job.nonce, a, sizeof(aad), job.stored.data(), job.stored.size(), job.tag);
+                        job.sealed = cipher->Nonce(a, sizeof(aad), job.stored.data(), job.stored.size(), job.nonce) &&
+                                     cipher->Encrypt(job.nonce, a, sizeof(aad), job.stored.data(), job.stored.size(), job.tag);
                     }
                 }
                 ZSTD_freeCCtx(context);
@@ -366,8 +397,8 @@ namespace vfs::pak
             std::memcpy(aad.name, baseAad.name, sizeof(aad.name));
             aad.priority = options.priority;
             const auto* a = reinterpret_cast<const std::uint8_t*>(&aad);
-            cipher->Nonce(a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocNonce);
-            if (!cipher->Encrypt(header.tocNonce, a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocTag))
+            if (!cipher->Nonce(a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocNonce) ||
+                !cipher->Encrypt(header.tocNonce, a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocTag))
             {
                 return fail("encrypting the table of contents failed (CNG)");
             }
@@ -422,6 +453,7 @@ namespace vfs::pak
     {
         std::unique_ptr<Package> package(new Package());
         package->file_ = path;
+        package->serial_ = g_packageSerial.fetch_add(1, std::memory_order_relaxed);
         const auto refuse = [&error, &path](const std::string& why)
         {
             error = vfs::Narrow(path.wstring()) + ": " + why;
@@ -454,7 +486,9 @@ namespace vfs::pak
         }
         if (h.tocOffset > package->fileBytes_ || h.tocStoredSize > package->fileBytes_ - h.tocOffset) { return refuse("the table of contents lies past the end"); }
         const std::uint8_t* storedToc = package->view_ + h.tocOffset;
-        if (Crc32c(storedToc, static_cast<std::size_t>(h.tocStoredSize)) != h.tocCrc) { return refuse("the table of contents is damaged (CRC)"); }
+        std::uint32_t tocCrc = 0;
+        if (!CrcOfMapped(storedToc, static_cast<std::size_t>(h.tocStoredSize), tocCrc)) { return refuse("cannot be read from the disk"); }
+        if (tocCrc != h.tocCrc) { return refuse("the table of contents is damaged (CRC)"); }
         std::vector<std::uint8_t> plainToc;
         if (package->cipher_)
         {
@@ -469,6 +503,14 @@ namespace vfs::pak
                 return refuse("the table of contents does not authenticate (damaged, changed, or another key with this GUID)");
             }
             storedToc = plainToc.data();
+        }
+        // The header itself has no check: its raw size must be what the stored frame says it holds (a flipped bit made
+        // resize throw, or zero-fill a gigabyte, before anything refused the package).
+        const unsigned long long frameSize = ZSTD_getFrameContentSize(storedToc, static_cast<std::size_t>(h.tocStoredSize));
+        if (frameSize == ZSTD_CONTENTSIZE_UNKNOWN || frameSize == ZSTD_CONTENTSIZE_ERROR || frameSize != h.tocRawSize ||
+            h.tocRawSize > (std::uint64_t{ 1 } << 30))
+        {
+            return refuse("the table of contents' size does not match its frame (a damaged header)");
         }
         package->toc_.resize(static_cast<std::size_t>(h.tocRawSize));
         const std::size_t got = ZSTD_decompress(package->toc_.data(), package->toc_.size(), storedToc, static_cast<std::size_t>(h.tocStoredSize));
@@ -502,9 +544,23 @@ namespace vfs::pak
             {
                 return refuse("entry " + std::to_string(e) + " is out of bounds");
             }
-            std::uint64_t raw = 0;
-            for (std::uint32_t b = 0; b < entry.blockCount; ++b) { raw += package->blocks_[entry.firstBlock + b].rawSize; }
-            if (raw != entry.size) { return refuse("entry " + std::to_string(e) + " does not add up"); }
+            // The layout Read relies on, exactly as the writer makes it: whole 64 KB blocks and a last one with the rest; a
+            // stored block's bytes are its raw bytes; a compressed one has some. Blocks of other sizes that still added up
+            // made Read loop for ever or read past a block.
+            if (entry.blockCount != (entry.size + kBlockSize - 1) / kBlockSize)
+            {
+                return refuse("entry " + std::to_string(e) + " has the wrong number of blocks");
+            }
+            for (std::uint32_t b = 0; b < entry.blockCount; ++b)
+            {
+                const TocBlock& block = package->blocks_[entry.firstBlock + b];
+                const std::uint64_t want = std::min<std::uint64_t>(kBlockSize, entry.size - std::uint64_t{ b } * kBlockSize);
+                const bool stored = block.method == static_cast<std::uint8_t>(Method::Store);
+                if (block.rawSize != want || (stored && block.storedSize != block.rawSize) || (!stored && block.storedSize == 0))
+                {
+                    return refuse("entry " + std::to_string(e) + " has a block of the wrong size");
+                }
+            }
             package->keys_.push_back(FoldKey(package->PathOf(entry)));
             package->pathHashes_.push_back(ContentHash(package->keys_.back().data(), package->keys_.back().size()));
         }
@@ -552,6 +608,9 @@ namespace vfs::pak
     {
         std::string prefix = FoldKey(normalisedPath);
         if (!prefix.empty() && prefix.back() != '/') { prefix.push_back('/'); }
+        // Collected, then in the order NTFS lists names: by the NAME upper-cased (NTFS's collation), so a folder "fonts"
+        // comes before a file "fonts.json" (by the full keys '.' < '/' put the file first) and "aab" before "a_b".
+        std::vector<std::pair<std::string_view, bool>> names;
         std::string lastDirectory;
         for (auto it = std::lower_bound(keys_.begin(), keys_.end(), prefix);
              it != keys_.end() && it->compare(0, prefix.size(), prefix) == 0; ++it)
@@ -563,16 +622,23 @@ namespace vfs::pak
             const std::size_t slash = rest.find('/');
             if (slash == std::string_view::npos)
             {
-                visit(rest, false);
+                names.emplace_back(rest, false);
                 continue;
             }
             const std::string_view folder = rest.substr(0, slash);
             if (FoldKey(folder) != lastDirectory)
             {
                 lastDirectory = FoldKey(folder);
-                visit(folder, true);
+                names.emplace_back(folder, true);
             }
         }
+        std::stable_sort(names.begin(), names.end(), [](const auto& a, const auto& b)
+        {
+            const auto upper = [](char c) { return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c; };
+            return std::lexicographical_compare(a.first.begin(), a.first.end(), b.first.begin(), b.first.end(),
+                                                [&](char x, char y) { return static_cast<unsigned char>(upper(x)) < static_cast<unsigned char>(upper(y)); });
+        });
+        for (const auto& [name, directory] : names) { visit(name, directory); }
     }
 
     Package::EntryInfo Package::Entry(int entry) const
@@ -592,12 +658,19 @@ namespace vfs::pak
         const std::uint32_t block = EntryAt(entry).firstBlock + index;
         for (CachedBlock& cached : t_blocks)
         {
-            if (cached.package == this && cached.block == block) { return cached.bytes.data(); }
+            if (cached.serial == serial_ && cached.block == block) { return cached.bytes.data(); }
         }
         const std::string_view path = PathOf(EntryAt(entry));
         const TocBlock& b = BlockAt(block);
         const std::uint8_t* stored = view_ + b.offset;
-        if (Crc32c(stored, b.storedSize) != b.crc)
+        std::uint32_t crc = 0;
+        if (!CrcOfMapped(stored, b.storedSize, crc))
+        {
+            vfs::NoteBlockDecoded(true);
+            LOG_ERROR(logging::LogCategory::Vfs, "vfs: '{}' in {}: block {} cannot be read from the disk", path, name_, block);
+            return nullptr;
+        }
+        if (crc != b.crc)
         {
             vfs::NoteBlockDecoded(true);
             LOG_ERROR(logging::LogCategory::Vfs, "vfs: '{}' in {} is damaged: block {} fails its CRC", path, name_, block);
@@ -606,7 +679,7 @@ namespace vfs::pak
         if (!cipher_ && b.method == static_cast<std::uint8_t>(Method::Store)) { return stored; }
         CachedBlock& slot = t_blocks[t_nextBlock];
         t_nextBlock ^= 1;
-        slot.package = nullptr;
+        slot.serial = 0;
         if (cipher_)
         {
             thread_local std::vector<std::uint8_t> plain;
@@ -628,7 +701,7 @@ namespace vfs::pak
             {
                 slot.bytes.swap(plain);
                 vfs::NoteBlockDecoded(false);
-                slot.package = this;
+                slot.serial = serial_;
                 slot.block = block;
                 return slot.bytes.data();
             }
@@ -643,7 +716,7 @@ namespace vfs::pak
             return nullptr;
         }
         vfs::NoteBlockDecoded(false);
-        slot.package = this;
+        slot.serial = serial_;
         slot.block = block;
         return slot.bytes.data();
     }
@@ -663,6 +736,7 @@ namespace vfs::pak
             const std::uint8_t* raw = DecodeBlock(entry, index);
             if (!raw) { return false; }
             const std::size_t within = static_cast<std::size_t>(at - std::uint64_t{ index } * kBlockSize);
+            if (within >= BlockAt(block).rawSize) { return false; } // the layout Open checks makes this impossible; a wrap if not
             const std::size_t take = std::min<std::size_t>(left, BlockAt(block).rawSize - within);
             std::memcpy(out, raw + within, take);
             out += take;

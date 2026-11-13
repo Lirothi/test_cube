@@ -15,7 +15,9 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "text/TextManager.h"
 #include "core/threading/ThreadRole.h" // G6: PublishHud is the hand-over's
+#include "core/vfs/Vfs.h" // Shipping's menu lists the packaged levels
 
+#include <algorithm>
 #include <cstdarg>
 #include <cwchar>
 
@@ -258,6 +260,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     TickPlay(input, renderer, scene, levelManager, toggleLevelEditor);
 #else
     TickPlay(input, renderer, scene, levelManager, false);
+    DrawGameMenu(levelManager);
 #endif
     // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
     if (playSession_.Playing())
@@ -277,7 +280,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #if WITH_EDITOR
         const bool panelsOpen = editorController_.IsOpen() || developerWindow_.AnyWindowOpen() || raceResults;
 #else
-        const bool panelsOpen = developerWindow_.AnyWindowOpen() || raceResults;
+        const bool panelsOpen = developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_;
 #endif
         if (!panelsOpen && io.WantCaptureKeyboard)
         {
@@ -289,12 +292,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (playSession_.Playing())
     {
-        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults, uiCapturingMouse);
+        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_, uiCapturingMouse);
         if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { scene.RaceRef().DebugDraw(*draw); } // bot.debug
     }
     else
     {
-        bool allowCameraInput = !uiCapturingInput;
+        bool allowCameraInput = !uiCapturingInput && !gameMenuOpen_;
 #if WITH_EDITOR
         if (allowCameraInput && editorController_.IsOpen())
         {
@@ -377,19 +380,96 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
         {
             const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
             const bool fromCamera = g_bootPlay && g_camOverride;
-            playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &scene.LevelRaceCourse(), eject, false);
+            // Shipping's level rule: a level without a Player Start keeps the free camera (F8 still walks from it).
+            const bool freeByRule = g_bootPlay && !eject && g_playByLevelRule && !start;
+            if (!freeByRule)
+            {
+                playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &scene.LevelRaceCourse(), eject, false);
+            }
             g_bootPlay = false;
         }
     }
     else
     {
         if (eject) { playSession_.TogglePossess(scene); }
+#if TC_SHIPPING
+        if (freeMouse) { playSession_.ToggleFreeMouse(); }
+#else
         if (escape || freeMouse) { playSession_.ToggleFreeMouse(); }
+#endif
+    }
+#if TC_SHIPPING
+    // Esc is the game's menu here, on foot, at a helm or with the camera free; the mouse is the menu's while it is up and
+    // the game's again when Esc or Continue closes it.
+    if (escape)
+    {
+        gameMenuOpen_ = !gameMenuOpen_;
+        if (playSession_.Playing()) { playSession_.SetMouseFree(gameMenuOpen_); }
+    }
+    else if (gameMenuOpen_ && playSession_.Playing())
+    {
+        playSession_.SetMouseFree(true);
     }
 #endif
+#endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
+#if TC_SHIPPING
+    if (!playSession_.Playing()) { hudPlayLine_ = L"FREE CAMERA: right mouse look, WASD, wheel speed   F8 walk from here   Esc menu"; }
+#endif
     hudRaceLine_ = playSession_.RaceHudLine(scene);
     hudBigText_ = playSession_.Playing() ? scene.RaceRef().BigText() : std::wstring{};
+}
+
+void AppController::DrawGameMenu(LevelManager& levelManager)
+{
+#if TC_SHIPPING
+    // The levels are the packages' (the cook puts in only the profile's): data/levels/*.json, read once.
+    if (!gameMenuOpen_) { return; }
+    if (gameMenuLevels_.empty())
+    {
+        vfs::List("data/levels", "*.json", [this](const vfs::ListEntry& entry)
+        {
+            if (!entry.directory) { gameMenuLevels_.push_back("data/levels/" + entry.name); }
+        });
+        std::sort(gameMenuLevels_.begin(), gameMenuLevels_.end());
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::Begin("Menu", nullptr,
+                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+    const ImVec2 button(320.0f, 0.0f);
+    if (ImGui::Button("Continue", button))
+    {
+        gameMenuOpen_ = false;
+        if (playSession_.Playing()) { playSession_.SetMouseFree(false); }
+    }
+    ImGui::SeparatorText("Levels");
+    std::string current(levelManager.GetActiveLevelSourcePath());
+    std::replace(current.begin(), current.end(), '\\', '/');
+    for (const std::string& level : gameMenuLevels_)
+    {
+        const std::size_t slash = level.find_last_of('/');
+        std::string name = level.substr(slash + 1, level.size() - slash - 1 - 5); // without the folder and ".json"
+        if (current == level || current.ends_with("/" + level)) { name += "  (here: start again)"; }
+        ImGui::PushID(level.c_str());
+        if (ImGui::Button(name.c_str(), button))
+        {
+            LOG_INFO(logging::LogCategory::App, "menu: level {}", level);
+            levelManager.RequestLevelPathChange(level);
+            gameMenuOpen_ = false;
+        }
+        ImGui::PopID();
+    }
+    if (gameMenuLevels_.empty()) { ImGui::TextDisabled("no levels in the packages"); }
+    ImGui::Separator();
+    if (ImGui::Button("Quit", button))
+    {
+        PostMessageW(static_cast<HWND>(viewport->PlatformHandleRaw), WM_CLOSE, 0, 0); // the window's own close: settings and log flushed as by its [x]
+    }
+    ImGui::End();
+#else
+    (void)levelManager;
+#endif
 }
 
 void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input)
@@ -407,6 +487,22 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
     }
 #else
     const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+    if (g_playByLevelRule)
+    {
+        // Shipping (owner, 2026-11-13): each level by its own rule -- its Player Start: first person from it; none: the
+        // free camera where the level put it (its freeCameraStart, else the origin -- JsonLevel::Load).
+        if (!start)
+        {
+            playSession_.StopForLevel(scene, input);
+            LOG_INFO(logging::LogCategory::App, "level rule: no Player Start -- the free camera");
+            return;
+        }
+        if (!playSession_.Playing())
+        {
+            playSession_.Begin(renderer, scene, input, &*start, &scene.LevelRaceCourse(), true, false);
+            return;
+        }
+    }
     playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr, &scene.LevelRaceCourse());
 #endif
 }

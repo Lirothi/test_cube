@@ -183,6 +183,7 @@ namespace vfs::pak
 
         std::filesystem::path file_;
         std::string name_;
+        std::uint64_t serial_ = 0; // never reused: the threads' block caches key by it (a new Package may take a freed address)
         void* fileHandle_ = nullptr;
         void* mapping_ = nullptr;
         const std::uint8_t* view_ = nullptr;

@@ -1,7 +1,7 @@
 // The exe's resources (docs/distribution_build_plan.md §7): the icon and the version the build was given.
 #include <winres.h>
 #include "AppResources.h"
-#include "generated/BuildVersion.g.h"
+#include "app/generated/BuildVersion.g.h" // sources/ is on the path; a distribution's own folder before it (TcGeneratedRoot)
 
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 

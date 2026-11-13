@@ -53,11 +53,14 @@ namespace
     {
         const char* p = std::strstr(cmd, key);
         if (!p) { return {}; }
+        // Quoted as a whole ("--cook-out=D:\a b\x": Python's subprocess, the editor's job) or after the '='.
+        const bool wholeQuoted = p > cmd && p[-1] == '"';
         p += std::strlen(key);
         std::string value;
-        if (*p == '"')
+        if (*p == '"' || wholeQuoted)
         {
-            for (++p; *p && *p != '"'; ++p) { value.push_back(*p); }
+            if (*p == '"') { ++p; }
+            for (; *p && *p != '"'; ++p) { value.push_back(*p); }
         }
         else
         {
@@ -177,7 +180,7 @@ namespace
     bool NeverInBase(std::string_view path)
     {
         constexpr std::string_view kPrefixes[] = { "shaders/", "logs/", "shader_cache/", "editor_cache/", "traces/", "dist/",
-                                                   "dist_symbols/", "x64/" };
+                                                   "dist_symbols/", "x64/", ".dist_tmp/", ".git/", ".vs/", ".claude/" };
         for (const std::string_view prefix : kPrefixes)
         {
             if (StartsWith(path, prefix)) { return true; }
@@ -683,6 +686,7 @@ namespace
 
         void RekeyWaterMasks()
         {
+            std::vector<std::string> dropped;
             for (auto& [path, record] : files_)
             {
                 if (!EndsWith(path, ".watermask.bin")) { continue; }
@@ -731,11 +735,17 @@ namespace
                         why = "made for another write of the geometry, and building it again failed";
                     }
                 }
-                entry["status"] = why;
+                // A bake is a load-time saving, not content: the game builds a missing one on a worker when it first
+                // sees the hull (WaterMask.cpp Collect). One that cannot serve -- an old bake version, a hull whose
+                // waterMask went off (the editor bakes only masked hulls, so it never comes right by itself) -- is left
+                // out, not a reason to refuse the build.
+                entry["status"] = "left out: " + why + " (the game builds it at load)";
                 waterMasksReport_.push_back(std::move(entry));
-                Error("water mask " + path + " does not serve its geometry: " + why +
-                      " -- open a level with it in the editor once (it rebakes) and cook again");
+                Warning("water mask " + path + " left out: " + why + " -- the game builds it on a worker at load (open a level "
+                        "with it in the editor once to bake it again)");
+                dropped.push_back(path);
             }
+            for (const std::string& path : dropped) { files_.erase(path); }
         }
 
         std::optional<vfs::pak::Key> LoadKey()
@@ -943,6 +953,11 @@ namespace
 
         // The profile's own rules (§8.0).
         if (profile_.levels.empty()) { Error("the profile ships no level"); }
+        if (profile_.bootLevel.empty() && !profile_.levels.empty())
+        {
+            profile_.bootLevel = profile_.levels.front(); // Shipping refuses a boot.json without one
+            Warning("no bootLevel: the build starts in the first level, " + profile_.bootLevel);
+        }
         if (!profile_.bootLevel.empty() &&
             std::find(profile_.levels.begin(), profile_.levels.end(), profile_.bootLevel) == profile_.levels.end())
         {

@@ -23,7 +23,6 @@
   "encrypt": true,
   "shaderSources": true,
   "strictLicences": true,
-  "allowLoose": false,
   "zip": true,
   "symbols": true,
   "out": "dist"

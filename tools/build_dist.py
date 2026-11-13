@@ -56,6 +56,11 @@ DEV_VERSION_HEADER = """// The dev build's version: written by tools/build_dist.
 #define TC_BUILD_DATE ""
 """
 
+NO_KEY_HEADER = """// No package key: a distribution without encryption (tools/build_dist.py), or the dev tree's.
+#pragma once
+#define TC_PAK_HAS_EMBEDDED_KEY 0
+"""
+
 MIT_TEXT = """Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
 rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
@@ -132,14 +137,24 @@ class Progress:
         self.emit(message, event="stage")
 
 
+def kill_tree(pid):
+    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+
+
 def run(cmd, progress, log_path=None, timeout=3600, cwd=ROOT, env=None):
-    """A child process; its output into `log_path` (or inherited). Raises BuildError on a non-zero exit."""
+    """A child process; its output into `log_path` (or inherited). Returns its exit code; past `timeout` its whole tree
+    is ended (MSBuild's compilers too, not only MSBuild) and BuildError raised."""
     out = open(log_path, "w", encoding="utf-8", errors="replace") if log_path else None
     # With --progress=json stdout is the event stream: a child's own output goes to its log or nowhere.
     stdout = out if out else (subprocess.DEVNULL if progress.as_json else None)
     try:
-        code = subprocess.run(cmd, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT if stdout else None, timeout=timeout,
-                              env=env).returncode
+        proc = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=subprocess.STDOUT if stdout else None, env=env)
+        try:
+            code = proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc.pid)
+            proc.wait()
+            raise BuildError(f"{pathlib.Path(cmd[0]).name} ran past {timeout} s and was ended")
     finally:
         if out:
             out.close()
@@ -159,12 +174,20 @@ def find_msbuild():
     raise BuildError("MSBuild not found (vswhere and the known path)")
 
 
-def msbuild(config, progress, logs):
-    # The byte-identical call the project's build uses: test_cube.vcxproj, the configuration, x64, /m /nologo /v:minimal.
+def msbuild(config, progress, logs, generated=None):
+    # test_cube.vcxproj, the configuration, x64, /m /nologo /v:minimal -- and two things so that ending this build (Cancel,
+    # the editor closing: its job object) ends nothing anybody else uses: no reusable MSBuild nodes, and a PDB server of
+    # this build's own (_MSPDBSRV_ENDPOINT_), not the per-user one another build may be linking through. `generated`:
+    # the stamped version / key headers' root (/p:TcGeneratedRoot, test_cube.vcxproj): the tree's own stay the dev ones.
     log = logs / f"msbuild_{config}.log"
     progress.emit(f"MSBuild {config} (log {log})")
-    code = run([find_msbuild(), str(VCXPROJ), f"/p:Configuration={config}", "/p:Platform=x64", "/m", "/nologo", "/v:minimal"],
-               progress, log_path=log)
+    env = dict(os.environ)
+    env["_MSPDBSRV_ENDPOINT_"] = f"test_cube_build_dist_{os.getpid()}"
+    cmd = [find_msbuild(), str(VCXPROJ), f"/p:Configuration={config}", "/p:Platform=x64", "/m", "/nologo", "/v:minimal",
+           "/nodeReuse:false"]
+    if generated:
+        cmd.append(f"/p:TcGeneratedRoot={generated}")
+    code = run(cmd, progress, log_path=log, env=env)
     if code != 0:
         tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
         for line in tail:
@@ -378,12 +401,35 @@ def main():
     except KeyboardInterrupt:
         progress.emit("cancelled", level="error", event="failed")
         return 2
+    except Exception as e:  # an OSError, a bad JSON, a bug: still a "failed" event the window and MCP can show
+        import traceback
+        for line in traceback.format_exc().splitlines()[-6:]:
+            progress.emit(line, level="error")
+        progress.emit(f"{type(e).__name__}: {e}", level="error", event="failed")
+        return 1
+
+
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?$")
+
+
+def repair_tree_headers():
+    """The tree's generated headers are the dev ones (test_cube.vcxproj writes them when missing). Builds before the
+    staging root stamped them in place, and a killed one left the release version -- or the embedded KEY -- for every dev
+    build after it: put the dev ones back."""
+    if VERSION_HEADER.exists() and "build_dist.py for a distribution build" in VERSION_HEADER.read_text(encoding="utf-8"):
+        write_if_changed(VERSION_HEADER, DEV_VERSION_HEADER)
+    if KEY_HEADER.exists() and "TC_PAK_HAS_EMBEDDED_KEY 1" in KEY_HEADER.read_text(encoding="utf-8", errors="replace"):
+        write_if_changed(KEY_HEADER, NO_KEY_HEADER)
 
 
 def build(args, progress):
+    repair_tree_headers()
     profile = load_profile(args.profile)
     product = profile.get("product", "test_cube")
     version = args.version or profile.get("version", "0.0.0")
+    # It becomes a folder name, a C string (BuildVersion.g.h, the .rc) and a command-line value: digits, dots, a suffix.
+    if not VERSION_RE.match(version):
+        raise BuildError(f"version {version!r}: digits a.b.c, optionally -suffix of letters, digits, dots and dashes")
     encrypt = bool(profile.get("encrypt", False)) and not args.no_encrypt
     out_dir = pathlib.Path(args.out) if args.out else ROOT / profile.get("out", "dist")
     if not out_dir.is_absolute():
@@ -437,12 +483,18 @@ def build(args, progress):
                 raise BuildError(f"profile {profile['_name']}: version {version} was built before -- raise it (--version=)")
         date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         version_text, header = version_header(product, version, build_number, git_hash, dirty, date)
+        # The stamped headers live under the staging folder only (test_cube.vcxproj TcGeneratedRoot): ending this build
+        # any way at all leaves the tree's dev headers as they were.
+        generated = work / "generated"
+        gen_version = generated / "app" / "generated" / "BuildVersion.g.h"
+        gen_key = generated / "core" / "vfs" / "generated" / "PakKey.g.h"
+        write_if_changed(gen_version, header)
+        write_if_changed(gen_key, NO_KEY_HEADER)
 
         # ---- the exes ----
         if args.mode in ("full",) and not args.skip_build:
             progress.begin("build", f"MSBuild Cook (version {version_text})")
-            write_if_changed(VERSION_HEADER, header)
-            msbuild("Cook", progress, logs)
+            msbuild("Cook", progress, logs, generated)
         elif not cook_exe.exists():
             raise BuildError(f"no {cook_exe}: build the Cook configuration (or --mode=full)")
 
@@ -476,13 +528,12 @@ def build(args, progress):
             guid = json.loads(key_file.read_text(encoding="utf-8")).get("guid", "?")
             progress.emit(f"key {guid}")
             if args.mode == "full" and not args.skip_build:
-                if run([str(cook_exe), f"--pak-key-header={key_file},{KEY_HEADER}"], progress, log_path=logs / "keyheader.log") != 0:
+                if run([str(cook_exe), f"--pak-key-header={key_file},{gen_key}"], progress, log_path=logs / "keyheader.log") != 0:
                     raise BuildError("cannot write the embedded key header")
 
         if args.mode == "full" and not args.skip_build:
             progress.begin("build", f"MSBuild Shipping (version {version_text})")
-            write_if_changed(VERSION_HEADER, header)
-            msbuild("Shipping", progress, logs)
+            msbuild("Shipping", progress, logs, generated)
         if not (ship_dir / EXE_NAME).exists():
             raise BuildError(f"no {ship_dir / EXE_NAME}: build the Shipping configuration (or --mode=full)")
 
@@ -579,26 +630,21 @@ def build(args, progress):
         total = sum(f["size"] for f in files.values())
         progress.emit(f"{len(files)} files, {total / 1048576:.1f} MB")
 
-        # ---- into place: the folder renamed whole, then the zip and the symbols ----
+        # ---- the zip and the symbols in the staging, then into place: nothing of a failure lands in dist/ ----
         out_dir.mkdir(parents=True, exist_ok=True)
         final = out_dir / folder_name
-        if final.exists():
-            old = work / "replaced"
-            os.replace(final, old)
-        os.replace(stage, final)
         zip_path = None
+        tmp_zip = None
         if profile.get("zip", False):
             progress.begin("zip", f"{folder_name}.zip")
             tmp_zip = work / f"{folder_name}.zip"
             with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-                for path in sorted(final.rglob("*")):
+                for path in sorted(stage.rglob("*")):
                     if path.is_file():
                         # The packages are compressed already (zstd): stored, not deflated again.
                         kind = zipfile.ZIP_STORED if path.suffix == ".tcpak" else zipfile.ZIP_DEFLATED
-                        z.write(path, f"{folder_name}/{path.relative_to(final).as_posix()}", compress_type=kind)
-            zip_path = out_dir / f"{folder_name}.zip"
-            os.replace(tmp_zip, zip_path)
-            progress.emit(f"{zip_path} ({zip_path.stat().st_size / 1048576:.1f} MB)")
+                        z.write(path, f"{folder_name}/{path.relative_to(stage).as_posix()}", compress_type=kind)
+            progress.emit(f"{tmp_zip.name} ({tmp_zip.stat().st_size / 1048576:.1f} MB)")
         symbols = None
         if profile.get("symbols", False):
             progress.begin("symbols", "the PDB and the cook report into dist_symbols/")
@@ -612,6 +658,12 @@ def build(args, progress):
         kept_report = symbols / "cook_report.json" if symbols else out_dir / f"{folder_name}.cook_report.json"
         if not symbols:
             shutil.copy2(report_kept, kept_report)
+        if final.exists():
+            os.replace(final, work / "replaced")
+        os.replace(stage, final)
+        if tmp_zip:
+            zip_path = out_dir / f"{folder_name}.zip"
+            os.replace(tmp_zip, zip_path)
 
         progress.begin("finish", f"built {final}")
         packages = {p["name"]: p.get("packageBytes") for p in report.get("packages", [])}
@@ -625,9 +677,6 @@ def build(args, progress):
                       version=version_text, warnings=len(report.get("warnings", [])))
         return 0
     finally:
-        # A dev build afterwards is a dev build again.
-        if VERSION_HEADER.exists() and "build_dist.py for a distribution build" in VERSION_HEADER.read_text(encoding="utf-8"):
-            write_if_changed(VERSION_HEADER, DEV_VERSION_HEADER)
         if not args.keep_temp:
             shutil.rmtree(work, ignore_errors=True)
             try:

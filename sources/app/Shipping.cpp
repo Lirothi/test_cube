@@ -9,6 +9,7 @@
 
 #include <cctype>
 #include <cstring>
+#include <cwchar>
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
@@ -32,9 +33,15 @@ std::string FilterCommandLine(const wchar_t* fullCommandLine, std::vector<std::s
     if (!argv) { return kept; }
     for (int i = 1; i < argc; ++i) // argv[0] is the exe
     {
-        const std::string arg = vfs::Narrow(argv[i]);
-        const std::size_t eq = arg.find('=');
+        std::string arg = vfs::Narrow(argv[i]);
+        std::size_t eq = arg.find('=');
         const std::string name = arg.substr(0, eq);
+        // "--user-dir D:\portable": the value as the next argument (every kept switch but --play takes one with '=').
+        if (eq == std::string::npos && name != "--play" && i + 1 < argc && std::wcsncmp(argv[i + 1], L"--", 2) != 0)
+        {
+            arg += "=" + vfs::Narrow(argv[++i]);
+            eq = name.size();
+        }
         bool allowed = false;
         for (const char* a : kAllowed) { allowed = allowed || name == a; }
         if (!allowed)

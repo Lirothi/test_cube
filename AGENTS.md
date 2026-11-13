@@ -702,7 +702,9 @@ distribution: packages, our file system over packages and direct paths, encrypti
   or stored, CRC32C each, AES-256-GCM through CNG when encrypted (HKDF sub-keys, synthetic nonce, AAD per block), TOC at the
   end, deterministic (same files -> same bytes), "deleted" records for patches. Tools (no window): `--pak-build=<out>
   --pak-files=<list>`, `--pak-list=`, `--pak-verify=`, `--pak-keygen=<key.json>` (never over a file), `--pak-key-header=
-  <key.json>,<out.h>`, `--vfs-selftest` (115 checks with their controls).
+  <key.json>,<out.h>`, `--vfs-selftest` (123 checks with their controls). A package that opens is checked whole: the
+  block layout Read relies on, the header's TOC size against its zstd frame, a disk read error on the mapped view read as
+  damage (`EXCEPTION_IN_PAGE_ERROR`), not a crash.
 - **Shaders**: `--shader-model=6.6` caps the target (a mounted `shaders.tcpak` sets its own: `shaders/dxil/cooked.txt`);
   `--shader-record=<file>` lists every compile request; cooked DXIL is looked up first (`shaders/dxil/<id>.dxil`, the id
   without absolute paths, Release flags), a miss logs `shader permutation not cooked` once and compiles from the packaged
@@ -712,8 +714,9 @@ distribution: packages, our file system over packages and direct paths, encrypti
   [--levels= --boot-level= --version= --no-encrypt --pak-key=]`, `sources/app/dist/Cook.cpp`): walks the profile's levels
   (strings with a slash and a content extension, bare names as `data/materials/<name>.json`, derived files), the
   `include`, the record list and string literals of `sources/` outside the editor; re-keys water mask bakes for the
-  package (a bake made for another write of the geometry is REBUILT from its stored draft and glass slots); errors on a
-  missing file, a hull without a bake, and -- with `strictLicences` -- an asset without a licence in CREDITS.md (a
+  package (a bake made for another write of the geometry is REBUILT from its stored draft and glass slots; one that cannot
+  serve -- an old bake version, a hull no longer masked -- is LEFT OUT with a Warning: the game builds it at load); errors
+  on a missing file and -- with `strictLicences` -- an asset without a licence in CREDITS.md (a
   `## <asset>` section with `license type:` or `License:`). It writes `cook_report.json` (every file, who named it, sizes,
   per level, licences) and `base.tcpak` + `shaders.tcpak`. While it compiles shaders, a Debug exe uses Release flags too.
 - **Shipping|x64** (`TC_SHIPPING=1`, no rendering change): content from `<exe>\content\*.tcpak` only; the user's folder
@@ -721,8 +724,13 @@ distribution: packages, our file system over packages and direct paths, encrypti
   everything written relative (logs/, `settings/imgui.ini`, artifacts, `crashes/`, `--shot`) lands there;
   `WritablePath` maps Settings / Cache / Saved (`data/bot_memory/` read back through the user overlay). Switches: only
   `--window --level --log-level --user-dir --shot --shot-delay --cam-pos --cam-rot --wind-freeze --time --play
-  --crash-selftest` (the rest is logged as ignored). No developer keys or windows. Starts by `config/boot.json` (the
-  profile's `bootLevel` / `startMode`). Graphics settings: defaults from `config/graphics_defaults.json`
+  --crash-selftest` (the rest is logged as ignored; `--name value` is read as `--name=value`). No developer keys or
+  windows; Esc is the game's menu (Continue, the levels the packages hold -- `data/levels/*.json` --, Quit;
+  `AppController::DrawGameMenu`). Starts by `config/boot.json` (the profile's `bootLevel` / `startMode`); with `startMode`
+  "play" every level goes by its own rule (owner, 2026-11-13; `g_playByLevelRule`): a Player Start -> first person from it,
+  none -> the free camera at its `freeCameraStart`, none -> the free camera at the origin, level (F8 still walks from there).
+  An absolute path is read only inside the game's folder and the user's (`Vfs.cpp AbsoluteAllowed`: `--level=C:/x.json`
+  is refused, logged once) -- the owner's "no loose files" (§11), enforced. Graphics settings: defaults from `config/graphics_defaults.json`
   (`tools/dist/graphics_defaults.json`), the player's file holds only the differences; every build saves it atomically.
   Before the window: `D3D12\D3D12Core.dll` present (the Agility SDK 1.619.6 runtime it exports `D3D12SDKVersion = 619` for:
   Windows 10 has no SM 6.6 in-box, and without the file no device is made even on Windows 11 26100), the GPU check (SM 6.6,
@@ -732,15 +740,22 @@ distribution: packages, our file system over packages and direct paths, encrypti
   process runs). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any of the game's message boxes (the gates' way past them).
 - **Generated headers ALWAYS exist** (`sources/app/generated/BuildVersion.g.h`, `sources/core/vfs/generated/PakKey.g.h`,
   not in git): the project writes dev / no-key ones when missing. Not `__has_include`: MSBuild does not see a header that
-  was absent at the last compile, and the first encrypted build's exe shipped without its key.
+  was absent at the last compile, and the first encrypted build's exe shipped without its key. The tree's are ALWAYS the
+  dev ones: a distribution's stamped version and embedded key are written under its staging folder and reach only
+  `BuildVersion.cpp`, `PakCrypto.cpp` and `test_cube.rc` through `/p:TcGeneratedRoot=` (test_cube.vcxproj); stamped in the
+  tree, a killed or cancelled build left the release KEY in every dev build after it. `build_dist.py` repairs a stale
+  stamp it finds.
 - **`python tools/build_dist.py --profile=<test|release|path> --mode=check|record|content|full`** (`--levels --boot-level
   --version --no-encrypt --skip-build --out --key --progress=json --keep-temp`): `full` = MSBuild Cook + Shipping with the
   version (`0.1.0+<build> (<git>[-dirty])`, the build number from `<out>/build_history.json`) and the embedded key, the
   cook, the folder (exe, the DLLs it LOADS -- sampled from a run, NGX's over-the-air copies mapped back to the local
   `sl.*.dll` they stand in for --, `D3D12\`, the VC++ runtime app-local), a check run of the staged game (exit 0, no Error,
   nothing compiled, Streamline up), CREDITS / THIRD_PARTY_NOTICES / README / manifest.json (SHA-256 per file), zip,
-  `dist_symbols/<version>/` (exe + PDB + report). Staged in `.dist_tmp` beside the output and renamed whole: a cancelled
-  build leaves nothing in `dist/`. The key: `%USERPROFILE%\.test_cube\pak_key.json`, made on the first encrypted build --
+  `dist_symbols/<version>/` (exe + PDB + report). Staged in `.dist_tmp` beside the output -- the zip and the symbols made
+  there too -- and renamed whole: a cancelled or failed build leaves nothing in `dist/`. Its MSBuild runs `/nodeReuse:false`
+  with a PDB server of its own (`_MSPDBSRV_ENDPOINT_`): the job object that ends a cancelled build ends nothing another
+  build shares. The version is `a.b.c[-suffix]` (checked in the script, the window and MCP: it is a folder name, a C string
+  and a command-line value). The key: `%USERPROFILE%\.test_cube\pak_key.json`, made on the first encrypted build --
   KEEP A COPY; a lost key leaves its packages unreadable. `release` needs `versionMustGrow` and every licence known (until
   the owner settles `rocks` and three textures in `import_staging/`, it does not build).
 - **The window and MCP**: Level Editor > File > Build Distribution... (`--build-dist` opens it), MCP `build_dist {profile,

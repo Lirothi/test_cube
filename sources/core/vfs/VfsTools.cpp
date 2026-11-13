@@ -6,6 +6,7 @@
 #include "core/vfs/Pak.h"
 #include "core/vfs/Vfs.h"
 #include "core/vfs/VfsMounts.h"
+#include "zstd/zstd.h"
 
 #include <Windows.h>
 
@@ -29,11 +30,13 @@ namespace vfs
         {
             const char* p = std::strstr(cmd, key);
             if (!p) { return {}; }
+            // Quoted as a whole ("--pak-key=C:\Users\a b\k.json": Python's subprocess) or after the '='.
+            const bool wholeQuoted = p > cmd && p[-1] == '"';
             p += std::strlen(key);
             std::string v;
-            if (*p == '"')
+            if (*p == '"' || wholeQuoted)
             {
-                ++p;
+                if (*p == '"') { ++p; }
                 while (*p && *p != '"') { v.push_back(*p++); }
             }
             else
@@ -510,7 +513,7 @@ namespace vfs
                 const std::uint8_t aadB[8] = { 1, 2, 3, 4, 5, 6, 7, 9 };
                 std::uint8_t nonce[12] = {};
                 std::uint8_t tag[16] = {};
-                cipher.Nonce(aadA, sizeof(aadA), data.data(), data.size(), nonce);
+                t.Expect(cipher.Nonce(aadA, sizeof(aadA), data.data(), data.size(), nonce), "nonce");
                 t.Expect(cipher.Encrypt(nonce, aadA, sizeof(aadA), data.data(), data.size(), tag) && data != original, "encrypt");
                 std::vector<std::uint8_t> copy = data;
                 copy[17] ^= 1;
@@ -564,6 +567,70 @@ namespace vfs
                 std::string tocError;
                 t.Expect(!pak::Package::Open(badToc, tocError) && tocError.find("table of contents") != std::string::npos,
                          "control: a damaged table of contents is refused, and says so");
+
+                // The header has no check of its own: a flipped bit in its TOC size must refuse the package, not throw
+                // out of a resize (a crash dump where the player should read "damaged").
+                {
+                    std::vector<std::uint8_t> flipped = ReadOs(pakA);
+                    pak::Header h;
+                    std::memcpy(&h, flipped.data(), sizeof(h));
+                    h.tocRawSize ^= std::uint64_t{ 1 } << 40;
+                    std::memcpy(flipped.data(), &h, sizeof(h));
+                    const std::filesystem::path badSize = root / L"bad_toc_size.tcpak";
+                    t.Expect(WriteBytes(badSize, flipped), "write the package with a flipped TOC size");
+                    std::string sizeError;
+                    bool threw = false;
+                    try
+                    {
+                        t.Expect(!pak::Package::Open(badSize, sizeError), "control: a flipped TOC size is refused");
+                    }
+                    catch (...)
+                    {
+                        threw = true;
+                    }
+                    LOG_INFO(logging::LogCategory::Vfs, "vfs self-test: a flipped TOC size -- {}", threw ? "an exception" : sizeError);
+                    t.Expect(!threw && sizeError.find("does not match its frame") != std::string::npos,
+                             "... without an exception, by the header check");
+                }
+                // A TOC that opens -- its CRC right -- with blocks of the wrong sizes that still add up to the file
+                // (Mixed/CASE.json: 3 x 64 KB + 123 laid out as 64 KB - 10, 64 KB, 64 KB, 133): Read relied on the
+                // layout and wrapped past the block. Open must refuse it.
+                {
+                    std::vector<std::uint8_t> relaid = ReadOs(pakA);
+                    pak::Header h;
+                    std::memcpy(&h, relaid.data(), sizeof(h));
+                    std::vector<std::uint8_t> toc(static_cast<std::size_t>(h.tocRawSize));
+                    const std::size_t got = ZSTD_decompress(toc.data(), toc.size(), relaid.data() + h.tocOffset,
+                                                            static_cast<std::size_t>(h.tocStoredSize));
+                    t.Expect(!ZSTD_isError(got) && got == toc.size(), "the TOC decompresses for the re-laid arm");
+                    pak::TocHeader th;
+                    std::memcpy(&th, toc.data(), sizeof(th));
+                    auto* entries = reinterpret_cast<pak::TocEntry*>(toc.data() + sizeof(th));
+                    auto* blocks = reinterpret_cast<pak::TocBlock*>(entries + th.entryCount);
+                    const char* strings = reinterpret_cast<const char*>(blocks + th.blockCount);
+                    bool relaidOne = false;
+                    for (std::uint32_t e = 0; e < th.entryCount && !relaidOne; ++e)
+                    {
+                        if (std::string_view(strings + entries[e].pathOffset, entries[e].pathLength) != "Mixed/CASE.json") { continue; }
+                        pak::TocBlock* b = blocks + entries[e].firstBlock;
+                        b[0].rawSize -= 10;
+                        b[entries[e].blockCount - 1].rawSize += 10;
+                        relaidOne = true;
+                    }
+                    t.Expect(relaidOne, "found Mixed/CASE.json's blocks");
+                    std::vector<std::uint8_t> packed(ZSTD_compressBound(toc.size()));
+                    packed.resize(ZSTD_compress(packed.data(), packed.size(), toc.data(), toc.size(), 3));
+                    relaid.resize(static_cast<std::size_t>(h.tocOffset));
+                    relaid.insert(relaid.end(), packed.begin(), packed.end());
+                    h.tocStoredSize = packed.size();
+                    h.tocCrc = pak::Crc32c(packed.data(), packed.size());
+                    std::memcpy(relaid.data(), &h, sizeof(h));
+                    const std::filesystem::path badLayout = root / L"bad_layout.tcpak";
+                    t.Expect(WriteBytes(badLayout, relaid), "write the re-laid package");
+                    std::string layoutError;
+                    t.Expect(!pak::Package::Open(badLayout, layoutError) && layoutError.find("wrong size") != std::string::npos,
+                             "control: blocks of the wrong sizes that add up are refused at Open");
+                }
             }
 
             std::filesystem::remove_all(root, ec);
@@ -598,7 +665,8 @@ namespace vfs
         {
             config.keyFiles.push_back(FsPath(keyFile));
         }
-        else if (const DWORD n = ::GetEnvironmentVariableW(L"TC_PAK_KEY", nullptr, 0); n > 1)
+        else if (const DWORD n = ::GetEnvironmentVariableW(L"TC_PAK_KEY", nullptr, 0); n > 1 && config.mode != Config::Mode::Loose)
+            // only where packages are mounted: a stale variable made every plain dev launch exit 3
         {
             std::wstring value(n, L'\0');
             value.resize(::GetEnvironmentVariableW(L"TC_PAK_KEY", value.data(), n));

@@ -48,35 +48,39 @@ namespace vfs::pak
             return algs;
         }
 
-        // HMAC-SHA256 over the concatenation of the parts.
-        void Hmac(const std::uint8_t* key, std::size_t keyBytes,
+        // HMAC-SHA256 over the concatenation of the parts. False when CNG failed: a zero MAC taken as a nonce would repeat
+        // across every block (GCM's one forbidden thing), and a zero PRK would make the AES key a public constant.
+        bool Hmac(const std::uint8_t* key, std::size_t keyBytes,
                   std::initializer_list<std::pair<const std::uint8_t*, std::size_t>> parts, std::uint8_t out[32])
         {
             std::memset(out, 0, 32);
             BCRYPT_HASH_HANDLE hash = nullptr;
             if (!Succeeded(::BCryptCreateHash(Algs().hmac, &hash, nullptr, 0, const_cast<PUCHAR>(key), static_cast<ULONG>(keyBytes), 0)))
             {
-                return;
+                return false;
             }
+            bool ok = true;
             for (const auto& [data, bytes] : parts)
             {
-                if (bytes > 0) { ::BCryptHashData(hash, const_cast<PUCHAR>(data), static_cast<ULONG>(bytes), 0); }
+                if (ok && bytes > 0) { ok = Succeeded(::BCryptHashData(hash, const_cast<PUCHAR>(data), static_cast<ULONG>(bytes), 0)); }
             }
-            ::BCryptFinishHash(hash, out, 32, 0);
+            ok = ok && Succeeded(::BCryptFinishHash(hash, out, 32, 0));
             ::BCryptDestroyHash(hash);
+            if (!ok) { std::memset(out, 0, 32); }
+            return ok;
         }
 
         // HKDF-SHA256 (RFC 5869), one 32-byte block of output.
-        std::array<std::uint8_t, 32> Hkdf(const std::array<std::uint8_t, 32>& master, std::string_view info)
+        bool Hkdf(const std::array<std::uint8_t, 32>& master, std::string_view info, std::array<std::uint8_t, 32>& okm)
         {
             static constexpr char kSalt[] = "test_cube .tcpak";
             std::uint8_t prk[32];
-            Hmac(reinterpret_cast<const std::uint8_t*>(kSalt), sizeof(kSalt) - 1, { { master.data(), master.size() } }, prk);
             const std::uint8_t one = 1;
-            std::array<std::uint8_t, 32> okm{};
-            Hmac(prk, sizeof(prk), { { reinterpret_cast<const std::uint8_t*>(info.data()), info.size() }, { &one, 1 } }, okm.data());
+            const bool ok = Hmac(reinterpret_cast<const std::uint8_t*>(kSalt), sizeof(kSalt) - 1, { { master.data(), master.size() } }, prk) &&
+                            Hmac(prk, sizeof(prk), { { reinterpret_cast<const std::uint8_t*>(info.data()), info.size() }, { &one, 1 } },
+                                 okm.data());
             ::SecureZeroMemory(prk, sizeof(prk));
-            return okm;
+            return ok;
         }
 
         std::atomic<std::uint64_t> g_cipherSerial{ 1 };
@@ -176,8 +180,9 @@ namespace vfs::pak
         }
         const nlohmann::json j = nlohmann::json::parse(in, nullptr, false);
         Key key;
-        if (!j.is_object() || !Unhex(j.value("guid", std::string()), key.guid.data(), key.guid.size()) ||
-            !Unhex(j.value("key", std::string()), key.bytes.data(), key.bytes.size()))
+        // A "guid" or "key" that is not a string made value() throw out of here.
+        const auto text = [&j](const char* name) { return j.is_object() && j.contains(name) && j[name].is_string() ? j[name].get<std::string>() : std::string(); };
+        if (!j.is_object() || !Unhex(text("guid"), key.guid.data(), key.guid.size()) || !Unhex(text("key"), key.bytes.data(), key.bytes.size()))
         {
             error = vfs::Narrow(file.wstring()) + " is not a package key (guid: 32 hex, key: 64 hex)";
             return std::nullopt;
@@ -254,11 +259,11 @@ namespace vfs::pak
     Cipher::Cipher(const Key& key)
     {
         if (!Algs().ok) { return; }
-        encKey_ = Hkdf(key.bytes, "tcpak aes-256-gcm v1");
-        nonceKey_ = Hkdf(key.bytes, "tcpak synthetic nonce v1");
+        if (!Hkdf(key.bytes, "tcpak aes-256-gcm v1", encKey_) || !Hkdf(key.bytes, "tcpak synthetic nonce v1", nonceKey_)) { return; }
         BCRYPT_KEY_HANDLE handle = nullptr;
         ok_ = Succeeded(::BCryptGenerateSymmetricKey(Algs().aes, &handle, nullptr, 0, encKey_.data(), static_cast<ULONG>(encKey_.size()), 0));
         key_ = handle;
+        ::SecureZeroMemory(encKey_.data(), encKey_.size()); // the key object holds it now
         serial_ = g_cipherSerial.fetch_add(1);
     }
 
@@ -289,12 +294,13 @@ namespace vfs::pak
         return dup;
     }
 
-    void Cipher::Nonce(const std::uint8_t* aad, std::size_t aadBytes, const std::uint8_t* data, std::size_t bytes,
+    bool Cipher::Nonce(const std::uint8_t* aad, std::size_t aadBytes, const std::uint8_t* data, std::size_t bytes,
                        std::uint8_t nonce[12]) const
     {
         std::uint8_t mac[32];
-        Hmac(nonceKey_.data(), nonceKey_.size(), { { aad, aadBytes }, { data, bytes } }, mac);
+        const bool ok = Hmac(nonceKey_.data(), nonceKey_.size(), { { aad, aadBytes }, { data, bytes } }, mac);
         std::memcpy(nonce, mac, 12);
+        return ok;
     }
 
     bool Cipher::Encrypt(const std::uint8_t nonce[12], const std::uint8_t* aad, std::size_t aadBytes, std::uint8_t* data,

@@ -20,13 +20,23 @@ namespace
 {
     std::wstring Quote(const std::wstring& arg)
     {
+        // CommandLineToArgvW's rules: backslashes double before a quote (theirs and the closing one), else stay as they are.
+        // A version "1.0\" quoted naively escaped the closing quote and swallowed the switches after it.
         if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos) { return arg; }
         std::wstring out = L"\"";
+        std::size_t slashes = 0;
         for (const wchar_t c : arg)
         {
-            if (c == L'"') { out += L'\\'; }
+            if (c == L'\\')
+            {
+                ++slashes;
+                continue;
+            }
+            out.append(c == L'"' ? slashes * 2 + 1 : slashes, L'\\');
+            slashes = 0;
             out += c;
         }
+        out.append(slashes * 2, L'\\');
         return out + L"\"";
     }
 

@@ -59,9 +59,9 @@ namespace vfs::pak
         Cipher& operator=(const Cipher&) = delete;
 
         [[nodiscard]] bool Ok() const noexcept { return ok_; }
-        // The synthetic nonce of these bytes under this AAD.
-        void Nonce(const std::uint8_t* aad, std::size_t aadBytes, const std::uint8_t* data, std::size_t bytes,
-                   std::uint8_t nonce[12]) const;
+        // The synthetic nonce of these bytes under this AAD. False = CNG failed: nothing may be encrypted with it.
+        [[nodiscard]] bool Nonce(const std::uint8_t* aad, std::size_t aadBytes, const std::uint8_t* data, std::size_t bytes,
+                                 std::uint8_t nonce[12]) const;
         // In place. Encrypt fills the tag; Decrypt checks it (false = the tag does not match: damaged, moved or the
         // wrong key).
         bool Encrypt(const std::uint8_t nonce[12], const std::uint8_t* aad, std::size_t aadBytes, std::uint8_t* data,
@@ -73,10 +73,9 @@ namespace vfs::pak
         void* ThreadKey() const;
 
         bool ok_ = false;
-        std::array<std::uint8_t, 32> encKey_{};
-        std::array<std::uint8_t, 32> nonceKey_{};
+        std::array<std::uint8_t, 32> encKey_{};   // zeroed once the CNG key holds it
+        std::array<std::uint8_t, 32> nonceKey_{}; // zeroed with the cipher
         void* key_ = nullptr;      // BCRYPT_KEY_HANDLE (the original, duplicated per thread)
-        void* keyObject_ = nullptr;
         std::uint64_t serial_ = 0; // which cipher a thread's duplicate belongs to
     };
 }

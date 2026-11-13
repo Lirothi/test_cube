@@ -253,17 +253,27 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
     scene.VesselCameraRef().End();
     if (stopOnLevelChange_)
     {
-        playing_ = false;
-        possessed_ = false;
-        scene.Physics().RemovePlayer();
-        physics::GameSettings().player = settingsBefore_;
-        input.SetMouseCapture(false);
-        LOG_INFO(logging::LogCategory::App, "play: stopped, another level");
+        StopForLevel(scene, input);
         return false;
     }
     PlaceAtStart(renderer, scene, start);
     scene.RaceRef().Begin(course ? *course : game::RaceCourse{});
     return true;
+}
+
+void PlaySession::StopForLevel(Scene& scene, InputManager& input)
+{
+    if (!playing_) { return; }
+    atHelm_ = false; // the boat went with the level
+    vesselInReach_ = false;
+    scene.Physics().SetHelm(nullptr);
+    scene.VesselCameraRef().End();
+    playing_ = false;
+    possessed_ = false;
+    scene.Physics().RemovePlayer();
+    physics::GameSettings().player = settingsBefore_;
+    input.SetMouseCapture(false);
+    LOG_INFO(logging::LogCategory::App, "play: stopped, another level");
 }
 
 void PlaySession::SetStatus(std::string status, double untilSeconds)
@@ -449,6 +459,8 @@ std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
     // read as an anchor for this session (owner, 2026-11-09), and the yacht stayed where it was kept after Stop.
     text += atHelm_ ? L"   Esc stop   K write the poses to the level   Shift+F1 mouse"
                     : L"   Esc stop   F8 eject   K write the poses to the level   Shift+F1 mouse";
+#elif TC_SHIPPING
+    text += atHelm_ ? L"   Esc menu" : L"   Esc menu   F8 eject";
 #else
     text += atHelm_ ? L"   Esc mouse" : L"   Esc mouse   F8 eject";
 #endif

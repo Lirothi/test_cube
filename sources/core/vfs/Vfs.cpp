@@ -13,6 +13,7 @@
 #include <mutex>
 #include <system_error>
 #include <unordered_set>
+#include <vector>
 
 namespace vfs
 {
@@ -68,8 +69,70 @@ namespace vfs
                 out.push_back(c);
             }
             while (out.size() >= 2 && out[0] == '.' && out[1] == '/') { out.erase(0, 2); }
-            return out;
+            // "." and ".." segments, folded as the OS would read them: a package knows only folded paths (a "x/../y" read
+            // loose and missed in a package), and "data/bot_memory/../.." left the user overlay's folder. A leading ".."
+            // that has nothing to fold stays (dev only: Shipping serves no loose file).
+            const bool dots = out == "." || out == ".." || out.rfind("../", 0) == 0 || out.find("/./") != std::string::npos ||
+                              out.find("/../") != std::string::npos || (out.size() >= 2 && out.compare(out.size() - 2, 2, "/.") == 0) ||
+                              (out.size() >= 3 && out.compare(out.size() - 3, 3, "/..") == 0);
+            if (!dots) { return out; }
+            std::size_t start = 0;
+            if (out.rfind("//", 0) == 0) { start = 2; }
+            else if (out.size() >= 3 && out[1] == ':' && out[2] == '/') { start = 3; }
+            else if (!out.empty() && out[0] == '/') { start = 1; }
+            const bool trailing = out.back() == '/';
+            std::vector<std::string> parts;
+            for (std::size_t at = start; at <= out.size();)
+            {
+                const std::size_t slash = std::min(out.find('/', at), out.size());
+                const std::string part = out.substr(at, slash - at);
+                at = slash + 1;
+                if (part.empty() || part == ".") { continue; }
+                if (part == ".." && !parts.empty() && parts.back() != "..") { parts.pop_back(); continue; }
+                if (part == ".." && start > 0) { continue; } // above a root: the root
+                parts.push_back(part);
+            }
+            std::string folded = out.substr(0, start);
+            for (std::size_t i = 0; i < parts.size(); ++i) { folded += (i ? "/" : "") + parts[i]; }
+            if (trailing && !parts.empty()) { folded.push_back('/'); }
+            return folded;
         }
+
+#if TC_SHIPPING
+        // A shipped build reads its content from its packages and nothing else (the owner's allowLoose: off, plan §11): an
+        // absolute path is served only inside the game's folder (its DLLs: dxcompiler's fingerprint) and the user's
+        // (settings, caches, saves). Anything else -- "--level=C:/x.json", an absolute path in a level -- is refused, once
+        // logged.
+        std::wstring FoldedFolder(const std::filesystem::path& folder)
+        {
+            std::wstring w = ToWide(Normalise(ToUtf8(folder.native())));
+            if (!w.empty() && w.back() != L'/') { w.push_back(L'/'); }
+            ::CharLowerBuffW(w.data(), static_cast<DWORD>(w.size()));
+            return w;
+        }
+
+        bool AbsoluteAllowed(const Path& path)
+        {
+            std::wstring w = ToWide(path.Utf8());
+            ::CharLowerBuffW(w.data(), static_cast<DWORD>(w.size()));
+            for (const std::filesystem::path* folder : { &ContentRoot(), &UserDirectory() })
+            {
+                const std::wstring root = folder->empty() ? std::wstring() : FoldedFolder(*folder);
+                if (!root.empty() && (w.rfind(root, 0) == 0 || w + L"/" == root)) { return true; }
+            }
+            static std::mutex mutex;
+            static std::unordered_set<std::string> refused;
+            std::lock_guard<std::mutex> lock(mutex);
+            if (refused.insert(path.Utf8()).second)
+            {
+                LOG_WARNING(logging::LogCategory::Vfs, "vfs: {} is outside the game's folders -- a shipped build reads its content "
+                            "from its packages only", path.Utf8());
+            }
+            return false;
+        }
+#else
+        bool AbsoluteAllowed(const Path&) { return true; }
+#endif
 
         // Case-insensitive match of a file name against "*" / "?" patterns, as FindFirstFile means them but without
         // its 8.3 quirk ("*.htm" matching "x.html").
@@ -486,6 +549,7 @@ namespace vfs
             if (path.Empty()) { return std::nullopt; }
             if (path.IsAbsolute())
             {
+                if (!AbsoluteAllowed(path)) { return std::nullopt; }
                 std::optional<Stat> stat = OsStat(ToWide(path.Utf8()));
                 if (!stat) { g_misses.fetch_add(1, std::memory_order_relaxed); }
                 return stat;
@@ -535,7 +599,7 @@ namespace vfs
             if (path.Empty()) { return file; }
             if (path.IsAbsolute())
             {
-                file = OsOpen(ToWide(path.Utf8()));
+                if (AbsoluteAllowed(path)) { file = OsOpen(ToWide(path.Utf8())); }
             }
             else
             {
@@ -605,7 +669,7 @@ namespace vfs
             };
             if (directory.IsAbsolute())
             {
-                listLoose(ToWide(directory.Utf8()));
+                if (AbsoluteAllowed(directory)) { listLoose(ToWide(directory.Utf8())); }
                 return;
             }
             const std::wstring looseFolder = directory.Empty() ? ContentRoot().wstring() : OsWide(directory);
@@ -635,7 +699,7 @@ namespace vfs
 
         bool LooseServesIn(const Mounts& mounts, const Path& path)
         {
-            if (path.IsAbsolute()) { return true; }
+            if (path.IsAbsolute()) { return AbsoluteAllowed(path); }
             if (const std::wstring overlay = OverlayWide(mounts, path); !overlay.empty() && OsStat(overlay)) { return true; }
             bool loose = false;
             bool hidden = false;
@@ -908,7 +972,7 @@ namespace vfs
         case Writable::Saved:    break;
         }
         // "data/bot_memory/x.json" -> <user>/bot_memory/x.json: the user overlay maps "data/bot_memory/" back to it.
-        return rel.rfind("data/", 0) == 0 ? user / ToWide(rel.substr(5)) : user / L"saved" / ToWide(rel);
+        return _strnicmp(rel.c_str(), "data/", 5) == 0 ? user / ToWide(rel.substr(5)) : user / L"saved" / ToWide(rel);
     }
 
     std::wstring Widen(std::string_view utf8) { return ToWide(utf8); }

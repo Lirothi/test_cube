@@ -47,9 +47,14 @@ ALLOW = (
 )
 
 PATTERNS = [
-    ("ifstream", re.compile(r"\b(?:std::)?(?:w?ifstream|w?fstream)\b")),
-    ("fopen", re.compile(r"\b_?w?fopen(?:_s)?\s*\(")),
-    ("CreateFile", re.compile(r"\bCreateFile(?:[AW]|2)?\s*\(")),
+    ("ifstream", re.compile(r"\b(?:std::)?(?:w?ifstream|w?fstream|basic_ifstream|basic_fstream)\b")),
+    ("fopen", re.compile(r"\b_?w?f(?:s)?open(?:_s)?\s*\(")),
+    ("_open", re.compile(r"\b_w?s?open(?:_s)?\s*\(")),
+    ("CreateFile", re.compile(r"\bCreateFile(?:[AW]|2|2FromAppW|FromAppW)?\s*\(")),
+    ("CreateFileMapping", re.compile(r"\bCreateFileMapping[AW]?\s*\(")),
+    ("D3DReadFileToBlob", re.compile(r"\bD3DReadFileToBlob\s*\(")),
+    ("DirectXTex from a file", re.compile(r"\bLoadFrom(?:DDS|WIC|TGA|HDR|EXR)File\s*\(")),
+    ("DXC blob from a file", re.compile(r"\bCreateBlobFromFile\s*\(")),
     ("DXC LoadFile", re.compile(r"(?:->|\.)LoadFile\s*\(")),
     ("D3DCompileFromFile", re.compile(r"\bD3DCompileFromFile\s*\(")),
     ("cgltf_parse_file", re.compile(r"\bcgltf_parse_file\s*\(")),
@@ -60,7 +65,10 @@ PATTERNS = [
     ("directory_iterator", re.compile(r"\b(?:recursive_)?directory_iterator\b")),
     ("filesystem query", re.compile(
         r"(?:\bstd::filesystem::|\bfs::|\.)(?:exists|is_regular_file|is_directory|file_size|last_write_time)\s*\(")),
+    ("filesystem status", re.compile(r"(?:\bstd::filesystem::|\bfs::)(?:symlink_)?status\s*\(")),
 ]
+# Not caught by a pattern: a vfs:: call given an ABSOLUTE path goes straight to the OS (dev; Shipping refuses one outside
+# the game's and the user's folders -- Vfs.cpp AbsoluteAllowed). Build content paths from the content root, never a cwd.
 
 LINE_COMMENT = re.compile(r"//.*$")
 STRING = re.compile(r'"(?:\\.|[^"\\])*"')
