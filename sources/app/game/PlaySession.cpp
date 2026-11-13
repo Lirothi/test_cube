@@ -12,6 +12,9 @@
 #include "imgui.h"
 
 #include "app/camera/Camera.h"
+#include "app/game/Race.h"
+#include "app/game/RaceBot.h"
+#include "app/game/VesselCamera.h"
 #include "app/game/VesselStats.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
@@ -152,8 +155,10 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     const bool scriptView = std::exchange(tuning.testView, false);
     if (scriptView || (controls && input.WasActionPressed("ToggleView")))
     {
-        view.ToggleView();
+        // V: behind -> the cockpit -> cinema -> behind.
+        view.NextView();
         camera.ResetHistory();
+        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", ImGui::GetTime() + 3.0);
     }
     // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
     const bool scriptAnchor = std::exchange(tuning.testAnchor, false);
@@ -180,7 +185,9 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     if (mouseTaken_ && !input.IsMouseCaptured()) { mouseFree_ = true; }
     if (mouseFree_ && !uiWantsCursor && !uiCapturingMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { mouseFree_ = false; }
     const bool controls = !mouseFree_ && !uiWantsCursor;
-    const bool take = controls && input.WindowIsForeground(); // the mouse is the desktop's: a window in the background keeps the keys and leaves it alone
+    // On foot with the camera on a bot's boat the mouse stays free: it is the spectator panel's (DrawSpectatorPanel).
+    const bool watching = !atHelm_ && scene.RaceRef().WatchedVessel() != nullptr;
+    const bool take = controls && !watching && input.WindowIsForeground(); // the mouse is the desktop's: a window in the background keeps the keys and leaves it alone
     if (take != input.IsMouseCaptured()) { input.SetMouseCapture(take); }
     mouseTaken_ = take;
 
@@ -192,6 +199,20 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     {
         TickHelm(input, scene, controls, deltaTime);
         return;
+    }
+    // On foot, Tab hangs the chase camera on the next racer (the next bot boat outside a race), past the last one gives it back.
+    if (controls && input.WasActionPressed("WatchNext"))
+    {
+        const std::string on = scene.RaceRef().WatchNext();
+        SetStatus(on.empty() ? std::string("Camera: yours") : "Camera: " + on + " (Tab: the next)", ImGui::GetTime() + 3.0);
+    }
+    // And V its view: behind -> the cockpit -> cinema.
+    if (watching && controls && input.WasActionPressed("ToggleView"))
+    {
+        game::VesselCamera& view = scene.SpectatorCameraRef();
+        view.NextView();
+        camera.ResetHistory();
+        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", ImGui::GetTime() + 3.0);
     }
     // The way aboard: within a few metres of a hull, the key takes the helm.
     constexpr float kHelmReach = 3.0f;
@@ -211,14 +232,15 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     // No body and none coming (an empty level has no world, physics.enabled:0): the camera flies, as ejected.
     const bool hasBody = possessed_ && (justSpawned_ || world.GetPlayerState().exists);
     justSpawned_ = false;
+    // Watching a bot the player stands: the mouse moving over the panel does not turn their head meanwhile.
     if (hasBody)
     {
-        controller_.Tick(input, camera, world, controls, deltaTime);
+        controller_.Tick(input, camera, world, controls && !watching, deltaTime);
     }
     else
     {
         world.SetPlayerInput(physics::PlayerInput{});
-        if (controls) { camera.UpdateFromInput(input, deltaTime, true); }
+        if (controls && !watching) { camera.UpdateFromInput(input, deltaTime, true); }
     }
 }
 
@@ -252,9 +274,60 @@ void PlaySession::SetStatus(std::string status, double untilSeconds)
 
 std::wstring PlaySession::RaceHudLine(const Scene& scene) const { return playing_ ? scene.RaceRef().HudLine() : std::wstring{}; }
 
+void PlaySession::DrawSpectatorPanel(Scene& scene)
+{
+    game::Race& race = scene.RaceRef();
+    if (!playing_ || atHelm_ || !race.WatchedVessel()) { return; }
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16.0f, 96.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    if (!ImGui::Begin("Watching a boat", nullptr, flags))
+    {
+        ImGui::End();
+        return;
+    }
+    // Which boat: the racers in their places (the bot boats outside a race).
+    // A radio row each (four at the most on a grid): no popup, which a frame of Play could take the focus from.
+    const std::vector<std::string> names = race.WatchNames();
+    const int index = race.WatchIndex();
+    for (std::size_t i = 0; i < names.size(); ++i)
+    {
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::RadioButton(names[i].c_str(), static_cast<int>(i) + 1 == index)) { race.SetWatch(static_cast<int>(i) + 1); }
+        ImGui::PopID();
+    }
+    if (ImGui::Button("My camera")) { race.SetWatch(0); }
+    ImGui::Separator();
+
+    // The view: behind it, from its cockpit, a director's shots.
+    game::VesselCamera& view = scene.SpectatorCameraRef();
+    const game::VesselCamera::View views[] = { game::VesselCamera::View::Chase, game::VesselCamera::View::Helm, game::VesselCamera::View::Cinema };
+    const char* labels[] = { "Behind", "Cockpit", "Cinema" };
+    for (int i = 0; i < 3; ++i)
+    {
+        if (i > 0) { ImGui::SameLine(); }
+        if (ImGui::RadioButton(labels[i], view.GetView() == views[i]) && view.GetView() != views[i])
+        {
+            view.SetView(views[i]);
+            scene.CameraRef().ResetHistory();
+        }
+    }
+    bool vision = game::BotSettingsRef().debug >= 0.5f;
+    if (ImGui::Checkbox("Bots' vision", &vision)) { game::BotSettingsRef().debug = vision ? 1.0f : 0.0f; }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("bot.debug: each bot's plan coloured by its speed limit, the buoys and boats it plans round, its aim, and a\n"
+                          "card over it with its speed, target, throttle and rudder and why.");
+    }
+    ImGui::TextDisabled("Tab: the next boat   V: the next view   Esc: stop");
+    ImGui::End();
+}
+
 void PlaySession::DrawBoatCard(Scene& scene)
 {
-    if (!playing_ || atHelm_ || !possessed_) { return; }
+    if (!playing_ || atHelm_ || !possessed_ || scene.RaceRef().WatchedVessel()) { return; }
     physics::World& world = scene.Physics();
     const physics::PlayerState onFoot = world.GetPlayerState();
     if (!onFoot.exists) { return; }
@@ -357,9 +430,9 @@ std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
     {
         const physics::HelmState& helm = scene.Physics().GetHelm();
         const physics::VesselState& vessel = helm.vessel;
-        std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%%ls   W S throttle   A D rudder   V view   %ls   E leave",
+        std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%%ls   W S throttle   A D rudder   V view: %hs   %ls   E leave",
                       vessel.speed * 1.94384f, vessel.throttle * 100.0f, vessel.rudder * 100.0f, helm.anchored ? L", ANCHORED" : L"",
-                      helm.anchored ? L"X weigh anchor" : L"X anchor");
+                      game::VesselCamera::ViewName(scene.VesselCameraRef().GetView()), helm.anchored ? L"X weigh anchor" : L"X anchor");
     }
     else if (possessed_ && state.exists)
     {

@@ -16,9 +16,11 @@ namespace game
             out.marks.push_back(RaceMark{ position, gate->get<int>(), track != object.end() && track->is_string() ? track->get<std::string>() : std::string() });
         }
         const auto bot = object.find(kRaceBotKey);
-        if (bot != object.end() && bot->is_boolean() && bot->get<bool>())
+        const auto mesh = object.find("mesh");
+        if (bot != object.end() && bot->is_boolean() && bot->get<bool>() && mesh != object.end() && mesh->is_string() && !mesh->get<std::string>().empty())
         {
-            out.bots.push_back(position);
+            const std::string asset = mesh->get<std::string>();
+            if (std::find(out.fleet.begin(), out.fleet.end(), asset) == out.fleet.end()) { out.fleet.push_back(asset); }
         }
     }
 }

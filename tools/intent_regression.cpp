@@ -66,6 +66,7 @@
 #include "app/game/RaceBot.h"                  // TestRaceCourseAndBot
 #include "app/game/RaceCourseJson.h"
 #include "editor/commands/SetVesselTuneCommand.h" // TestRaceCourseAndBot: a boat's own numbers
+#include "app/game/Race.h"                         // TestEditorRaceTracks: the bots' race grid
 #include "editor/commands/SetRaceKeyCommand.h"    // TestEditorRaceTracks
 #include "editor/scene/EditorRaceTracks.h"        // TestEditorRaceTracks
 #include <algorithm>
@@ -1007,6 +1008,9 @@ void TestPhysicsRoad(const EditorActionContext& actionCtx)
         Check(!(*reading)["result"]["isError"].get<bool>(), "and neither is a look");
         const std::optional<json> stopped = call(30, "stop", json::object());
         Check(!(*stopped)["result"]["isError"].get<bool>() && !playHost.playing, "stop asks the host: " + text(stopped));
+        // race_bots: a level without a course (the palms') is refused, and no session starts.
+        const std::optional<json> raced = call(31, "race_bots", { { "track", "classic" } });
+        Check((*raced)["result"]["isError"].get<bool>() && !playHost.playing && !game::RaceGridRef().pending, "race_bots without a course is refused: " + text(raced));
         editormcp::SetPlayHost(nullptr);
     }
 
@@ -1814,6 +1818,48 @@ void TestEditorRaceTracks(const EditorActionContext& actionCtx)
     Check(stack.HistorySize() == 1, "the reverse is one undo entry");
     stack.Undo(ctx);
     Check(gateOf(a2) == 2 && gateOf(lone) == 4, "undo numbers them as before");
+
+    // A bots' race on a course (RequestBotRace): the grid the next session takes, nothing in the document. Its places are KINDS
+    // of boat -- the assets of the boats that carry raceBot -- and the race makes its own copies of them.
+    const auto boat = [&](const char* name, const char* asset, float x, bool bot)
+    {
+        EditorObject object = MakeMeshWithKey(nextId++, name, "mesh", asset, { x, 0.0f, -40.0f }); // "mesh": the key a level writes
+        if (bot) { object.properties[game::kRaceBotKey] = true; }
+        document.Objects().push_back(object);
+        return object.id;
+    };
+    const std::string yacht = "models/small_yacht/small_yacht.mesh.json";
+    const std::string police = "models/police_boat/police_boat.mesh.json";
+    const std::string plain = "models/fast_boat_13/fast_boat_13.mesh.json";
+    boat("Yacht", yacht.c_str(), 5.0f, true);
+    boat("Police", police.c_str(), 15.0f, true);
+    boat("Yacht 2", yacht.c_str(), 20.0f, true);
+    boat("Plain", plain.c_str(), 25.0f, false);
+    const std::vector<std::string> fleet = editorrace::RaceFleet(document);
+    Check(fleet.size() == 2 && fleet[0] == yacht && fleet[1] == police && editorrace::KindName(police) == "police_boat",
+          "the fleet: the kinds of the boats with raceBot, each once, in the document's order");
+    game::RaceCourse read;
+    for (const EditorObject& object : document.Objects()) { game::ReadRaceKeys(object.properties, object.transform.position, read); }
+    Check(read.fleet == fleet, "and the course Play reads holds the same fleet");
+    game::RaceGridRef() = game::RaceGrid{};
+    std::string why;
+    Check(editorrace::RequestBotRace(document, "t", 2, { { yacht, 0 }, { police, 2 }, { yacht, 1 } }, 1, &why), "a race of three on t: " + why);
+    const game::RaceGrid& grid = game::RaceGridRef();
+    Check(grid.pending && grid.track == "t" && grid.laps == 2 && grid.boats.size() == 3 && grid.boats[0].asset == yacht && grid.boats[2].asset == yacht &&
+          grid.boats[0].difficulty == 0 && grid.boats[1].difficulty == 2 && grid.watch == 1,
+          "the grid: the course, the laps, each place a kind at its level (a kind twice is two copies), the camera on the second");
+    game::RaceGridRef() = game::RaceGrid{};
+    Check(!editorrace::RequestBotRace(document, "nope", 3, { { yacht, 2 } }, -1, &why) && why.find("no course") != std::string::npos,
+          "a course the level does not have is refused: " + why);
+    Check(!editorrace::RequestBotRace(document, "", 3, { { yacht, 2 } }, -1, &why) && why.find("three whole gates") != std::string::npos,
+          "and one of a single gate: " + why);
+    Check(!editorrace::RequestBotRace(document, "t", 3, { { plain, 2 } }, -1, &why) && why.find("raceBot") != std::string::npos,
+          "a kind no boat with raceBot is of is refused: " + why);
+    Check(!editorrace::RequestBotRace(document, "t", 3, { { yacht, 2 } }, 1, &why) && why.find("camera") != std::string::npos,
+          "the camera on a place not on the grid is refused: " + why);
+    Check(!editorrace::RequestBotRace(document, "t", 3, { { yacht, 2 }, { police, 2 }, { yacht, 2 }, { police, 2 }, { yacht, 2 } }, -1, &why),
+          "five places are refused");
+    Check(!game::RaceGridRef().pending, "a refused race leaves no grid behind");
 }
 
 void TestRaceCourseAndBot(const EditorActionContext& actionCtx)

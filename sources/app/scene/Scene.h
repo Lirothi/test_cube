@@ -148,6 +148,10 @@ public:
     // `scene.replicate` stress grid's step; not a per-frame call.
     AABB ComputeStaticBounds() const;
     bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
+    // Runtime objects (no editor identity) out of the scene; the GPU idle first. At the hand-over or parked. How many went.
+    std::size_t RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone);
+    // The race's own boats (game::Race::TakeSpawns / TakeDespawns), at the hand-over: made where the grid is, taken out after.
+    void SyncRaceBoats(Renderer* renderer);
     bool RemoveOceanObjects();
     void SetOceanVisible(bool visible);
     // W1: locate the ocean's shared clock (null if no ocean). PUBLIC since P16.6 -- the capture
@@ -159,6 +163,9 @@ public:
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
     game::VesselCamera& VesselCameraRef() { return vesselCamera_; }
+    const game::VesselCamera& VesselCameraRef() const { return vesselCamera_; }
+    // The spectator's on a bot's boat (race.watch): its view (behind, cockpit, cinema) is the Play panel's and V's.
+    game::VesselCamera& SpectatorCameraRef() { return spectatorCamera_; }
     // The level's race in a play session: its gates, the bots at their boats' helms (game::Race).
     game::Race& RaceRef() { return race_; }
     const game::Race& RaceRef() const { return race_; }

@@ -937,17 +937,17 @@ namespace
             }
             if (!SetPhysicsCommand::VesselAsset(ctx, obj.id)) { return; }
             bool bot = SetRaceKeyCommand::DocumentBot(obj);
-            if (ImGui::Checkbox("Bot at the helm", &bot))
+            if (ImGui::Checkbox("Races as a bot", &bot))
             {
                 commandStack.Execute(ctx, SetRaceKeyCommand::Bot(obj.id, bot));
             }
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip(
-                    "In a race a bot takes this boat's helm and runs the level's race gates. Take the helm\n"
-                    "yourself (E) and it stands down until you leave. At any helm B hands the boat to the same\n"
-                    "bot (autopilot). It drives by THIS boat's numbers (Boat below: its top speed, its circle,\n"
-                    "its braking). How it drives: Developer Controls > Physics, bot.*.");
+                    "This boat's KIND is one the bots race in: a race makes its own copies of it on the grid and a bot\n"
+                    "helms each -- this boat stays where it is, yours to take (E). A race's boats go when it is over.\n"
+                    "A bot drives by the copy's numbers (the asset's: its top speed, its circle, its braking). How it\n"
+                    "drives: Developer Controls > Physics, bot.*. The course's own section picks the kinds and levels.");
             }
         }
 

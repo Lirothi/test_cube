@@ -157,6 +157,12 @@ namespace physics
         float killY = -200.0f;   // physics.killY: UE's KillZ, a body below this falls asleep and Keep leaves it
         float angularDamping = 1.0f; // physics.angularDamping, 1/s: a Dynamic body whose asset does not say
         float rollingResistance = 0.2f; // physics.rollingResistance: the sine of the slope a Dynamic body whose asset does not say still rests on (11.5 degrees)
+        // A boat nobody steers -- no helm, no bot, its own anchor up -- stands on a hard mooring once it has slowed to
+        // mooringSettle m/s: its place along the water and its heading held (HoldMooring), the waves' heave, pitch and roll its
+        // own. Owner, 2026-11-13: "when we board one, the others must stand on a hard anchor".
+        float mooring = 2.5f;      // physics.mooring, rad/s: the hold's own frequency along the water; 0 = none, a boat drifts (before)
+        float mooringTurn = 2.0f;  // physics.mooringTurn, rad/s: and about the vertical
+        float mooringSettle = 0.6f; // physics.mooringSettle, m/s
         PlayerSettings player;   // player.*
     };
     Settings& GameSettings();
@@ -216,6 +222,9 @@ namespace physics
         void Tick(float deltaTime);
         // Once a frame from the game loop, the moment the render thread's frame is done: starts the steps Tick counted.
         void KickStep();
+        // Objects that left the scene just now (a race's spawned boats, Scene::Sync): their entries go at once, after any step in
+        // flight -- before CollectHulls or anything else hands out a pointer to them.
+        void ForgetRemoved();
         // Once a frame from Scene::Sync, before the objects' transforms cross: the poses of the step KickStep started, if it is done. Never waits.
         void SyncPoses();
         // Waits for the step in flight. What reaches the world through this class does so by itself; a test wants it to compare a frame.

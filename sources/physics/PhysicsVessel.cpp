@@ -319,4 +319,33 @@ namespace physics
         const float tension = std::max(settings.anchorStiffness * stretch + settings.anchorDamping * running, 0.0f); // a rode only pulls
         if (tension > 0.0f) { body.AddImpulse(out * (-tension * dt), bow); }
     }
+
+    void HoldMooring(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg at, float heading, float stiffness, float turn, float dt)
+    {
+        // Along the water: a critically damped spring on the origin's place, as a change of velocity (stable while omega dt
+        // stays small: 2.5 rad/s at 60 Hz is 0.04).
+        const float w = std::max(stiffness, 0.0f);
+        if (w > 0.0f)
+        {
+            const JPH::RVec3 position = body.GetPosition();
+            const JPH::Vec3 linear = body.GetLinearVelocity();
+            const float dx = static_cast<float>(position.GetX()) - at.GetX();
+            const float dz = static_cast<float>(position.GetZ()) - at.GetZ();
+            const float ax = -w * w * dx - 2.0f * w * linear.GetX();
+            const float az = -w * w * dz - 2.0f * w * linear.GetZ();
+            body.SetLinearVelocityClamped(linear + JPH::Vec3(ax * dt, 0.0f, az * dt));
+        }
+        // About the vertical: the bow's heading.
+        const float t = std::max(turn, 0.0f);
+        if (t > 0.0f)
+        {
+            const JPH::Vec3 bow = body.GetRotation() * ToJolt(settings.forward).Normalized();
+            float error = heading - std::atan2(bow.GetX(), bow.GetZ());
+            while (error > 3.14159265f) { error -= 6.2831853f; }
+            while (error < -3.14159265f) { error += 6.2831853f; }
+            const JPH::Vec3 angular = body.GetAngularVelocity();
+            const float alpha = t * t * error - 2.0f * t * angular.GetY();
+            body.SetAngularVelocityClamped(angular + JPH::Vec3(0.0f, alpha * dt, 0.0f));
+        }
+    }
 } // namespace physics

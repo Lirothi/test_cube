@@ -542,13 +542,13 @@ namespace
         }
         if (commands.empty())
         {
-            outStatus = "No boat among them: a bot takes the helm of a vessel (a mesh whose asset has a \"vessel\" block)";
+            outStatus = "No boat among them: a race's bots helm vessels (a mesh whose asset has a \"vessel\" block)";
             return nullptr;
         }
         const std::size_t count = commands.size();
-        outStatus = (bot ? "A bot at the helm of " : "No bot at the helm of ") + CountedObjects(count);
+        outStatus = (bot ? "The kind of " : "Not the kind of ") + CountedObjects(count) + (bot ? " races as a bot (a race makes its own copies)" : " for the bots");
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not boats)"; }
-        return FoldIntoOneEntry(std::move(commands), bot ? "Bot At The Helm" : "No Bot At The Helm");
+        return FoldIntoOneEntry(std::move(commands), bot ? "Races As A Bot" : "Races Not As A Bot");
     }
 
     // ------------------------------------------------------------------ setVessel
@@ -4039,12 +4039,12 @@ EditorActionRegistry::EditorActionRegistry()
 
     actions_.push_back({
         "setRaceBot",
-        "Put a bot at the helm of the matching boats, or take it off: in Play the bot runs the level's race course "
-        "(the gates marked with setRaceGate) lap after lap. The player can still take that helm; the bot stands "
-        "down while they hold it.",
+        "Make the matching boats' KIND one the bots race in, or not: a race (the level's course, the gates marked with "
+        "setRaceGate) makes its own copies of such kinds on the grid, a bot at each helm; the boats themselves stay "
+        "where they are for the player, and the race's copies go when it is over.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
-        { { "enabled", EditorParamKind::Bool, true, "true puts a bot at the helm, false takes it off" } },
+        { { "enabled", EditorParamKind::Bool, true, "true: its kind races as a bot (copies made for a race), false: not" } },
         &BuildSetRaceBot,
     });
 

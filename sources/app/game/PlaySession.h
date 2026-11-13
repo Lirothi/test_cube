@@ -40,6 +40,9 @@ public:
     // A boat's card (ImGui, the frame's): on foot within a few metres of a boat, what it does -- its top speed, how fast
     // it gets there, the circle it turns in, its weight and engine -- drawn over it. Takes no mouse and no key.
     void DrawBoatCard(Scene& scene);
+    // On foot with the camera on a bot's boat (race.watch): a small window -- which boat (the racers in their places), the
+    // view (behind, cockpit, cinema), the bots' vision (bot.debug). The mouse is free meanwhile.
+    void DrawSpectatorPanel(Scene& scene);
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);

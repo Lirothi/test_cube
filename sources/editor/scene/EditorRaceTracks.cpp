@@ -3,12 +3,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <memory>
 #include <utility>
 
+#include "app/game/Race.h"
 #include "app/game/RaceCourse.h"
+#include "core/logging/Log.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
 #include "editor/EditorContext.h"
@@ -397,6 +400,65 @@ namespace editorrace
         for (const Gate& gate : track.gates) { marks.insert(marks.end(), gate.marks.begin(), gate.marks.end()); }
         return marks;
     }
+
+    std::vector<std::string> RaceFleet(const EditorSceneDocument& document)
+    {
+        std::vector<std::string> fleet;
+        for (const EditorObject& object : document.Objects())
+        {
+            if (!object.enabled || !SetRaceKeyCommand::DocumentBot(object)) { continue; }
+            const auto mesh = object.properties.find("mesh");
+            if (mesh == object.properties.end() || !mesh->is_string() || mesh->get<std::string>().empty()) { continue; }
+            const std::string asset = mesh->get<std::string>();
+            if (std::find(fleet.begin(), fleet.end(), asset) == fleet.end()) { fleet.push_back(asset); }
+        }
+        return fleet;
+    }
+
+    std::string KindName(const std::string& asset)
+    {
+        std::string name = asset;
+        const std::size_t slash = name.find_last_of("/\\");
+        if (slash != std::string::npos) { name = name.substr(slash + 1); }
+        const std::size_t dot = name.find('.');
+        if (dot != std::string::npos) { name = name.substr(0, dot); }
+        return name;
+    }
+
+    bool RequestBotRace(const EditorSceneDocument& document, const std::string& trackName, int laps, const std::vector<BotRacePick>& boats,
+                        int watch, std::string* why)
+    {
+        const auto fail = [why](std::string text)
+        {
+            if (why) { *why = std::move(text); }
+            return false;
+        };
+        const std::vector<Track> tracks = Collect(document);
+        const Track* track = FindTrack(tracks, trackName);
+        const std::size_t whole = track ? static_cast<std::size_t>(std::count_if(track->gates.begin(), track->gates.end(),
+                                                                                  [](const Gate& gate) { return gate.marks.size() == 2; }))
+                                        : 0;
+        if (whole < 3) { return fail("the level has no course '" + game::TrackDisplayName(trackName) + "' of three whole gates"); }
+        if (boats.empty()) { return fail("no boat to race"); }
+        if (boats.size() > 4) { return fail("at most four boats race (the grid has four places)"); }
+        const std::vector<std::string> fleet = RaceFleet(document);
+        game::RaceGrid grid;
+        grid.track = trackName;
+        grid.laps = std::clamp(laps, 1, 20);
+        for (const BotRacePick& pick : boats)
+        {
+            if (std::find(fleet.begin(), fleet.end(), pick.asset) == fleet.end())
+            {
+                return fail("'" + KindName(pick.asset) + "' is no kind the bots race in (no boat of it carries \"raceBot\")");
+            }
+            grid.boats.push_back(game::RaceGridBoat{ pick.asset, std::clamp(pick.difficulty, 0, 2) });
+        }
+        if (watch >= static_cast<int>(boats.size())) { return fail("the camera's place is not on the grid"); }
+        grid.watch = std::max(watch, -1);
+        grid.pending = true;
+        game::RaceGridRef() = std::move(grid);
+        return true;
+    }
 }
 
 // ---- The Inspector's section ----------------------------------------------------------------------------------------------
@@ -446,6 +508,117 @@ namespace
             }
             g_gateDrag = GateDrag{};
         }
+    }
+
+    // The Inspector's bot race, per course, for this editor session: the grid's places -- each a kind of boat, a level -- and
+    // whose camera.
+    struct BotRaceSetup
+    {
+        bool made = false;
+        int laps = 3;
+        bool on[4] = {};
+        int kind[4] = {};  // index into the fleet
+        int level[4] = { 2, 2, 2, 2 };
+        int watch = 0;     // a place, -1 = none
+    };
+    std::map<std::string, BotRaceSetup> g_botRace;
+    bool g_botRacePlay = false;
+
+    void DrawBotRace(EditorContext& ctx, const std::string& trackName)
+    {
+        ImGui::SeparatorText("Bot race");
+        const std::vector<std::string> fleet = editorrace::RaceFleet(ctx.document);
+        if (fleet.empty())
+        {
+            ImGui::TextDisabled("No kind of boat to race in: select a boat, Inspector > Race > \"Races as a bot\".");
+            return;
+        }
+        BotRaceSetup& setup = g_botRace[trackName];
+        if (!setup.made)
+        {
+            // The first time: four places, the fleet's kinds in turn, hard, the camera on the first.
+            setup.made = true;
+            setup.laps = std::clamp(static_cast<int>(std::lround(game::RaceSettingsRef().laps)), 1, 20);
+            for (int i = 0; i < 4; ++i)
+            {
+                setup.on[i] = true;
+                setup.kind[i] = i % static_cast<int>(fleet.size());
+            }
+        }
+        ImGui::SetNextItemWidth(110.0f);
+        if (ImGui::InputInt("Laps", &setup.laps)) { setup.laps = std::clamp(setup.laps, 1, 20); }
+        std::string kinds;
+        for (const std::string& asset : fleet) { kinds += editorrace::KindName(asset) + '\0'; }
+        int onCount = 0;
+        if (ImGui::BeginTable("##botRace", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("Races", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableSetupColumn("Boat", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+            ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthFixed);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < 4; ++i)
+            {
+                ImGui::PushID(i);
+                setup.kind[i] = std::clamp(setup.kind[i], 0, static_cast<int>(fleet.size()) - 1);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Checkbox("##on", &setup.on[i]);
+                onCount += setup.on[i] ? 1 : 0;
+                ImGui::TableNextColumn();
+                ImGui::BeginDisabled(!setup.on[i]);
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::Combo("##kind", &setup.kind[i], kinds.c_str());
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-1.0f);
+                ImGui::Combo("##level", &setup.level[i], "Easy\0Medium\0Hard\0");
+                ImGui::TableNextColumn();
+                if (ImGui::RadioButton("##camera", setup.on[i] && setup.watch == i)) { setup.watch = i; }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        const bool watched = setup.watch >= 0 && setup.watch < 4 && setup.on[setup.watch];
+        if (ImGui::RadioButton("No camera: yours", !watched)) { setup.watch = -1; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The camera stays with you on foot. In Play, Tab hangs it on the next boat whatever you pick here.");
+        }
+        // bot.debug, the same switch as Developer Controls > Physics > Race bots "Bots' vision (debug)".
+        bool vision = game::BotSettingsRef().debug >= 0.5f;
+        if (ImGui::Checkbox("Show the bots' vision", &vision)) { game::BotSettingsRef().debug = vision ? 1.0f : 0.0f; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("bot.debug: each bot's plan coloured by its speed limit, the buoys and boats it plans round, its aim, and a\n"
+                              "card over it -- speed, target, throttle and rudder and why. The same switch as Developer Controls >\n"
+                              "Physics > Race bots \"Bots' vision (debug)\".");
+        }
+        ImGui::BeginDisabled(onCount == 0);
+        char label[64];
+        std::snprintf(label, sizeof(label), "Race %d bot%s (Play)", onCount, onCount == 1 ? "" : "s");
+        if (ImGui::Button(label))
+        {
+            std::vector<editorrace::BotRacePick> picks;
+            int watch = -1;
+            for (int i = 0; i < 4; ++i)
+            {
+                if (!setup.on[i]) { continue; }
+                if (watched && setup.watch == i) { watch = static_cast<int>(picks.size()); }
+                picks.push_back(editorrace::BotRacePick{ fleet[static_cast<std::size_t>(setup.kind[i])], setup.level[i] });
+            }
+            std::string why;
+            if (editorrace::RequestBotRace(ctx.document, trackName, setup.laps, picks, watch, &why)) { g_botRacePlay = true; }
+            else { LOG_WARNING(logging::LogCategory::Editor, "bot race: {}", why); }
+        }
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            ImGui::SetTooltip("Play starts and a boat of each ticked kind is made on this course's grid -- its own, not one of the boats at\n"
+                              "the shore -- the fastest in front, each bot at its level; the race starts after the countdown and its boats go\n"
+                              "when it is over. You stand at the Player Start. Tab moves the camera from boat to boat, V its view; Esc stops.");
+        }
+        ImGui::TextDisabled("In Play: Tab = the next boat, V = its view, Esc = stop.");
     }
 
     // The gate's middle, by its marks (or 0 when it has none).
@@ -513,6 +686,8 @@ namespace
 
 namespace editorrace
 {
+    bool TakeBotRacePlay() { return std::exchange(g_botRacePlay, false); }
+
     bool DrawInspector(EditorContext& ctx, EditorCommandStack& history)
     {
         std::string trackName;
@@ -633,6 +808,8 @@ namespace editorrace
             if (!numbered) { ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f), "The numbers have gaps (the race runs them in order anyway)"); }
             if (ImGui::Button("Reverse direction")) { ReverseTrack(ctx, history, trackName); }
             if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Gate 1 stays the start; the rest are run the other way round."); }
+            DrawBotRace(ctx, trackName);
+            ImGui::SeparatorText("Gates");
             DrawGateList(ctx, *track, 0);
             ImGui::PopID();
             ImGui::Separator();

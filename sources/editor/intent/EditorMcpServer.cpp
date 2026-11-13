@@ -28,6 +28,8 @@
 #include <iterator>
 
 #include "app/camera/Camera.h"
+#include "app/game/Race.h"
+#include "app/game/RaceCourse.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "core/threading/ThreadRole.h" // game thread plan G8b: WaitRenderForGame before a call runs
@@ -39,6 +41,7 @@
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentPrompt.h"
 #include "editor/intent/IntentSchema.h"
+#include "editor/scene/EditorRaceTracks.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "rendering/core/RenderConstants.h" // g_cleanCapture: no selection outline in a `clean` shot
 #include "rendering/core/Screenshot.h"
@@ -693,6 +696,28 @@ namespace editormcp
                 { "inputSchema", ObjectSchema() },
             },
             {
+                { "name", "race_bots" },
+                { "description",
+                  "A bots' race on one of the level's courses, as the Inspector's course section \"Race N bots\" starts it: Play "
+                  "starts, a boat of each named kind (1 to 4 places; a kind is the asset of a level boat that carries \"raceBot\" -- "
+                  "the race makes its OWN copies, the boats at the shore stay where they are) is made on the course's grid, the "
+                  "fastest in front, each bot at its level, and the race runs after the countdown; its boats go when it is over. The "
+                  "chase camera on `camera`. In Play, Tab (a person's) moves the camera on, V its view; set_settings race.watch:<grid "
+                  "place> / camera.boatView:0|1|2 do it for a script. get_readouts' block race follows it." },
+                { "inputSchema", ObjectSchema({
+                    { "track", { { "type", "string" },
+                        { "description", "the course: its raceTrack name, \"\" or \"classic\" = the level's first (default)" } } },
+                    { "laps", { { "type", "integer" }, { "description", "1-20 (default race.laps)" } } },
+                    { "boats", { { "type", "array" },
+                        { "items", { { "type", "object" }, { "properties", {
+                            { "kind", { { "type", "string" }, { "description", "the kind of boat: its asset's name (\"police_boat\") or mesh.json path" } } },
+                            { "level", { { "type", "string" }, { "enum", json::array({ "easy", "medium", "hard" }) } } } } } } },
+                        { "description", "the grid's places; absent = four, the fleet's kinds in turn, at `level`" } } },
+                    { "level", { { "type", "string" }, { "enum", json::array({ "easy", "medium", "hard" }) },
+                        { "description", "a place's level when it names none (default hard)" } } },
+                    { "camera", { { "description", "the place the camera chases: 1-4, or a kind (its first place); absent = none" } } } }) },
+            },
+            {
                 { "name", "save_level" },
                 { "description",
                   "Save the open level to its file, exactly as Ctrl+S writes it (the editor's own "
@@ -834,6 +859,66 @@ namespace editormcp
             }
             g_playHost->Request(play, arguments.is_object() && arguments.value("fromCamera", false));
             result.text = play ? "Playing from this frame's end. get_readouts: block player." : "Stopped at this frame's end: the bodies and the camera back.";
+            outRecord.verdict = result.text;
+            outRecord.show = true;
+            return result;
+        }
+        if (name == "race_bots")
+        {
+            if (!g_playHost) { return Error("There is no running app here to race in."); }
+            if (g_playHost->Playing()) { return Error("The level is playing: call stop first (a bots' race starts its own session)."); }
+            const json args = arguments.is_object() ? arguments : json::object();
+            std::string track = args.value("track", std::string());
+            if (track == "classic") { track.clear(); }
+            const auto levelOf = [](const std::string& text, int fallback)
+            {
+                return text == "easy" ? 0 : text == "medium" ? 1 : text == "hard" ? 2 : fallback;
+            };
+            const int level = levelOf(args.value("level", std::string("hard")), 2);
+            // The places: kinds of boat of the fleet (the assets of the boats that carry raceBot), by their name or path.
+            const std::vector<std::string> fleet = editorrace::RaceFleet(ctx.document);
+            const auto kindOf = [&](const std::string& kind) -> std::string
+            {
+                for (const std::string& asset : fleet)
+                {
+                    if (asset == kind || editorrace::KindName(asset) == kind) { return asset; }
+                }
+                return std::string();
+            };
+            std::string known;
+            for (const std::string& asset : fleet) { known += (known.empty() ? "" : ", ") + ("'" + editorrace::KindName(asset) + "'"); }
+            std::vector<editorrace::BotRacePick> picks;
+            if (args.contains("boats") && args["boats"].is_array())
+            {
+                for (const json& item : args["boats"])
+                {
+                    const std::string kind = item.is_string() ? item.get<std::string>() : item.is_object() ? item.value("kind", item.value("name", std::string())) : std::string();
+                    const std::string asset = kindOf(kind);
+                    if (asset.empty()) { return Error("No kind of boat '" + kind + "' in the fleet. The level's: " + (known.empty() ? "none" : known) + "."); }
+                    picks.push_back(editorrace::BotRacePick{ asset, item.is_object() ? levelOf(item.value("level", std::string()), level) : level });
+                }
+            }
+            else
+            {
+                for (std::size_t i = 0; i < 4 && !fleet.empty(); ++i) { picks.push_back(editorrace::BotRacePick{ fleet[i % fleet.size()], level }); }
+            }
+            // The camera: a place on the grid (1-4), or the first place of a kind.
+            int watch = -1;
+            if (args.contains("camera") && args["camera"].is_number_integer()) { watch = args["camera"].get<int>() - 1; }
+            else if (args.contains("camera") && args["camera"].is_string() && !args["camera"].get<std::string>().empty())
+            {
+                const std::string asset = kindOf(args["camera"].get<std::string>());
+                for (std::size_t i = 0; i < picks.size() && watch < 0; ++i) { watch = picks[i].asset == asset ? static_cast<int>(i) : -1; }
+                if (watch < 0) { return Error("No place of '" + args["camera"].get<std::string>() + "' on the grid for the camera."); }
+            }
+            const int laps = args.contains("laps") && args["laps"].is_number() ? args["laps"].get<int>()
+                                                                                : static_cast<int>(std::lround(game::RaceSettingsRef().laps));
+            std::string why;
+            if (!editorrace::RequestBotRace(ctx.document, track, laps, picks, watch, &why)) { return Error("No bots' race: " + why + "."); }
+            g_playHost->Request(true, false);
+            ToolResult result;
+            result.text = "Racing " + std::to_string(picks.size()) + " bot boat(s) on '" + game::TrackDisplayName(track) + "', " +
+                          std::to_string(std::clamp(laps, 1, 20)) + " laps, from this frame's end. get_readouts: block race.";
             outRecord.verdict = result.text;
             outRecord.show = true;
             return result;

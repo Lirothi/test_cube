@@ -1039,7 +1039,7 @@ UE's Play In Editor (2026-11-05, owner: "the physics should not simulate just in
 
 ## Boats -- a Hull on the Waves, a Helm in Play
 
-A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: "import small_yacht, check the render, make a control model on our water", then "a really cool one that takes the waves into account"; `physics/PhysicsVessel.cpp`, `physics::VesselSettings`, one key table `VesselKeys()` in `CollisionJson.h` for the file, Mesh Editor > Vessel and `--set vessel.<key>`, transient, on every boat in the world). A copy is Dynamic and buoyant unless the object says otherwise -- the document writes "physics" / "buoyant" only where they differ from THAT default (`SetPhysicsCommand::VesselAsset`, `DocumentMotion`, `SetBuoyantCommand::DocumentBuoyant`). The Inspector shows the Body row on a boat too (2026-11-09, owner: "I don't see the body field"; it was hidden for vessels): Dynamic = a boat, still in the editor, floating by its hull in Play; Static + Floats = no helm, rocks on the waves in the editor too (OceanBuoyancy's kinematic floater: the selection's outline 1.6-1.8x its pixels moved in 1.2 s, as Dynamic 0.05, the DLSS floor); None = a mesh. A Dynamic floater's buoyancy line says the physics world floats it, not pontoons (it said "no pontoons could be placed"). In Play, within 3 m of its hull (the rectangle, `World::FindVessel`, no wait for a step), **E** takes the helm: W S throttle, A D rudder, the mouse orbits, **V** the helmsman's eyes, E leaves over the side. A boat with nobody at the helm floats with its engine off. A key's press is READ, not consumed (`WasActionPressed`): the frame whose E takes the helm must not read it again as leave -- until 2026-11-09 it did (`TickHelm` right after `TakeHelm`), so the real key took the helm and dropped the player over the side in one frame (owner: "E throws me into the water beside it"); the scripts' `player.testInteract` is cleared at the take and never showed it. Scratchpad-style `helm_keys.py` presses the real E (window messages, a desktop of its own): take, leave, take, three frames apart in the log.
+A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: "import small_yacht, check the render, make a control model on our water", then "a really cool one that takes the waves into account"; `physics/PhysicsVessel.cpp`, `physics::VesselSettings`, one key table `VesselKeys()` in `CollisionJson.h` for the file, Mesh Editor > Vessel and `--set vessel.<key>`, transient, on every boat in the world). A copy is Dynamic and buoyant unless the object says otherwise -- the document writes "physics" / "buoyant" only where they differ from THAT default (`SetPhysicsCommand::VesselAsset`, `DocumentMotion`, `SetBuoyantCommand::DocumentBuoyant`). The Inspector shows the Body row on a boat too (2026-11-09, owner: "I don't see the body field"; it was hidden for vessels): Dynamic = a boat, still in the editor, floating by its hull in Play; Static + Floats = no helm, rocks on the waves in the editor too (OceanBuoyancy's kinematic floater: the selection's outline 1.6-1.8x its pixels moved in 1.2 s, as Dynamic 0.05, the DLSS floor); None = a mesh. A Dynamic floater's buoyancy line says the physics world floats it, not pontoons (it said "no pontoons could be placed"). In Play, within 3 m of its hull (the rectangle, `World::FindVessel`, no wait for a step), **E** takes the helm: W S throttle, A D rudder, the mouse orbits, **V** the view (behind, the cockpit, cinema: "Watching a boat in Play"), E leaves over the side. A boat with nobody at the helm floats with its engine off. A key's press is READ, not consumed (`WasActionPressed`): the frame whose E takes the helm must not read it again as leave -- until 2026-11-09 it did (`TickHelm` right after `TakeHelm`), so the real key took the helm and dropped the player over the side in one frame (owner: "E throws me into the water beside it"); the scripts' `player.testInteract` is cleared at the take and never showed it. Scratchpad-style `helm_keys.py` presses the real E (window messages, a desktop of its own): take, leave, take, three frames apart in the log.
 
 - **The water under it** (`MeasureVesselWater`, game side, where the steps are counted): nine heights over the hull and one over the propeller. The least-squares plane is what Jolt's exact volume cuts the hull with, so a wave shorter than the hull lifts it no more than a real one does; three stations along it say what one plane cannot. The rates are followed (tau 0.08 s), not differenced: heights land from readbacks at 30 Hz. `ocean.windForce` moves it live: 0.6 (wind_test) is a 1 m sea, 2 is 5-6 m.
 - **The step** (`PushVessel`, on the step's thread between Jolt's updates, the first of a batch where it is kicked): Buoyancy: `MakeVesselShape` moves the centre of mass over the centre of buoyancy at `draft` and down to `centerOfMassY`, so it lies level by construction, and the factor is total / under-draft volume; capped at `reserveLift` (2 x the weight), because the collision hull is a convex lump with the cabin in it (29.6 m3 against 3.25 under still water) and a bow driven into a crest took 9 x its weight and flew 2 m. Thrust at the propeller, by the water standing over the PROPELLER (`bite`): a crest's back lifts it clear, and the boat loses its push and its rudder together. The rudder: a force across the stern by the water past it (own speed + `wash`), at the centre of mass's height: a boat lying still answers no rudder, one on its wash does, astern it turns the other way. The hull: quadratic along, a hump (`humpSpeed`, `humpDrag`, `humpTrim`) and onto the plane (`planeSpeed`, `planingLift`, `planeTrim`): a fifth of the throttle stays under the hump at 3.4 m/s, the bow is 3 degrees up at it and 1.5 on the plane (the gate's box; the small_yacht 2.8 held under the hump at 0.35 throttle, 1.9 on the plane), the hull rises 9 cm. The trim (`humpTrim`, `planeTrim`) is the water's push on the fore part of the bottom, so it takes the bow station's immersion (0 = the bow's keel out of the water, 1 = at the draft): a bow in the air has nothing under it to lift it further. Sideways the force acts `swayLever` aft of the centre: the keel's, without it the sea slewed a full-ahead boat 69 degrees in 30 s (now 9). `rollStiffness` + `bank`, `maxBank`: the form stability a convex lump does not have, and a target lean into a turn; without them the real hull went to 80 degrees in a hard turn (the gate's box did not, it is stiffer: test on the asset). `waveForce`: Froude-Krylov, each station's share of the weight down its slope: a swell surfs it, a slope that differs at the bow and the stern yaws it. `slam`: a station falling into the water faster than it rises takes the water's mass at once (`state.impact`, up to `slamMax` of the weight).
@@ -1389,8 +1389,8 @@ section), `VesselStats.*` (what a boat does, from its numbers: the section after
 
 - **The course is its marks.** A level object with `"raceGate": N` is a mark (a buoy); two marks with one number are a
   gate, a boat passes between them; the gates are run in the order of their numbers and the last leads back to gate 1,
-  the start and the finish. No track object: move a buoy and the course moves. A boat with `"raceBot": true` has a bot
-  at its helm in Play. Both are read when Play starts -- the editor's from the DOCUMENT (`EditorController::
+  the start and the finish. No track object: move a buoy and the course moves. A boat with `"raceBot": true` names a kind of
+  boat the bots race in (since 2026-11-13 a race makes its own copies: "The Race", below). Both are read when Play starts -- the editor's from the DOCUMENT (`EditorController::
   FindRaceCourse`: an unsaved move counts), a build without it from the file (`JsonLevel` -> `Scene::LevelRaceCourse`),
   one function for both (`game::ReadRaceKeys`). Inspector > Race: "Race gate" (0 = none; every selected mesh, one undo
   entry -- select a gate's two buoys and number them together), "Bot at the helm" on a vessel. MCP `setRaceGate {gate}`
@@ -1460,8 +1460,8 @@ section), `VesselStats.*` (what a boat does, from its numbers: the section after
   to side, 12 gates missed; easing the throttle when the deck leans past 26 degrees (for the sea) -- a hull banks in
   every turn, and eased it ran 85 m wide; a bend's speed as a share of the steady turn RATE -- it braked inside the
   bends.
-- **Play.** A boat with `raceBot` lies with its engine off until a race puts it on the grid (the next section; until
-  2026-11-11 it set off three seconds after Play and ran lap after lap). Take its helm (E) and the bot stands down until
+- **Play.** A race's bots helm boats made for it (the next section; until 2026-11-13 the boats with `raceBot` themselves,
+  and until 2026-11-11 they set off three seconds after Play and ran lap after lap). Take its helm (E) and the bot stands down until
   you leave; at ANY helm **B** hands the boat to the same bot and takes it back (`player.testAutopilot` for a script),
   and the boat you hold has its own gates and lap clock whoever steers. The HUD's line under the play line: at a helm,
   outside a race, where the start zone is and the lap's times; in one, the place, the lap, the gate, the misses and what
@@ -1491,7 +1491,7 @@ section), `VesselStats.*` (what a boat does, from its numbers: the section after
   YELLOW (`Object_5`) since 2026-11-11, one colour a course (owner; the second course is red; `Object_3` blue and
   `Object_4` green are lost on the turquoise water) --, `"buoyant": true` at y -0.3: Static
   floaters, so they rock in the editor too and a boat that hits one stops dead against it (a kinematic body; not
-  violent). All four boats by the shore carry the bot.
+  violent). The boats by the shore carry `raceBot`: their kinds are the race's fleet.
 - **Measured** (2026-11-11, wind_test's 1 m sea, each boat 250 s from its mooring; scratchpad-style `bot_run.py` -- the race's readout
   every 0.25 s, the laps, the misses, the worst cross-track, the path drawn on the depth map -- and `bot_three.py`, the
   three boats in turn): police_boat by its own bot 52 gates in a row and none missed, a lap of 93.1 s (1.53 km of line:
@@ -1531,14 +1531,33 @@ the grid, a start timer runs and off we go; three laps; after the finish a windo
   (`Race::DebugDraw`, DebugDraw's blended boxes; the editor's selection overlay draws its outline too). A boat with
   somebody at its helm that drives into it -- having been outside it since the last race -- starts one:
   `physics::World::PlaceVessel` (a Join, the pose, no speed) puts it on slot 0 (front row, port) and up to three boats
-  that carry `raceBot` on the others, the fastest first (rows 16 m and 40 m before the line, 0.55 of the half width to
+  of the race's own (below) on the others, the fastest first (rows 16 m and 40 m before the line, 0.55 of the half width to
   either side); two boats of one asset are "small_yacht" and "small_yacht 2". Countdown: `race.countdown` (3 s), the
   player's helm answers nothing (`HoldsHelm`), the frame says 3, 2, 1, GO! (`Race::BigText`, AppController, 160 px).
   Racing: `race.laps` (3) -- gate 1 crossed once to start the first lap and that many times more. It is the player's
   race: it ends when they finish (the bots alone: when all have). Finished: the results' window (ImGui: place, boat, time,
   gap, each lap, best lap, missed gates and what they cost; Enter or Close) -- closing it frees everybody, and the zone
-  waits again once the player's boat has left it. wind_test: four boats carry `raceBot` (the fourth a second
-  `small_yacht` at [36.5, -0.38, 124.9]; owner: "no need to import a fourth one, boats may repeat").
+  waits again once the player's boat has left it. (Since 2026-11-13 the bots' boats are the race's own: below.)
+- **The race's boats are its own; the shore's are the player's** (2026-11-13, owner: "at the shore stand as many boats as
+  there are to drive; when we board one the others stand on a hard anchor; the race's boats just spawn, not the ones at the
+  shore"). `raceBot` on a level boat now names its KIND as one the bots race in (`RaceCourse::fleet`: the assets, each
+  once, in the level's order; Inspector > Race "Races as a bot"); the boat itself stays where it is. A race begins in
+  `Phase::Starting`: it asks the scene for its boats (`Race::TakeSpawns` -> `Scene::SyncRaceBoats` at the hand-over: a
+  staticMesh of the asset through the object registry, `AddInitializedObject`, no editor identity, never saved) -- three
+  beside the player, four for the bots alone, one for `race.solo`, the fleet's kinds in turn, or the editor's grid --,
+  lays the grid once their hulls are in the world (`FinishStart`, five seconds at the most), and takes them out when it is
+  over: the results closed, called off, Stop (`Race::DespawnBots` -> `TakeDespawns` -> `Scene::RemoveRuntimeObjects`: the GPU
+  idle first, then `physics::World::ForgetRemoved`, so nothing hands out their pointers). `VesselSpray` gives a new boat the
+  emitters of one gone, or every race would add four. `get_readouts` race `fleet`, `spawned`, phase `starting`.
+  wind_test's shore: one boat of each kind (small_yacht, fast_boat_13, police_boat; the second small_yacht is gone).
+- **A boat nobody steers stands on a hard mooring** (`physics::HoldMooring`, `World::Impl::PushVessels`): no helm, no bot,
+  its own anchor up -> once it has slowed to `physics.mooringSettle` (0.6 m/s) its place along the water and its heading are
+  held by critically damped springs on the velocities (`physics.mooring` 2.5 rad/s, `physics.mooringTurn` 2.0; 0 = drift,
+  before); the waves still heave, pitch and roll it. Taken (E) or piloted it lets go; left, it coasts and moors where it
+  stops; `PlaceVessel` and Stop moor it afresh. Developer Controls > Physics "Boats nobody steers". Measured (wind_test,
+  Play, 20 s): the three shore boats moved 3-5 cm (they drifted metres before). Checked live (scratchpad-style
+  `fleet_check.py`): race_bots on reef -- vessels 3 -> 7, the shore's three where they were; results closed -> 3; race.start
+  then Stop -> 7 -> 3; the session log clean.
 - **A bot has one of three levels** (owner: "give the bots three levels of difficulty", "and when you spawn them write
   over each one's head which it has"). A level CAPS the bot's speed on the straights at a share of its boat's top speed:
   `bot.easyPace` 0.8, `bot.mediumPace` 0.9, hard flat out (`RaceBot::SetDifficulty`; the player's own autopilot is hard;
@@ -1666,6 +1685,30 @@ over them (`editor/scene/EditorRaceTracks.*`: `Collect`, `SelectedGate`, `Select
 - Gate: `intent_regression TestEditorRaceTracks` (the courses and their gates collected, a gate and a course recognised in the
   selection, width and turn about the middle with the yaws, rename, reverse, each one undo entry that puts it back). Insert
   and delete make and remove runtime objects (DuplicateObjectCommand's road) and are not in the gate.
+- **A bots' race from the course** (same day, owner: "set in the editor for a track how many bots and of which level race,
+  with the camera hung on any of them"). The course section's "Bot race": the laps, four places, each with a tick, a kind
+  of boat (the fleet's: the kinds that carry `raceBot`), its level (Easy / Medium / Hard) and a camera radio ("No camera: yours");
+  "Race N bots (Play)" starts Play and the race on THIS course with a boat of each ticked kind made for it, at its level
+  (`editorrace::RequestBotRace` -> `game::RaceGridRef()`, taken by `Race::Tick`: `BeginStart(&grid)`, the fastest in front
+  as always). The setup is the editor session's, per course, not saved. MCP `race_bots {track, laps, boats: [{kind, level}],
+  level, camera}` (a kind by its asset's name, `police_boat`, or path; camera a place 1-4 or a kind) is the same road
+  (refused while playing, without a course of three whole gates, for a kind not in the fleet, a camera off the grid). Gate: `TestEditorRaceTracks` (the grid as asked, every refusal), `TestMcpDrivesTheSameRoad`
+  (race_bots on a level without a course starts nothing).
+- **Watching a boat in Play** (owner: "a small UI when I hang on a bot: pick another bot, the debug drawing tick; camera modes
+  -- third person, from the cockpit, cinema -- and the same when I drive"). On foot, **Tab** hangs the chase camera on the next
+  racer (the next bot boat outside a race; past the last, yours again: `Race::WatchNext`, input binding `WatchNext`); while it
+  hangs on one the mouse is free and a panel stands top right (`PlaySession::DrawSpectatorPanel`): the racers in their places
+  (radio rows, no popup), "My camera", the view, "Bots' vision" (`bot.debug`, also in Developer Controls > Physics > Race bots
+  "Bots' vision (debug)" -- it was labelled "Draw the course", which stopped describing it). **V** cycles the view -- on a
+  watched boat and at your own helm alike (`game::VesselCamera::View`: Chase "behind", Helm "cockpit", Cinema; the HUD's helm
+  line names it; `player.testView` cycles too). The cockpit on any boat: the asset's `helmEye` through the hull's frame from
+  its forward and up (`game::VesselPose`, `PoseOf(HelmState | VesselHull)`). Cinema is a director: a shot every 5-8 s of the
+  world's clock, never the same kind twice running, a side picked each time -- a camera standing ahead the boat storms past
+  (it cuts once the boat is 35 m by), tracking abeam at 16 m, a drone 30 m up turning slowly, low over the water behind, ahead
+  of the bow looking back; every cut resets the temporal history, the aim follows the boat at 0.12 s so the heave does not shake
+  it. `--set` / MCP `camera.boatView:0|1|2` sets both boat cameras (a script's V). Checked live (scratchpad-style
+  `spectator_check.py`: race_bots on reef with three boats at three levels, the camera on police_boat, each view shot with the
+  panel, then race.watch:2).
 
 ## What a Boat Does -- Its Card, the Three Roles, a Bot That Knows Its Boat
 

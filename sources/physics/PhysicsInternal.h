@@ -172,6 +172,11 @@ namespace physics
     // The anchor's rode on the bow (`bowLocal`, the body's space), from `anchor` (world; its height not read): nothing within
     // anchorScope, past it the stretch's spring and the bow's run along it, never a push. One step's impulse.
     void PullAnchor(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg bowLocal, JPH::Vec3Arg anchor, float dt);
+    // A boat nobody steers (owner, 2026-11-13: "when we board one, the others must stand on a hard anchor"): its place along
+    // the water (`at`, its origin's x and z) and its heading (`heading`, of its bow -- the settings' forward -- about the
+    // vertical) held by critically damped springs on the velocities, `stiffness` and `turn` rad/s their own frequencies
+    // (physics.mooring*): it heaves, pitches and rolls on the waves and stays put.
+    void HoldMooring(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg at, float heading, float stiffness, float turn, float dt);
 
     // A height no water reaches: no water here.
     inline constexpr float kNoWater = -1.0e30f;

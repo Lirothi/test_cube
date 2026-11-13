@@ -59,6 +59,7 @@ namespace game
         {
             switch (phase)
             {
+            case Race::Phase::Starting: return "starting";
             case Race::Phase::Countdown: return "countdown";
             case Race::Phase::Racing: return "racing";
             case Race::Phase::Finished: return "finished";
@@ -71,6 +72,12 @@ namespace game
     {
         static RaceSettings settings;
         return settings;
+    }
+
+    RaceGrid& RaceGridRef()
+    {
+        static RaceGrid grid;
+        return grid;
     }
 
     const std::vector<RaceKey>& RaceKeys()
@@ -125,27 +132,47 @@ namespace game
             else { LOG_WARNING(logging::LogCategory::App, "race: no course '{}' -- {}", TrackDisplayName(name), report); }
             report_ += (report_.empty() ? "" : "; ") + TrackDisplayName(name) + ": " + report;
         }
+        fleet_ = course.fleet;
         if (!courses_.empty())
         {
             SelectCourse(0);
-            LOG_INFO(logging::LogCategory::App, "race: {} course(s), {} boat(s) with a bot", courses_.size(), course.bots.size());
-        }
-        for (const Math::float3& where : course.bots)
-        {
-            Entry entry;
-            entry.where = where;
-            bots_.push_back(std::move(entry));
+            std::string kinds;
+            for (const std::string& asset : fleet_) { kinds += (kinds.empty() ? "" : ", ") + asset; }
+            LOG_INFO(logging::LogCategory::App, "race: {} course(s); the bots race in {}", courses_.size(), kinds.empty() ? std::string("nothing (no boat carries raceBot)") : kinds);
         }
     }
 
     void Race::End(physics::World& world)
     {
         SaveBotMemories(); // what the bots learned this session
+        DespawnBots(world);
+        Forget();
+    }
+
+    void Race::DespawnBots(physics::World& world)
+    {
         for (Entry& entry : bots_)
         {
-            if (entry.vessel && entry.live) { world.SetPilot(entry.vessel, nullptr); }
+            if (!entry.vessel) { continue; }
+            world.SetPilot(entry.vessel, nullptr);
+            despawns_.push_back(entry.vessel);
         }
-        Forget();
+        if (!bots_.empty()) { LOG_INFO(logging::LogCategory::App, "race: its {} boat(s) go", bots_.size()); }
+        bots_.clear();
+        spawns_.clear(); // not made yet: an answer that still comes (OnSpawned) finds no entry and goes too
+    }
+
+    void Race::OnSpawned(std::uint64_t ticket, RenderableObject* vessel)
+    {
+        for (Entry& entry : bots_)
+        {
+            if (entry.ticket != ticket) { continue; }
+            entry.vessel = vessel;
+            entry.name = VesselName(vessel);
+            if (!vessel) { LOG_WARNING(logging::LogCategory::App, "race: a boat of '{}' could not be made", entry.asset); }
+            return;
+        }
+        if (vessel) { despawns_.push_back(vessel); } // its race went before it came
     }
 
     BotMemory* Race::MemoryOf(const RenderableObject* vessel) const
@@ -158,6 +185,10 @@ namespace game
         bots_.clear();
         racers_.clear();
         courses_.clear();
+        fleet_.clear();
+        spawns_.clear();
+        startWait_ = 0.0f;
+        startByGrid_ = false;
         current_ = 0;
         track_.Clear();
         start_ = RaceStart{};
@@ -247,13 +278,61 @@ namespace game
         bot.SetSoundings(depth[0], depth[1], depth[2]);
     }
 
-    void Race::StartRace(physics::World& world)
+    void Race::BeginStart(const RaceGrid* grid)
     {
-        const RaceSettings& settings = RaceSettingsRef();
+        RaceSettings& settings = RaceSettingsRef();
         racers_.clear();
         drillStats_.clear();
-        laps_ = std::clamp(static_cast<int>(std::lround(settings.laps)), 1, 20);
+        laps_ = std::clamp(grid ? grid->laps : static_cast<int>(std::lround(settings.laps)), 1, 20);
         playerRaces_ = helmDriven_;
+        startByGrid_ = grid != nullptr;
+        // Who: the editor's grid, else the fleet's kinds in turn -- three beside the player, four alone, a time trial one.
+        std::vector<Entry> picks;
+        if (grid)
+        {
+            for (std::size_t i = 0; i < grid->boats.size(); ++i)
+            {
+                Entry entry;
+                entry.asset = grid->boats[i].asset;
+                entry.level = std::clamp(grid->boats[i].difficulty, 0, 2);
+                entry.watched = static_cast<int>(i) == grid->watch;
+                picks.push_back(std::move(entry));
+            }
+        }
+        else if (!fleet_.empty())
+        {
+            const int solo = static_cast<int>(std::lround(settings.solo));
+            const int count = playerRaces_ ? 3 : solo >= 1 ? 1 : 4;
+            for (int i = 0; i < count; ++i)
+            {
+                Entry entry;
+                entry.asset = fleet_[static_cast<std::size_t>((solo >= 1 && !playerRaces_ ? solo - 1 + i : i)) % fleet_.size()];
+                picks.push_back(std::move(entry));
+            }
+        }
+        // Asked of the scene where the grid will have them (FinishStart puts each on its place once its hull is in the world).
+        const float heading = std::atan2(start_.along.x, start_.along.y);
+        int slot = playerRaces_ ? 1 : 0;
+        bots_.clear();
+        spawns_.clear();
+        for (Entry& entry : picks)
+        {
+            if (slot >= 4) { break; }
+            entry.ticket = nextTicket_++;
+            const Math::float2& at = start_.slots[static_cast<std::size_t>(slot)];
+            spawns_.push_back(RaceSpawn{ entry.ticket, entry.asset, Math::float3(at.x, seaLevel_, at.y), heading });
+            bots_.push_back(std::move(entry));
+            ++slot;
+        }
+        phase_ = Phase::Starting;
+        startWait_ = 0.0f;
+        LOG_INFO(logging::LogCategory::App, "race: on '{}', {} boat(s) of its own to be made{}", TrackDisplayName(trackName_), bots_.size(),
+                 playerRaces_ ? " beside the player's" : "");
+    }
+
+    void Race::FinishStart(physics::World& world)
+    {
+        RaceSettings& settings = RaceSettingsRef();
         const float heading = std::atan2(start_.along.x, start_.along.y);
         int slot = 0;
         const auto place = [&](RenderableObject* vessel, const RaceBot* bot, std::string name, bool player)
@@ -262,7 +341,7 @@ namespace game
             if (!hull || slot >= 4) { return; }
             // Afloat: its keel its draft under the water that stands where it is now (the buoyancy settles the rest).
             const float draft = hull->settings ? hull->settings->draft * hull->scale.y : 0.4f;
-            const Math::float2& at = start_.slots[slot];
+            const Math::float2& at = start_.slots[static_cast<std::size_t>(slot)];
             if (!world.PlaceVessel(vessel, Math::float3(at.x, seaLevel_ - draft, at.y), heading)) { return; }
             int same = 1;
             for (const Racer& racer : racers_) { same += racer.name.rfind(name, 0) == 0 ? 1 : 0; }
@@ -286,7 +365,7 @@ namespace game
         std::vector<Entry*> rivals;
         for (Entry& entry : bots_)
         {
-            if (entry.live && !entry.yielded && entry.vessel) { rivals.push_back(&entry); }
+            if (entry.vessel && HullOf(entry.vessel)) { rivals.push_back(&entry); }
         }
         std::sort(rivals.begin(), rivals.end(), [this](const Entry* a, const Entry* b)
         {
@@ -294,30 +373,16 @@ namespace game
             const physics::VesselHull* hb = HullOf(b->vessel);
             return (ha ? TopSpeed(*ha) : 0.0f) > (hb ? TopSpeed(*hb) : 0.0f);
         });
-        // A time trial (race.solo): that one boat; the others go back where the level has them, off the course.
-        const int solo = static_cast<int>(std::lround(settings.solo));
-        if (solo >= 1 && !playerRaces_ && solo <= static_cast<int>(rivals.size()))
-        {
-            Entry* trial = rivals[static_cast<std::size_t>(solo - 1)];
-            for (Entry* entry : rivals)
-            {
-                if (entry == trial) { continue; }
-                const physics::VesselHull* hull = HullOf(entry->vessel);
-                const float away = hull ? std::atan2(hull->forward.x, hull->forward.z) : 0.0f;
-                const float draft = hull && hull->settings ? hull->settings->draft * hull->scale.y : 0.4f;
-                world.PlaceVessel(entry->vessel, Math::float3(entry->where.x, seaLevel_ - draft, entry->where.z), away);
-                entry->bot.Reset();
-            }
-            rivals.assign(1, trial);
-            LOG_INFO(logging::LogCategory::App, "race: a time trial, {} alone", trial->name);
-        }
-        // Each bot its level: the one asked for, or one of each -- which boat has which turns by one every race.
+        // Each bot its level: the grid's, the one asked for, or one of each -- which boat has which turns by one every race.
         const int asked = static_cast<int>(std::lround(settings.difficulty));
         int index = 0;
+        int watchPlace = 0;
         for (Entry* entry : rivals)
         {
             if (slot >= 4) { break; }
-            const BotDifficulty level = asked >= 1 && asked <= 3 ? static_cast<BotDifficulty>(asked - 1) : static_cast<BotDifficulty>((index + raceCount_) % 3);
+            const BotDifficulty level = entry->level >= 0 ? static_cast<BotDifficulty>(entry->level)
+                                      : asked >= 1 && asked <= 3 ? static_cast<BotDifficulty>(asked - 1) : static_cast<BotDifficulty>((index + raceCount_) % 3);
+            entry->bot.Reset();
             entry->bot.Start();
             entry->bot.SetDifficulty(level);
             const std::size_t before = racers_.size();
@@ -325,10 +390,13 @@ namespace game
             if (racers_.size() > before)
             {
                 racers_.back().difficulty = static_cast<int>(level);
+                if (entry->watched) { watchPlace = static_cast<int>(racers_.size()); }
                 LOG_INFO(logging::LogCategory::App, "race: {} is a {} bot", racers_.back().name, BotDifficultyName(level));
             }
             ++index;
         }
+        // The grid says whose chase camera (its place on the grid, as race.watch counts), or none.
+        if (startByGrid_) { settings.watch = static_cast<float>(watchPlace); }
         ++raceCount_;
         world.CollectHulls(hulls_); // where the grid has them: this frame's bots stand there
         phase_ = Phase::Countdown;
@@ -348,6 +416,7 @@ namespace game
             if (!racer.player && racer.vessel && HullOf(racer.vessel)) { world.SetPilot(racer.vessel, nullptr); }
         }
         racers_.clear();
+        DespawnBots(world);
         phase_ = Phase::Free;
         playerRaces_ = false;
         resultsOpen_ = false;
@@ -661,23 +730,12 @@ namespace game
             helmOrder_ = physics::VesselInput{};
         }
 
-        // The bots' boats: found, and whether the player has one of them.
+        // The race's own boats (made by the scene, Phase::Starting), and whether the player has taken one of them.
         for (Entry& entry : bots_)
         {
-            if (!entry.vessel)
-            {
-                entry.vessel = world.FindVessel(entry.where, 2.0f);
-                if (!entry.vessel) { continue; }
-                entry.name = VesselName(entry.vessel);
-                LOG_INFO(logging::LogCategory::App, "race: a bot for '{}'", entry.name);
-            }
-            const physics::VesselHull* hull = HullOf(entry.vessel);
+            const physics::VesselHull* hull = entry.vessel ? HullOf(entry.vessel) : nullptr;
             entry.live = hull != nullptr;
-            if (!hull)
-            {
-                entry.vessel = nullptr; // gone with its world: looked for again
-                continue;
-            }
+            if (!hull) { continue; }
             entry.waterHeight = hull->waterHeight;
             entry.position = hull->position;
             if (hull->atHelm && !entry.yielded) // the player took it: the bot stands down until the helm is free again
@@ -703,15 +761,50 @@ namespace game
             if (!inZone) { armed_ = true; }
             if (inZone && armed_)
             {
+                armed_ = false;
                 SelectCourse(zone);
-                StartRace(world);
+                BeginStart(nullptr);
             }
             else if (startAsked_ && !courses_.empty())
             {
                 SelectCourse(std::min(static_cast<std::size_t>(std::max(std::lround(RaceSettingsRef().track), 0L)), courses_.size() - 1));
-                StartRace(world);
+                BeginStart(nullptr);
+            }
+            else if (RaceGridRef().pending && !courses_.empty())
+            {
+                // The editor's bot race: its boats, its levels, its camera.
+                RaceGrid& grid = RaceGridRef();
+                std::size_t index = courses_.size();
+                for (std::size_t i = 0; i < courses_.size(); ++i)
+                {
+                    if (courses_[i].name == grid.track) { index = i; }
+                }
+                if (index == courses_.size())
+                {
+                    LOG_WARNING(logging::LogCategory::App, "race: the editor's bot race asked for course '{}', which this level does not have", TrackDisplayName(grid.track));
+                }
+                else
+                {
+                    SelectCourse(index);
+                    BeginStart(&grid);
+                }
+                grid.pending = false;
             }
             startAsked_ = false;
+            break;
+        }
+        case Phase::Starting:
+        {
+            // The boats asked of the scene come a frame or two later (Scene::Sync makes them, their bodies the step after):
+            // the grid is laid once every one is in the world, five seconds at the most.
+            if (playerRaces_ && !helmDriven_)
+            {
+                StopRace(world, "the helm was left before the start");
+                break;
+            }
+            startWait_ += deltaTime;
+            const bool all = std::all_of(bots_.begin(), bots_.end(), [](const Entry& entry) { return entry.live; });
+            if (all || startWait_ > 5.0f) { FinishStart(world); }
             break;
         }
         case Phase::Countdown:
@@ -774,6 +867,7 @@ namespace game
                     if (!racer.player && racer.vessel && HullOf(racer.vessel)) { world.SetPilot(racer.vessel, nullptr); }
                 }
                 racers_.clear();
+                DespawnBots(world); // the race's own boats go with it
                 phase_ = Phase::Free;
                 playerRaces_ = false;
                 armed_ = false; // the boat lies in the zone, or near it: it waits again once it has left
@@ -823,9 +917,7 @@ namespace game
         case Phase::Free:
         {
             if (!helmDriven_) { return {}; }
-            int rivals = 0;
-            for (const Entry& entry : bots_) { rivals += entry.live && !entry.yielded ? 1 : 0; }
-            rivals = std::min(rivals, 3);
+            const int rivals = fleet_.empty() ? 0 : 3; // made for the race, of the fleet's kinds
             std::wstring names;
             for (const Course& course : courses_) { names += (names.empty() ? L"" : L", ") + Wide(TrackDisplayName(course.name)); }
             std::swprintf(line, sizeof(line) / sizeof(line[0]),
@@ -835,6 +927,9 @@ namespace game
                           autopilot_ ? L"AUTOPILOT, B takes the helm back" : L"B autopilot");
             return line;
         }
+        case Phase::Starting:
+            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE '%hs': the boats come to the grid", TrackDisplayName(trackName_).c_str());
+            return line;
         case Phase::Countdown:
             std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE '%hs': on the grid, %d boats, %d laps", TrackDisplayName(trackName_).c_str(),
                           static_cast<int>(racers_.size()), laps_);
@@ -868,10 +963,12 @@ namespace game
             std::wstring text = line;
             // race.watch: whose boat the camera is on, and where it lies.
             const RenderableObject* watched = WatchedVessel();
+            if (!watched) { text += L"   (Tab: the camera on a boat)"; }
             for (const Racer& racer : racers_)
             {
                 if (racer.vessel != watched || !watched) { continue; }
-                std::swprintf(line, sizeof(line) / sizeof(line[0]), L"   CAMERA: %hs, P%d, missed %d", racer.name.c_str(), PlaceOf(racer), racer.missed);
+                std::swprintf(line, sizeof(line) / sizeof(line[0]), L"   CAMERA: %hs, P%d, missed %d   (Tab: the next boat)", racer.name.c_str(), PlaceOf(racer),
+                              racer.missed);
                 text += line;
             }
             return text;
@@ -1106,7 +1203,10 @@ namespace game
                           course.track.Gates().size(), course.start.center.x, course.start.center.y);
             out += item;
         }
-        out += "]";
+        out += "],\"fleet\":[";
+        for (std::size_t i = 0; i < fleet_.size(); ++i) { out += (i > 0 ? ",\"" : "\"") + fleet_[i] + "\""; }
+        // The race's own boats as they stand (made for it, gone with it).
+        out += "],\"spawned\":" + std::to_string(std::count_if(bots_.begin(), bots_.end(), [](const Entry& entry) { return entry.vessel != nullptr; }));
         const auto status = [&](const char* name, const RaceBot& bot, const Math::float3& position, bool comma)
         {
             const RaceBot::Status& s = bot.GetStatus();
@@ -1188,6 +1288,52 @@ namespace game
         }
         out += "}";
         return out;
+    }
+
+    std::vector<std::string> Race::WatchNames() const
+    {
+        std::vector<std::string> names;
+        if (!racers_.empty())
+        {
+            for (const Racer& racer : racers_)
+            {
+                const int place = PlaceOf(racer);
+                names.push_back(place > 0 && phase_ != Phase::Countdown ? racer.name + " -- P" + std::to_string(place) : racer.name);
+            }
+            return names;
+        }
+        for (const Entry& entry : bots_)
+        {
+            if (entry.live) { names.push_back(entry.name); }
+        }
+        return names;
+    }
+
+    int Race::WatchIndex() const { return WatchedVessel() ? static_cast<int>(std::lround(RaceSettingsRef().watch)) : 0; }
+
+    void Race::SetWatch(int index)
+    {
+        const int count = static_cast<int>(WatchNames().size());
+        RaceSettingsRef().watch = static_cast<float>(index >= 1 && index <= count ? index : 0);
+    }
+
+    std::string Race::WatchNext()
+    {
+        RaceSettings& settings = RaceSettingsRef();
+        const int count = static_cast<int>(WatchNames().size());
+        const int watch = static_cast<int>(std::lround(settings.watch));
+        settings.watch = static_cast<float>(count > 0 && watch < count ? std::max(watch, 0) + 1 : 0);
+        const RenderableObject* watched = WatchedVessel();
+        if (!watched) { return {}; }
+        for (const Racer& racer : racers_)
+        {
+            if (racer.vessel == watched) { return racer.name; }
+        }
+        for (const Entry& entry : bots_)
+        {
+            if (entry.vessel == watched) { return entry.name; }
+        }
+        return VesselName(watched);
     }
 
     RenderableObject* Race::WatchedVessel() const

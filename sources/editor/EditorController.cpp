@@ -42,6 +42,7 @@
 #include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/scene/EditorPlayerStart.h"
+#include "editor/scene/EditorRaceTracks.h"
 #include "app/game/RaceCourseJson.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/CompositeCommand.h"
@@ -3595,6 +3596,8 @@ void EditorController::Draw(
             [this](EditorContext& panelCtx)
             {
                 inspector_.Draw(panelCtx, commandStack_, assetRegistry_, extensions_, &showInspector_);
+                // A course's "Race the bots" (EditorRaceTracks.h): the grid is set, the session starts at this frame's end.
+                if (editorrace::TakeBotRacePlay()) { playRequest_ = PlayRequest{ PlayRequest::Kind::Play, false, true }; }
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(

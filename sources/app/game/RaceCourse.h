@@ -9,7 +9,8 @@
 // A race course on the water, as a level says it: its MARKS are ordinary level objects (buoys) that carry a gate's number,
 // "raceGate": N -- two marks with the same number are that gate's posts, a boat passes between them, the gates are run in
 // the order of their numbers and the last leads back to the first (gate 1 is the start and the finish). A boat that
-// carries "raceBot": true is helmed by a bot in Play (game::RaceBot). No object of its own: move a buoy and the course
+// carries "raceBot": true names a kind of boat the bots race in: a race spawns its own copies (game::Race), the boat itself
+// stays at the shore for the player. No object of its own: move a buoy and the course
 // moves. A build with the editor reads the keys off the document when Play starts (EditorController::FindRaceCourse),
 // one without it off the level's file (JsonLevel -> Scene::LevelRaceCourse).
 // A level may hold more than one course: a mark's "raceTrack": "<name>" says whose it is (absent = the level's first, the
@@ -31,9 +32,11 @@ namespace game
     struct RaceCourse
     {
         std::vector<RaceMark> marks;
-        std::vector<Math::float3> bots; // where the boats a bot helms stand in the level
+        // The kinds of boat the bots race in: the assets (mesh.json) of the level's boats that carry "raceBot", each once, in the
+        // level's order. A race spawns its own copies on the grid (game::Race); the boats at the shore stay the player's.
+        std::vector<std::string> fleet;
         std::string level;              // the level's file: whose bot memories (game::BotMemory) its races read and write
-        bool Empty() const { return marks.empty() && bots.empty(); }
+        bool Empty() const { return marks.empty() && fleet.empty(); }
         // Its courses' names: the unnamed one first, then the others by name.
         std::vector<std::string> TrackNames() const
         {

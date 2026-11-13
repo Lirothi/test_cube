@@ -18,6 +18,8 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h" // g_cleanCapture
 #include "rendering/core/UploadBatch.h"
+#include "app/scene/SceneObjectRegistry.h"
+#include "third_party/json/json.hpp"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
@@ -1239,6 +1241,88 @@ bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::
     return true;
 }
 
+void Scene::SyncRaceBoats(Renderer* renderer)
+{
+    std::vector<const RenderableObjectBase*> gone = race_.TakeDespawns();
+    std::vector<game::RaceSpawn> spawns = race_.TakeSpawns();
+    if (!renderer)
+    {
+        for (const game::RaceSpawn& spawn : spawns) { race_.OnSpawned(spawn.ticket, nullptr); }
+        return;
+    }
+    if (!gone.empty())
+    {
+        const std::size_t removed = RemoveRuntimeObjects(*renderer, gone);
+        LOG_INFO(logging::LogCategory::Scene, "race: {} of its boat(s) taken out of the world", removed);
+    }
+    if (spawns.empty()) { return; }
+    UploadBatch uploads;
+    if (!uploads.Begin(renderer))
+    {
+        for (const game::RaceSpawn& spawn : spawns) { race_.OnSpawned(spawn.ticket, nullptr); }
+        return;
+    }
+    SceneObjectRegistry registry = SceneObjectRegistry::CreateWithBuiltins();
+    std::vector<std::pair<std::uint64_t, RenderableObject*>> made;
+    for (const game::RaceSpawn& spawn : spawns)
+    {
+        // A level object as the editor would place it: the asset, where the grid has it. Its bow (the asset's forward, +x for
+        // the boats here) toward the heading -- the race puts it on its place exactly once its hull is in the world.
+        const float yawDeg = (spawn.headingRad - 1.5707963f) * 57.2957795f;
+        const nlohmann::json object = {
+            { "type", "staticMesh" },
+            { "name", "race boat" },
+            { "mesh", spawn.asset },
+            { "position", { spawn.position.x, spawn.position.y, spawn.position.z } },
+            { "rotationDeg", { 0.0f, yawDeg, 0.0f } },
+            { "scale", { 1.0f, 1.0f, 1.0f } },
+        };
+        SceneObjectRegistry::CreationContext creation{ *this };
+        SceneObjectRegistry::ObjectList objects = registry.Create("staticMesh", creation, object);
+        RenderableObject* vessel = nullptr;
+        for (std::unique_ptr<RenderableObjectBase>& one : objects)
+        {
+            if (!one) { continue; }
+            RenderableObject* renderable = one->AsRenderableObject();
+            if (AddInitializedObject(*renderer, uploads, std::move(one)) && !vessel) { vessel = renderable; }
+        }
+        made.emplace_back(spawn.ticket, vessel);
+    }
+    uploads.SubmitAndWait(renderer);
+    for (const auto& [ticket, vessel] : made)
+    {
+        race_.OnSpawned(ticket, vessel);
+        LOG_INFO(logging::LogCategory::Scene, "race: a boat {} for the grid", vessel ? "made" : "NOT made");
+    }
+}
+
+std::size_t Scene::RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone)
+{
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::RemoveRuntimeObjects");
+    if (gone.empty()) { return 0; }
+    renderer.WaitForPreviousFrame(); // the frames in flight still read their buffers
+    std::size_t removed = 0;
+    for (size_t i = 0; i < objects_.size();)
+    {
+        if (objects_[i] && std::find(gone.begin(), gone.end(), objects_[i].get()) != gone.end())
+        {
+            objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
+#if WITH_EDITOR
+            objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
+#endif
+            ++removed;
+            continue;
+        }
+        ++i;
+    }
+    if (removed > 0)
+    {
+        BumpStaticSetVersion();
+        physics_.ForgetRemoved(); // their bodies and entries now: nothing below may be handed a pointer to them
+    }
+    return removed;
+}
+
 bool Scene::RemoveOceanObjects()
 {
     TC_CHECK_GAME_PARKED_OR_SYNC("Scene::RemoveOceanObjects");
@@ -2228,6 +2312,8 @@ void Scene::Sync(Renderer* renderer)
     // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as
     // they read the frame's CalcMatrices before.
     physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
+    // The race's own boats (game::Race): made for a race where its grid is, gone when it is over -- here, the render half parked.
+    SyncRaceBoats(renderer);
     // The boats' wake on the water (ocean/OceanWake): every hull as this frame draws it, with its footprint (resolved from
     // its geometry once a shape, then a cache hit), to the ocean's render half -- parked here.
     if (OceanRenderable* ocean = FindOceanRenderable())
@@ -2287,7 +2373,7 @@ void Scene::Sync(Renderer* renderer)
     {
         // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
         const OceanRenderable* ocean = FindOceanRenderable();
-        vesselCamera_.Apply(camera_, physics_.GetHelm(), ocean ? ocean->GetWaterLevel() : -1.0e6f);
+        vesselCamera_.Apply(camera_, game::PoseOf(physics_.GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
     }
     else if (RenderableObject* watched = !physics::GameSettings().player.testFreeCamera ? race_.WatchedVessel() : nullptr)
     {
@@ -2305,15 +2391,8 @@ void Scene::Sync(Renderer* renderer)
                 spectated_ = watched;
             }
             spectatorCamera_.Tick(0.0f, 0.0f, hull.speed, 0.0f, 0.0f, race_.LastDeltaTime());
-            physics::HelmState view;
-            view.exists = true;
-            view.object = hull.object;
-            view.settings = hull.settings;
-            view.position = hull.position;
-            view.forward = hull.forward;
-            view.scale = hull.scale;
             const OceanRenderable* ocean = FindOceanRenderable();
-            spectatorCamera_.Apply(camera_, view, ocean ? ocean->GetWaterLevel() : -1.0e6f);
+            spectatorCamera_.Apply(camera_, game::PoseOf(hull), ocean ? ocean->GetWaterLevel() : -1.0e6f);
             break;
         }
     }
@@ -3960,6 +4039,7 @@ void Scene::Clear()
     renderQueueSourcesValid_ = false;
     vesselSpray_.Clear(); // its emitters are objects_ below
     race_.Forget();       // its boats are
+    race_.DropSpawned();  // and the race's own boats, made or asked for
     objects_.clear();
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
     skyOcclusion_.Invalidate(); // ...and its world from above is the old level's

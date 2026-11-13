@@ -259,6 +259,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         scene.RaceRef().DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
         scene.RaceRef().DrawBotCards(scene.CameraRef()); // bot.debug: what each bot decides and why
         playSession_.DrawBoatCard(scene); // on foot beside a boat: what it does
+        playSession_.DrawSpectatorPanel(scene); // the camera on a bot's boat: which boat, its view, the bots' vision
     }
     const bool raceResults = playSession_.Playing() && scene.RaceRef().ResultsOpen();
 

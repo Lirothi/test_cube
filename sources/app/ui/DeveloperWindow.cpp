@@ -3654,7 +3654,24 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 ImGui::TextDisabled("Height, crouched height and radius are read when the body is made. A level's Player Start says its own at Play, and what is set here during Play ends with it.");
 
-                // The race's bots (game::RaceBot): a boat that carries "raceBot" runs the level's gates in Play; B at a helm is the same bot.
+                // A boat nobody steers stands on a hard mooring (physics::HoldMooring).
+                ImGui::SeparatorText("Boats nobody steers");
+                ImGui::DragFloat("Mooring stiffness (rad/s)", &settings.mooring, 0.05f, 0.0f, 10.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("A boat with nobody at its helm and no bot, its own anchor up, holds its place along the water once it has\n"
+                                      "slowed down -- the waves still heave, pitch and roll it. How firmly: the hold's own frequency (2.5 = a wave's\n"
+                                      "push of a tenth of g moves it some 16 cm). 0 = no hold: it drifts.\n--set physics.mooring (0 .. 10)");
+                }
+                ImGui::DragFloat("Mooring turn (rad/s)", &settings.mooringTurn, 0.05f, 0.0f, 10.0f, "%.2f");
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("And its heading, the same way. 0 = it swings freely.\n--set physics.mooringTurn (0 .. 10)"); }
+                ImGui::DragFloat("Moors below (m/s)", &settings.mooringSettle, 0.05f, 0.0f, 20.0f, "%.2f");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("A boat let go (you left its helm, a bot finished) coasts on and moors where it has slowed to this.\n--set physics.mooringSettle (0 .. 20)");
+                }
+
+                // The race's bots (game::RaceBot): a race makes its own boats of the kinds that carry "raceBot"; B at a helm is the same bot.
                 ImGui::SeparatorText("Race bots");
                 game::BotSettings& bot = game::BotSettingsRef();
                 for (const game::BotKey& key : game::BotKeys())

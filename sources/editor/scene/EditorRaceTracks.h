@@ -71,6 +71,27 @@ namespace editorrace
     // Every mark of the course, by gate.
     std::vector<EditorObjectId> TrackMarks(const Track& track);
 
+    // ---- a bot race on a course (owner, 2026-11-13: "set how many bots and of which level race, and hang the camera on any
+    // of them") ----
+    // A place on the grid: a kind of boat (its mesh.json) a copy of which is made for the race, and its bot's level.
+    struct BotRacePick
+    {
+        std::string asset;
+        int difficulty = 2; // game::BotDifficulty: 0 easy, 1 medium, 2 hard
+    };
+    // The kinds of boat the bots race in: the assets of the level's enabled boats that carry "raceBot", each once, in the
+    // document's order (RaceCourse::fleet). The boats themselves stay at the shore for the player.
+    std::vector<std::string> RaceFleet(const EditorSceneDocument& document);
+    // "models/police_boat/police_boat.mesh.json" -> "police_boat"
+    std::string KindName(const std::string& asset);
+    // The race into game::RaceGridRef, for the session that starts next: the course, its laps, the places (1 to 4, each a kind of
+    // the fleet) with their levels, the chase camera on place `watch` (0-based; -1 = none). False and why when the course has no
+    // three whole gates or a kind is not the fleet's. Nothing in the document changes.
+    bool RequestBotRace(const EditorSceneDocument& document, const std::string& track, int laps, const std::vector<BotRacePick>& boats,
+                        int watch, std::string* why);
+    // The Inspector's "Race the bots" asked for it this frame: EditorController starts Play on it.
+    bool TakeBotRacePlay();
+
     // The Inspector's section for a selected gate (its place, width and turn, insert / delete, the gates either side) or a
     // selected course (its name, length, direction, its gates); for a single mark, buttons that select its gate or course.
     // True when it drew a gate or a course.

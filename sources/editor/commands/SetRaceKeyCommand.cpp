@@ -35,7 +35,7 @@ std::string SetRaceKeyCommand::DocumentTrack(const EditorObject& obj)
 std::unique_ptr<SetRaceKeyCommand> SetRaceKeyCommand::Bot(EditorObjectId id, bool bot)
 {
     return std::unique_ptr<SetRaceKeyCommand>(
-        new SetRaceKeyCommand(id, game::kRaceBotKey, bot ? nlohmann::json(true) : nlohmann::json(), bot ? "Bot At The Helm" : "No Bot At The Helm"));
+        new SetRaceKeyCommand(id, game::kRaceBotKey, bot ? nlohmann::json(true) : nlohmann::json(), bot ? "Races As A Bot" : "Races Not As A Bot"));
 }
 
 int SetRaceKeyCommand::DocumentGate(const EditorObject& obj)

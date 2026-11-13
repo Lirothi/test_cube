@@ -176,6 +176,20 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
         auto it = std::find_if(sets_.begin(), sets_.end(), [&](const Set& s) { return s.vessel == hull.object; });
         if (it == sets_.end())
         {
+            // A boat gone from the world (a race's own, taken out after it) leaves its emitters: a new boat takes them over,
+            // or every race would add four.
+            it = std::find_if(sets_.begin(), sets_.end(), [&](const Set& s)
+            {
+                return std::none_of(hulls.begin(), hulls.end(), [&s](const physics::VesselHull& h) { return h.object == s.vessel; });
+            });
+            if (it != sets_.end())
+            {
+                it->vessel = hull.object;
+                it->footprint = nullptr; // its roots found afresh on this hull
+            }
+        }
+        if (it == sets_.end())
+        {
             Set set;
             set.vessel = hull.object;
             if (!Create(scene, renderer, set)) { continue; }

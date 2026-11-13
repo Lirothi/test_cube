@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,7 @@
 
 class DebugDrawSystem;
 class Camera;
+class RenderableObjectBase;
 
 // The level's race in a play session (owner, 2026-11-11: "the start zone is lit somehow -- a translucent plane; drive into
 // it and you and three bots are put on the grid, a start timer runs and off we go; three laps; after the finish a window
@@ -53,6 +55,36 @@ namespace game
     };
     RaceSettings& RaceSettingsRef();
 
+    // The editor's bot race (Inspector > a selected course, "Bot race"; owner, 2026-11-13: "set how many bots and of which
+    // level race, and hang the camera on any of them"): which of the level's bot boats go on the grid, each one's level,
+    // whose chase camera. Taken by the first Tick of a session that has the course and its boats, then cleared. Game-side and
+    // transient, as race.* are.
+    struct RaceGridBoat
+    {
+        std::string asset;   // the boat's kind: its mesh.json (a copy of it is spawned on the grid)
+        int difficulty = 2;  // BotDifficulty: 0 easy, 1 medium, 2 hard
+    };
+    struct RaceGrid
+    {
+        bool pending = false;
+        std::string track;              // the course's name ("" = the level's first)
+        int laps = 3;
+        std::vector<RaceGridBoat> boats; // at most 4 race
+        int watch = -1;                 // index into boats: whose chase camera; -1 = none
+    };
+
+    // A race's bot boat to be made (Race asks, Scene::Sync makes it and answers Race::OnSpawned): a copy of `asset` where the
+    // grid has it. The race's boats are its own (owner, 2026-11-13: "the race's boats just spawn; they are not the ones standing
+    // at the shore"): made for a race, gone when it is over.
+    struct RaceSpawn
+    {
+        std::uint64_t ticket = 0;
+        std::string asset;
+        Math::float3 position;
+        float headingRad = 0.0f; // the bow's way, as atan2(x, z)
+    };
+    RaceGrid& RaceGridRef();
+
     struct RaceKey
     {
         const char* key;
@@ -70,14 +102,25 @@ namespace game
     class Race
     {
     public:
-        enum class Phase : unsigned char { Free, Countdown, Racing, Finished };
+        // Starting: the race's bot boats are being made (Scene::Sync), the grid laid once their hulls are in the world.
+        enum class Phase : unsigned char { Free, Starting, Countdown, Racing, Finished };
 
         // Play starts (or the session goes on in a new level): the course as the level has it now.
         void Begin(const RaceCourse& course);
-        // Stop: every pilot off its boat.
+        // Stop: every pilot off its boat, the race's own boats to go.
         void End(physics::World& world);
         // The level is going (Scene::Clear): nothing of it is held any more.
         void Forget();
+        // Scene::Sync, every frame: the boats to make, each answered by OnSpawned (null = it could not be made), and the race's
+        // boats to take out of the world. DropSpawned: the level went with them (Scene::Clear).
+        std::vector<RaceSpawn> TakeSpawns() { return std::exchange(spawns_, {}); }
+        void OnSpawned(std::uint64_t ticket, RenderableObject* vessel);
+        std::vector<const RenderableObjectBase*> TakeDespawns() { return std::exchange(despawns_, {}); }
+        void DropSpawned()
+        {
+            spawns_.clear();
+            despawns_.clear();
+        }
         // Every frame of a session, before the helm reads its keys.
         void Tick(physics::World& world, float deltaTime);
         bool HasTrack() const { return !courses_.empty(); }
@@ -118,11 +161,23 @@ namespace game
         // dt: the spectator's chase camera follows it (Scene::Sync).
         RenderableObject* WatchedVessel() const;
         float LastDeltaTime() const { return lastDelta_; }
+        // Tab on foot in Play: the camera on the next racer (the next boat with a bot outside a race), past the last one free
+        // again. What it is on now, for the status line ("" = free).
+        std::string WatchNext();
+        // Who the camera can be hung on, in race.watch's order (the racers by their place on the grid, else the bot boats),
+        // each "name" or "name -- P2"; the one it is on (1-based, 0 = none); hang it on the N-th (0 = give it back).
+        std::vector<std::string> WatchNames() const;
+        int WatchIndex() const;
+        void SetWatch(int index);
 
     private:
+        // A bot of the race being run: its own boat, spawned for it (RaceSpawn).
         struct Entry
         {
-            Math::float3 where;              // the boat's place in the level
+            std::string asset;               // the boat's kind
+            std::uint64_t ticket = 0;        // its spawn's
+            int level = -1;                  // BotDifficulty, or -1 = race.difficulty's rule
+            bool watched = false;            // the editor's grid hangs the camera on it
             RenderableObject* vessel = nullptr;
             RaceBot bot;
             bool yielded = false;            // the player holds its helm
@@ -193,7 +248,12 @@ namespace game
         // Its boat's memory on this level (game::BotMemoryFor), what every bot at the helm of such a boat learns into.
         BotMemory* MemoryOf(const RenderableObject* vessel) const;
         const physics::VesselHull* HullOf(const RenderableObject* vessel) const;
-        void StartRace(physics::World& world);
+        // A race asked for: its bot boats asked of the scene (Phase::Starting) -- the grid's, or the fleet's kinds in turn, three
+        // beside the player, four alone (race.solo: one). FinishStart lays the grid once their hulls are in the world.
+        void BeginStart(const RaceGrid* grid);
+        void FinishStart(physics::World& world);
+        // The race's boats out of the world (TakeDespawns), their entries gone.
+        void DespawnBots(physics::World& world);
         void StopRace(physics::World& world, const char* why);
         void UpdateRacers();
         // The thresholds: a boat a bot steers that is lost (far off its line, or held) is put back on the course.
@@ -207,6 +267,12 @@ namespace game
         std::vector<const Racer*> Standing() const;
 
         std::vector<Course> courses_;
+        std::vector<std::string> fleet_; // RaceCourse::fleet: the kinds of boat the bots race in
+        std::vector<RaceSpawn> spawns_;  // asked of the scene this frame
+        std::vector<const RenderableObjectBase*> despawns_; // to go: survives Forget (Stop), the scene takes them at its next Sync
+        std::uint64_t nextTicket_ = 1;
+        float startWait_ = 0.0f;         // s Phase::Starting has waited for the boats
+        bool startByGrid_ = false;       // the editor's grid started it: its camera, its levels
         std::string level_;      // RaceCourse::level: whose bot memories
         std::size_t current_ = 0;
         RaceTrack track_;        // courses_[current_]'s

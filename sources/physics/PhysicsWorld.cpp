@@ -311,6 +311,11 @@ namespace physics
             bool piloted = false;
             VesselInput pilotInput;
             VesselInput stepPilotInput;
+            bool stepPiloted = false;  // piloted, as it stood where the step started
+            // The hard mooring (HoldMooring): the step's. Moored once nobody steers it and it has slowed down, where it was then.
+            bool moored = false;
+            JPH::Vec3 mooredAt = JPH::Vec3::sZero();
+            float mooredHeading = 0.0f;
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -323,6 +328,9 @@ namespace physics
         Entry* helm = nullptr;
         VesselInput helmInput;      // the game's
         VesselInput stepHelmInput;  // taken for the steps where they start: the step's thread owns this
+        float stepMooring = 0.0f;   // physics.mooring* as they stood where the step started
+        float stepMooringTurn = 0.0f;
+        float stepMooringSettle = 0.0f;
         HelmState helmShown;        // as the last Display drew it: nothing here is the step's
         const OceanRenderable* ocean = nullptr;
         std::unique_ptr<PlayerBody> player;
@@ -1052,6 +1060,7 @@ namespace physics
                     entry.shownVelocity = JPH::Vec3::sZero();
                     entry.shownAngular = JPH::Vec3::sZero();
                     entry.anchored = false; // the session's, weighed with it
+                    entry.moored = false;   // and the mooring: the next session moors it where it is then
                     entry.shownImpact = 0.0f;
                     entry.shownImmersion = 0.0f;
                     entry.shownWaterHeight = 0.0f;
@@ -1143,7 +1152,15 @@ namespace physics
         void TakeHelmInputs()
         {
             stepHelmInput = helmInput;
-            for (Entry* entry : vessels) { entry->stepPilotInput = entry->piloted ? entry->pilotInput : VesselInput{}; }
+            for (Entry* entry : vessels)
+            {
+                entry->stepPilotInput = entry->piloted ? entry->pilotInput : VesselInput{};
+                entry->stepPiloted = entry->piloted;
+            }
+            const Settings& settings = GameSettings();
+            stepMooring = settings.mooring;
+            stepMooringTurn = settings.mooringTurn;
+            stepMooringSettle = settings.mooringSettle;
         }
 
         void PushVessels(float step)
@@ -1159,6 +1176,24 @@ namespace physics
                 if (!lock.Succeeded()) { continue; }
                 PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : entry->stepPilotInput, entry->water, entry->floatFactor, gravity, step);
                 if (entry->anchored) { PullAnchor(lock.GetBody(), *entry->vessel, entry->bowLocal, entry->anchorPoint, step); }
+                // Nobody steers it and its own anchor is up: the hard mooring, once it has slowed down, where it was then.
+                JPH::Body& body = lock.GetBody();
+                if (entry == helm || entry->stepPiloted || entry->anchored || (stepMooring <= 0.0f && stepMooringTurn <= 0.0f))
+                {
+                    entry->moored = false;
+                    continue;
+                }
+                if (!entry->moored)
+                {
+                    const JPH::Vec3 velocity = body.GetLinearVelocity();
+                    if (velocity.GetX() * velocity.GetX() + velocity.GetZ() * velocity.GetZ() > stepMooringSettle * stepMooringSettle) { continue; }
+                    const JPH::RVec3 position = body.GetPosition();
+                    const JPH::Vec3 bow = body.GetRotation() * ToJolt(entry->vessel->forward).Normalized();
+                    entry->moored = true;
+                    entry->mooredAt = JPH::Vec3(static_cast<float>(position.GetX()), 0.0f, static_cast<float>(position.GetZ()));
+                    entry->mooredHeading = std::atan2(bow.GetX(), bow.GetZ());
+                }
+                HoldMooring(body, *entry->vessel, entry->mooredAt, entry->mooredHeading, stepMooring, stepMooringTurn, step);
             }
         }
 
@@ -1590,6 +1625,13 @@ namespace physics
 
     void World::KickStep() { impl_->KickOwed(); }
 
+    void World::ForgetRemoved()
+    {
+        Impl& m = *impl_;
+        m.Join();
+        m.Drain();
+    }
+
     void World::FinishStep()
     {
         impl_->KickOwed();
@@ -1727,6 +1769,7 @@ namespace physics
             entry->vesselState = VesselState{};
             entry->water = VesselWater{}; // measured afresh where it is now: the rates it followed were another place's
             entry->anchored = false;
+            entry->moored = false; // moors again where it was put
             entry->fellOut = false;
             m.ShowVessels(1.0f);
             return true;

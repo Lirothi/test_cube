@@ -463,6 +463,9 @@ namespace
         if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
         if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
         if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
+        if (setting == "physics.mooring") { physics::GameSettings().mooring = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "physics.mooringTurn") { physics::GameSettings().mooringTurn = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "physics.mooringSettle") { physics::GameSettings().mooringSettle = std::clamp(value, 0.0f, 20.0f); return true; }
         // The boats (docs/play_mode_plan.md): every vessel in the world, transient. An asset's own numbers are its mesh.json "vessel".
         if (setting.rfind("vessel.", 0) == 0 && scene.Physics().TuneVessels(setting.substr(7), value)) { return true; }
         // The race (game::Race): its numbers by one table; a script's start and the results away.
@@ -523,6 +526,14 @@ namespace
         // editor, the other motion a temporal history has to survive.
         if (setting == "camera.mouseSmoothing") { g_cameraMouseSmoothingMs = std::clamp(value, 0.0f, kCameraMouseSmoothingMaxMs); return true; }
         if (setting == "camera.spin") { g_camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
+        // A boat's camera, at the helm and on a bot's boat (race.watch): 0 behind, 1 the cockpit, 2 cinema (V in Play).
+        if (setting == "camera.boatView")
+        {
+            const auto view = static_cast<game::VesselCamera::View>(std::clamp(static_cast<int>(std::lround(value)), 0, 2));
+            scene.VesselCameraRef().SetView(view);
+            scene.SpectatorCameraRef().SetView(view);
+            return true;
+        }
         if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
         if (setting == "dlss.preset") { g_dlssPresetOverride.store(std::clamp(static_cast<int>(value), -1, 15)); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
