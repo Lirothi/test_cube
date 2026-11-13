@@ -67,6 +67,13 @@ namespace physics
         float swayLever = 1.2f;     // m aft of the centre of mass, where that force acts: the keel's. A hull then turns into its own drift and holds a course on waves that would slew it
         float yawDrag = 430000.0f;  // N m per (rad/s)2
         float yawLinear = 20000.0f; // N m per rad/s
+        // The hull's grip across its way, as a tyre's mu N: the most the water holds it on a curve is this share of the weight
+        // the water carries (x its share in the water), the net force across its way -- the hull's and the rudder's -- held to
+        // it; past it the boat slides wide. On the plane less of the hull bites: down to sideGripPlane of it (2026-11-12, owner:
+        // "the side grip falls with the speed" -- until then a boat's circle hardly changed with its speed, a held throttle took
+        // every bend, and braking for one bought nothing). 0 = no limit (before).
+        float sideGrip = 0.6f;      // of the weight (g), at displacement speeds
+        float sideGripPlane = 0.45f; // of that, on the plane: 0.27 g, 2.65 m/s2 across its way flat out
         float heaveDamping = 3.0f;  // 1/s, against the water's own rise and fall
         float pitchDamping = 4.0f;  // 1/s, against the surface's own tilting: a long hull's ends push through the water. Under-damped it resonates with a sea met at speed and stands on its stern
         float rollDamping = 3.0f;   // 1/s

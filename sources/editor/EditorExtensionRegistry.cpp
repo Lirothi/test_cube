@@ -723,8 +723,9 @@ namespace
                       "Seconds from rest to 20 kn, full ahead (the card: \"20 kn in ... s\"). Moves the thrust (and the drag ahead\n"
                       "with it, to keep its top speed): more power, a quicker start, harder braking for the bends." },
                     { "Handling", SetVesselTuneCommand::kCardCircle, 1.0f, 15.0f, 400.0f, 0.2f, "%.0f m",
-                      "Metres across its tightest circle, hard over, full ahead (the card: \"a ... m circle\"). Moves the rudder\n"
-                      "force. The bot takes its bends at a share of what this circle asks across its way: tighter, faster bends." },
+                      "Metres across its tightest circle, hard over, full ahead (the card: \"a ... m circle flat out\"). Moves the\n"
+                      "rudder force and the hull's side grip together: flat out the grip sets the circle, slower the rudder does.\n"
+                      "The bot takes its bends at a share of what this circle asks across its way: tighter, faster bends." },
                     { "Sea keeping", SetVesselTuneCommand::kCardSeaKeeping, 100.0f, leastSea, 200.0f, 0.2f, "%.0f %%",
                       "Half its draft (the hull's: Mesh Editor), half its weight. Moves the mass -- a heavier boat is thrown\n"
                       "about less by the waves -- and the thrust and the rudder with it, to keep the other three bars." },

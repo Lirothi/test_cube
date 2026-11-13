@@ -1868,6 +1868,7 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
         const game::BotSettings before = settings;
         settings = game::BotSettings{};
         physics::VesselSettings boat; // small_yacht's numbers: a top speed of 16.1 m/s
+        settings.slip = 0.0f; // the toy's hull does not slide: aimed inside by the yacht's slide it ran 2-3 m inside its plan
         physics::VesselHull hull;
         hull.settings = &boat;
         hull.halfLength = 5.1f;
@@ -1916,8 +1917,22 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
               std::to_string(tight) + " " + std::to_string(heavier));
         Check(most < 0.6f && most >= tight, "a bend past its own circle counts as its circle: " + std::to_string(most));
         const game::VesselStats stats = game::StatsOf(yacht, 5.1f, 3.1f);
-        Check(stats.topSpeed > 15.0f && stats.topSpeed < 17.5f && stats.turnRadius > 40.0f && stats.turnRadius < 75.0f && stats.toPlane > 2.0f && stats.toPlane < 7.0f,
+        Check(stats.topSpeed > 15.0f && stats.topSpeed < 17.5f && stats.turnRadius > 60.0f && stats.turnRadius < 110.0f && stats.toPlane > 2.0f && stats.toPlane < 7.0f,
               "the yacht's card: " + std::to_string(stats.topSpeed) + " m/s, a circle of " + std::to_string(stats.turnRadius) + " m, 20 kn in " + std::to_string(stats.toPlane) + " s");
+        // The side grip (2026-11-12): flat out the hull lets go before the rudder runs out -- the circle there is the grip's,
+        // v^2 / (g sideGrip sideGripPlane) -- and slower the rudder's own, which hardly changes with the speed. The arm: no grip.
+        physics::VesselSettings unbound = yacht;
+        unbound.sideGrip = 0.0f;
+        const game::VesselStats unheld = game::StatsOf(unbound, 5.1f, 3.1f);
+        const float gripMost = 9.81f * yacht.sideGrip * yacht.sideGripPlane;
+        const auto radiusAt = [](const physics::VesselSettings& boat, float speed) { return speed / game::TurnRateAt(boat, 5.1f, 3.1f, speed); };
+        Check(std::fabs(stats.lateralAccel - gripMost) < 0.01f * gripMost && unheld.turnRadius < 0.85f * stats.turnRadius && unheld.lateralAccel > 1.1f * gripMost,
+              "flat out the grip sets the circle (" + std::to_string(stats.turnRadius) + " m, " + std::to_string(stats.lateralAccel) + " m/s2), without it the rudder (" +
+                  std::to_string(unheld.turnRadius) + " m, " + std::to_string(unheld.lateralAccel) + " m/s2 at " + std::to_string(unheld.turnSpeed) + " m/s)");
+        Check(stats.gripSpeed > 6.0f && stats.gripSpeed < stats.topSpeed && unheld.gripSpeed == unheld.topSpeed &&
+                  radiusAt(yacht, 16.0f) > 1.4f * radiusAt(yacht, stats.gripSpeed) && radiusAt(unbound, 16.0f) < 1.25f * radiusAt(unbound, stats.gripSpeed),
+              "past gripSpeed (" + std::to_string(stats.gripSpeed) + " m/s) its circle grows as the speed squared: r " + std::to_string(radiusAt(yacht, stats.gripSpeed)) +
+                  " -> " + std::to_string(radiusAt(yacht, 16.0f)) + " m at 16 m/s; the rudder's alone " + std::to_string(radiusAt(unbound, 16.0f)) + " m");
     }
 
     // ---- a missed gate costs by how far from its middle: a boat taken straight through the line of gate 2, wide of it ----
@@ -2038,12 +2053,13 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
             return Seen{ bot.Stats(), bot.Line().SlowestSpeed() };
         };
         const Seen yacht = look();
-        Check(bot.Line().Valid() && yacht.slowest < 0.95f * yacht.stats.topSpeed && yacht.slowest > 0.5f * yacht.stats.topSpeed,
+        Check(bot.Line().Valid() && yacht.slowest < 0.95f * yacht.stats.topSpeed && yacht.slowest > 3.0f, // under half its top speed since 2026-11-12: slower turns tighter
               "on a 60 m circle the bends set the line's speed: " + std::to_string(yacht.slowest) + " of " + std::to_string(yacht.stats.topSpeed) + " m/s");
         boat.rudderForce *= 2.0f;
+        boat.sideGrip *= 2.0f; // flat out the grip sets the circle: the rudder alone would not tighten it
         const Seen agile = look();
         Check(agile.stats.turnRadius < 0.9f * yacht.stats.turnRadius && agile.slowest > 1.05f * yacht.slowest,
-              "twice the rudder, the same bot the next frame: a tighter circle (" + std::to_string(agile.stats.turnRadius) + " m, was " +
+              "twice the rudder and the grip, the same bot the next frame: a tighter circle (" + std::to_string(agile.stats.turnRadius) + " m, was " +
               std::to_string(yacht.stats.turnRadius) + ") and faster bends (" + std::to_string(agile.slowest) + " m/s)");
         boat.thrust *= 1.5f;
         const Seen strong = look();
@@ -2052,10 +2068,151 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
         boat = physics::VesselSettings{};
         const Seen again = look();
         Check(again.stats.topSpeed == yacht.stats.topSpeed && again.slowest == yacht.slowest, "its numbers back: the line it had");
+        // A level caps the straights, not the bends (2026-11-12: slowed in a bend these boats lose their rudder's wash, and
+        // the owner's easy and medium bots missed 4 and 6 gates of reef's slalom): an easy bot asks a bend what a hard one does.
+        {
+            game::RaceBot easy;
+            easy.SetDifficulty(game::BotDifficulty::Easy);
+            game::RaceBot hard;
+            easy.Start(); // on the course from the first frame: a bot coming onto it runs at its circle's speed
+            hard.Start();
+            easy.Tick(tight, hull, 1.0f / 60.0f, false);
+            hard.Tick(tight, hull, 1.0f / 60.0f, false);
+            const float cap = settings.easyPace * easy.Stats().topSpeed;
+            Check(easy.GetStatus().target <= cap + 1e-3f && std::fabs(easy.GetStatus().target - std::min(hard.GetStatus().target, cap)) < 1e-3f,
+                  "an easy bot's speed is the hard one's under its cap: " + std::to_string(easy.GetStatus().target) + " / " + std::to_string(hard.GetStatus().target) +
+                      " m/s, the cap " + std::to_string(cap));
+            Check(hard.GetStatus().target < cap, "and in this bend (60 m) the hard one is under the cap: the bend is the same for both");
+            game::RaceBot easyOpen;
+            easyOpen.SetDifficulty(game::BotDifficulty::Easy);
+            game::RaceBot hardOpen;
+            physics::VesselHull open = hull;
+            open.position = Math::float3(kRadius, 0.0f, 0.0f);
+            easyOpen.Start();
+            hardOpen.Start();
+            easyOpen.Tick(track, open, 1.0f / 60.0f, false);
+            hardOpen.Tick(track, open, 1.0f / 60.0f, false);
+            Check(hardOpen.GetStatus().target > cap + 1.0f && std::fabs(easyOpen.GetStatus().target - cap) < 1e-3f,
+                  "on the 150 m circle the hard bot runs flat out and the easy one at its cap: " + std::to_string(hardOpen.GetStatus().target) + " / " +
+                      std::to_string(easyOpen.GetStatus().target) + " m/s");
+            // The bot's memory (2026-11-12): what its boat has really turned at stands in for the model. A turn map that
+            // says the boat makes r 200 at every speed takes the 150 m circle slower the next frame; without it, the line
+            // it had.
+            game::BotMemory poor;
+            for (float v = 2.0f; v <= 20.0f; v += 0.5f) { poor.LearnTurn(v, 1.0f / 200.0f, 5.0f); }
+            game::RaceBot taught;
+            taught.SetMemory(&poor);
+            taught.Start();
+            taught.Tick(track, open, 1.0f / 60.0f, false);
+            const float model = hardOpen.Line().SlowestSpeed();
+            const float learned = taught.Line().SlowestSpeed();
+            Check(poor.TrustedBins() > 15 && learned < 0.9f * model, "a turn map of r 200 takes the 150 m circle slower: " + std::to_string(learned) + " m/s, the model " +
+                                                                        std::to_string(model));
+            taught.SetMemory(nullptr);
+            taught.Tick(track, open, 1.0f / 60.0f, false);
+            Check(std::fabs(taught.Line().SlowestSpeed() - model) < 1e-3f, "and with no memory the model's line again: " + std::to_string(taught.Line().SlowestSpeed()));
+        }
+        // ---- the bot's memory itself: the turn map between its bins, the file ----
+        {
+            game::BotMemory memory;
+            float curvature = 0.0f;
+            Check(memory.TurnTrust(10.0f, &curvature) == 0.0f && memory.Version() == 0, "an empty turn map trusts nothing");
+            for (int i = 0; i < 300; ++i) { memory.LearnTurn(10.0f, 1.0f / 65.0f, 1.0f / 60.0f); } // 5 s hard over at 10 m/s: r 65
+            const float trust = memory.TurnTrust(10.0f, &curvature);
+            Check(trust > 0.99f && std::fabs(1.0f / curvature - 65.0f) < 0.5f && memory.TurnTrust(13.0f, nullptr) == 0.0f && memory.TurnTrust(10.5f, nullptr) < 0.6f &&
+                      memory.Version() > 0,
+                  "5 s at 10 m/s: r " + std::to_string(1.0f / curvature) + " m trusted there (" + std::to_string(trust) + "), half way to 11 m/s half of it, nothing at 13");
+            const int version = memory.Version();
+            for (int i = 0; i < 60; ++i) { memory.LearnTurn(10.0f, 1.0f / 65.2f, 1.0f / 60.0f); }
+            Check(memory.Version() == version, "a map that hardly moves keeps its version (the line is not rebuilt for it)");
+            const std::string file = (std::filesystem::temp_directory_path() / "test_cube_bot_memory_check.json").string();
+            std::filesystem::remove(file);
+            game::BotMemory saved;
+            saved.Load(file); // nothing there: its path, nothing in it
+            for (int i = 0; i < 300; ++i) { saved.LearnTurn(10.0f, 1.0f / 65.0f, 1.0f / 60.0f); }
+            Check(saved.Dirty() && saved.Save() && !saved.Dirty(), "written");
+            game::BotMemory read;
+            float readCurvature = 0.0f;
+            Check(read.Load(file) && read.TurnTrust(10.0f, &readCurvature) > 0.99f && std::fabs(readCurvature - 1.0f / 65.0f) < 1e-5f,
+                  "read back the same: " + read.Describe());
+            std::filesystem::remove(file);
+        }
+        // ---- what the bot sees (RacePlanner): a path from the boat through the next gates, the fastest its boat can sail ----
+        {
+            const auto gateAt = [](float x, float z, float ax, float az, float half)
+            {
+                game::PlanGate gate;
+                gate.center = Math::float2(x, z);
+                gate.along = Math::float2(ax, az).Normalized();
+                gate.across = Math::float2(gate.along.y, -gate.along.x);
+                gate.halfWindow = half;
+                return gate;
+            };
+            game::PlanBoat sailor;
+            sailor.position = Math::float2(0.0f, 0.0f);
+            sailor.way = Math::float2(0.0f, 1.0f);
+            sailor.speed = 15.0f;
+            sailor.cap = 16.0f;
+            sailor.topSpeed = 16.0f;
+            sailor.accel = 3.0f;
+            sailor.brake = 2.0f;
+            sailor.reach = 1.0f / 25.0f;
+            sailor.speedFor = [](float bend) { return std::clamp(std::sqrt(2.5f / std::max(bend, 1e-6f)), 8.0f, 16.0f); }; // a 0.25 g boat
+            const std::vector<game::PlanRival> none;
+            // A straight row: straight through, at its speed.
+            const std::vector<game::PlanGate> row = { gateAt(0, 60, 0, 1, 6), gateAt(0, 120, 0, 1, 6), gateAt(0, 180, 0, 1, 6), gateAt(0, 240, 0, 1, 6) };
+            const game::RacePlan straight = game::PlanThroughGates(sailor, row, none, {});
+            float worstOffset = 0.0f;
+            for (const float o : straight.offsets) { worstOffset = std::max(worstOffset, std::fabs(o)); }
+            Check(straight.valid && worstOffset < 0.5f && straight.penalty < 1e-3f && std::fabs(straight.Length() - 240.0f) < 1.0f && straight.seconds < 240.0f / 15.0f,
+                  "a straight row: straight through (" + std::to_string(worstOffset) + " m off), " + std::to_string(straight.seconds) + " s");
+            // A right angle (to starboard: +x) in four gates 12 m wide: the gates' width used -- out wide on the way in,
+            // the apex inside -- faster than through their middles, and nothing it cannot do.
+            const std::vector<game::PlanGate> corner = { gateAt(0, 80, 0, 1, 6), gateAt(20, 125, 1, 1, 6), gateAt(65, 145, 1, 0, 6), gateAt(130, 145, 1, 0, 6) };
+            sailor.speed = 12.0f;
+            const game::RacePlan middle = game::EvaluatePlan(sailor, corner, none, std::vector<float>(4, 0.0f));
+            const game::RacePlan best = game::PlanThroughGates(sailor, corner, none, {});
+            float usedWindow = 0.0f;
+            for (const float o : best.offsets) { usedWindow = std::max(usedWindow, std::fabs(o)); }
+            Check(best.seconds + best.penalty < middle.seconds + middle.penalty - 0.05f && usedWindow > 2.0f,
+                  "a right angle: " + std::to_string(best.seconds + best.penalty) + " s using the gates' width (" + std::to_string(usedWindow) + " m off a middle) against " +
+                      std::to_string(middle.seconds + middle.penalty) + " s through the middles");
+            sailor.speed = 16.0f;
+            const game::RacePlan fast = game::PlanThroughGates(sailor, corner, none, {});
+            float slowest = 1.0e9f;
+            for (const float v : fast.speed) { slowest = std::min(slowest, v); }
+            Check(slowest < 14.0f && fast.speed.front() == 16.0f, "from 16 m/s it brakes for the bend: " + std::to_string(slowest) + " m/s at the slowest");
+            // Too fast for a hairpin it cannot brake for: that costs; at a lower speed less.
+            const std::vector<game::PlanGate> hairpin = { gateAt(0, 40, 0, 1, 4), gateAt(30, 60, 1, 0, 4), gateAt(40, 40, 0, -1, 4) };
+            sailor.speed = 16.0f;
+            const game::RacePlan hot = game::PlanThroughGates(sailor, hairpin, none, {});
+            sailor.speed = 8.0f;
+            const game::RacePlan cool = game::PlanThroughGates(sailor, hairpin, none, {});
+            Check(hot.penalty > 1.0f && cool.penalty < hot.penalty, "into a hairpin at 16 m/s it cannot brake in time: " + std::to_string(hot.penalty) + " s of penalty, at 8 m/s " +
+                                                                        std::to_string(cool.penalty));
+            // A rival lying still in the middle of the next gate: the plan goes by it, on one side of the window.
+            sailor.speed = 12.0f;
+            const std::vector<game::PlanRival> blocker = { game::PlanRival{ Math::float2(0.0f, 60.0f), Math::float2(0.0f, 0.0f), 8.0f, false } };
+            const game::RacePlan round = game::PlanThroughGates(sailor, row, blocker, {});
+            const game::RacePlan through = game::EvaluatePlan(sailor, row, blocker, std::vector<float>(4, 0.0f));
+            Check(std::fabs(round.offsets[0]) > 3.0f && round.penalty < through.penalty, "a boat lying in the next gate's middle: passed " + std::to_string(round.offsets[0]) +
+                                                                                          " m off it, penalty " + std::to_string(round.penalty) + " against " +
+                                                                                          std::to_string(through.penalty) + " through it");
+            // The arm: a rival that will have gone by the time it gets there costs nothing.
+            const std::vector<game::PlanRival> gone = { game::PlanRival{ Math::float2(-200.0f, 60.0f), Math::float2(0.0f, 0.0f), 8.0f, false } };
+            // A buoy standing between two gates on the straight path: the plan goes round it, a boat there 10 s from now does
+            // not move it (only marks count all along the path).
+            const std::vector<game::PlanRival> buoy = { game::PlanRival{ Math::float2(0.0f, 150.0f), Math::float2(0.0f, 0.0f), 5.0f, true } };
+            const game::RacePlan rounded = game::PlanThroughGates(sailor, row, buoy, {});
+            float nearest = 1.0e9f;
+            for (const Math::float2& at : rounded.points) { nearest = std::min(nearest, (at - Math::float2(0.0f, 150.0f)).Length()); }
+            Check(nearest > 2.5f, "a buoy between two gates on its way: passed " + std::to_string(nearest) + " m off");
+            Check(game::PlanThroughGates(sailor, row, gone, {}).penalty < 1e-3f, "a boat far off costs nothing");
+        }
         boat.mass *= 1.5f;
         const Seen heavy = look();
-        Check(heavy.stats.topSpeed == yacht.stats.topSpeed && heavy.stats.braking < yacht.stats.braking && heavy.slowest < yacht.slowest,
-              "half as heavy again: the same top speed, it slows less with the engine off and takes the bends slower (it slides more): " +
+        Check(heavy.stats.topSpeed == yacht.stats.topSpeed && heavy.stats.braking < yacht.stats.braking && heavy.slowest <= yacht.slowest + 1e-3f,
+              "half as heavy again: the same top speed, it slows less with the engine off and takes the bends no faster (its grip is a share of its weight, its rudder turns it less): " +
               std::to_string(heavy.slowest) + " m/s");
         settings = before;
     }
@@ -2102,9 +2259,10 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
             game::VesselCard want = card;
             want.seaKeeping += 0.1f;
             game::SolveCard(heavy, kHalf, kLever, kDraft, want);
-            Check(heavy.mass > yacht.mass * 1.25f && heavy.thrust > yacht.thrust && heavy.rudderForce > yacht.rudderForce,
-                  "a heavier boat gets the thrust and the rudder that keep its acceleration and its circle: " + std::to_string(heavy.mass) + " kg, " +
-                      std::to_string(heavy.thrust) + " N, rudder " + std::to_string(heavy.rudderForce));
+            // The grip is a share of the weight, so a heavier hull flat out needs little more of it or of the rudder.
+            Check(heavy.mass > yacht.mass * 1.25f && heavy.thrust > yacht.thrust && heavy.rudderForce > 0.9f * yacht.rudderForce,
+                  "a heavier boat gets the thrust that keeps its acceleration, and its circle is held: " + std::to_string(heavy.mass) + " kg, " +
+                      std::to_string(heavy.thrust) + " N, rudder " + std::to_string(heavy.rudderForce) + ", grip " + std::to_string(heavy.sideGrip));
             physics::VesselSettings rocket = yacht;
             want = card;
             want.toPlane = 0.05f;

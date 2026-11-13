@@ -2482,12 +2482,13 @@ namespace
                         char boatItem[900];
                         std::snprintf(boatItem, sizeof(boatItem),
                                       "%s{\"geometry\":\"%s\",\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s,"
-                                      "\"stats\":{\"topSpeed\":%.2f,\"toPlane\":%.2f,\"turnSpeed\":%.2f,\"turnRateDeg\":%.2f,\"turnRadius\":%.1f,\"lateralAccel\":%.2f,\"braking\":%.2f,"
-                                      "\"mass\":%.0f,\"thrust\":%.0f,\"length\":%.2f,\"rudderLever\":%.2f}}",
+                                      "\"stats\":{\"topSpeed\":%.2f,\"toPlane\":%.2f,\"turnSpeed\":%.2f,\"turnRateDeg\":%.2f,\"turnRadius\":%.1f,\"lateralAccel\":%.2f,\"gripSpeed\":%.2f,\"braking\":%.2f,"
+                                      "\"mass\":%.0f,\"thrust\":%.0f,\"surgeDrag\":%.3f,\"rudderForce\":%.3f,\"sideGrip\":%.3f,\"sideGripPlane\":%.3f,\"length\":%.2f,\"rudderLever\":%.2f}}",
                                       i > 0 ? "," : "", b.object ? b.object->GetGeometryPath().c_str() : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
                                       pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false", b.anchored ? "true" : "false",
-                                      stats.topSpeed, stats.toPlane, stats.turnSpeed, stats.turnRate * 57.2957795f, stats.turnRadius, stats.lateralAccel, stats.braking,
-                                      stats.mass, stats.thrust, stats.length, b.rudderLever);
+                                      stats.topSpeed, stats.toPlane, stats.turnSpeed, stats.turnRate * 57.2957795f, stats.turnRadius, stats.lateralAccel, stats.gripSpeed, stats.braking,
+                                      stats.mass, stats.thrust, b.settings ? b.settings->surgeDrag : 0.0f, b.settings ? b.settings->rudderForce : 0.0f, b.settings ? b.settings->sideGrip : 0.0f, b.settings ? b.settings->sideGripPlane : 0.0f, stats.length,
+                                      b.rudderLever);
                         out += boatItem;
                     }
                     out += "]";

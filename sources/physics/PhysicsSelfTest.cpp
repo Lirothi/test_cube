@@ -895,9 +895,9 @@ namespace physics
 
         // --------------------------------------------------------------------------------------------------------- vessel
         // A boat on the water, through the functions the world calls. On still water: it floats at its draft and level; full ahead climbs over the hump and planes, too little throttle stays under
-        // it; it slows by itself; a rudder turns it to its own side; a boat lying still answers no rudder and one on its propeller's wash does; going astern it turns the other way. On waves: it
+        // it; it slows by itself; a rudder turns it to its own side; flat out it holds no more than its side grip and runs wider than eased; a boat lying still answers no rudder and one on its propeller's wash does; going astern it turns the other way. On waves: it
         // rides a long swell up and down and along its slope; a slope pushes it; a sea at an angle yaws it; at full speed into steep waves it slams and stays on its keel. The arms that must come
-        // out wrong: no rudder keeps the course, a propeller out of the water pushes nothing, nothing in the water pushes nothing, the weight up top capsizes it, a boat that cannot see the waves
+        // out wrong: no rudder keeps the course, without the grip lifting buys no tighter circle, a propeller out of the water pushes nothing, nothing in the water pushes nothing, the weight up top capsizes it, a boat that cannot see the waves
         // does not ride them, no wave force pushes nothing and yaws nothing, no slam slams nothing. At anchor a steady pull is held at the scope; weighed, it carries the boat off.
         struct TestBoat
         {
@@ -1038,6 +1038,39 @@ namespace physics
             expect(port < -30.0f && std::fabs(starboard + port) < 0.1f * starboard, "hard to port the same way round");
             expect(starboardRoll < 0.0f && portRoll > 0.0f && starboardUp > 0.8f && portUp > 0.8f, "leans into the turn, on its keel"); // into a turn to starboard its starboard side goes down
             (void)portSpeed;
+
+            // ---- the side grip (2026-11-12): flat out and hard over, the hull holds no more across its way than sideGrip x
+            // sideGripPlane of g, so it runs a wider circle than with the throttle eased, where the rudder's own circle holds.
+            // The arm: without the grip the circle hardly changes with the speed -- lifting for a bend bought nothing.
+            const auto circle = [&base](float throttle, float sideGrip)
+            {
+                VesselSettings settings = base;
+                settings.sideGrip = sideGrip;
+                TestBoat boat(settings, JPH::Quat::sIdentity(), -base.draft);
+                boat.Run(25.0f, 1.0f, 0.0f);
+                boat.Run(12.0f, throttle, 1.0f);
+                const float from = boat.HeadingDeg();
+                float speedSum = 0.0f;
+                int frames = 0;
+                boat.Run(4.0f, throttle, 1.0f, [&]()
+                {
+                    const JPH::Vec3 v = boat.world.system.GetBodyInterface().GetLinearVelocity(boat.body);
+                    speedSum += std::sqrt(v.GetX() * v.GetX() + v.GetZ() * v.GetZ());
+                    ++frames;
+                });
+                const float rate = std::fabs(JPH::DegreesToRadians(std::remainder(boat.HeadingDeg() - from, 360.0f))) / 4.0f;
+                const float speed = speedSum / static_cast<float>(std::max(frames, 1));
+                return std::make_pair(speed / std::max(rate, 1e-4f), speed * rate); // radius m, m/s2 across the way
+            };
+            const auto [gripFlatRadius, gripFlatAccel] = circle(1.0f, base.sideGrip);
+            const auto [gripLiftRadius, gripLiftAccel] = circle(0.45f, base.sideGrip);
+            const auto [freeFlatRadius, freeFlatAccel] = circle(1.0f, 0.0f);
+            const auto [freeLiftRadius, freeLiftAccel] = circle(0.45f, 0.0f);
+            (void)gripLiftAccel; (void)freeLiftAccel;
+            const float gripMost = 9.81f * base.sideGrip * base.sideGripPlane;
+            expect(gripFlatAccel < 1.15f * gripMost && gripFlatAccel > 0.7f * gripMost, "flat out the hull holds its grip across its way, no more (" + num(gripFlatAccel) + " m/s2)");
+            expect(gripFlatRadius > 1.3f * gripLiftRadius, "flat out it runs wider than with the throttle eased");
+            expect(freeFlatAccel > 1.3f * gripMost && freeFlatRadius < 1.15f * freeLiftRadius, "without the grip it turns its rudder's circle at any speed");
 
             TestBoat still(base, JPH::Quat::sIdentity(), -base.draft);
             still.Run(5.0f, 0.0f, 1.0f);
@@ -1215,7 +1248,9 @@ namespace physics
 
             detail = "factor " + num(cruise.factor) + ", at rest y " + num(restY) + " (draft " + num(base.draft) + "), top " + num(top) + " m/s (wanted " + num(wantedTop) + "), on the plane after " + num(toPlane) +
                 " s, risen " + num(riseOnPlane) + " m, bow up " + num(planeBow) + " deg, at the hump " + num(humpBow) + ", coasted to " + num(coasted) + ", a fifth of the throttle " + num(underHump) +
-                " m/s; 4 s hard over " + num(starboard) + " / " + num(port) + " deg, roll " + num(starboardRoll) + " deg, speed " + num(starboardSpeed) + "; lying still " + num(stillTurn) + " deg, on the wash " + num(washTurn) +
+                " m/s; 4 s hard over " + num(starboard) + " / " + num(port) + " deg, roll " + num(starboardRoll) + " deg, speed " + num(starboardSpeed) +
+                "; hard over flat out / at 0.45 r " + num(gripFlatRadius) + " / " + num(gripLiftRadius) + " m (" + num(gripFlatAccel) + " m/s2 of " + num(gripMost) + "), no grip " +
+                num(freeFlatRadius) + " / " + num(freeLiftRadius) + " m (" + num(freeFlatAccel) + ")" + "; lying still " + num(stillTurn) + " deg, on the wash " + num(washTurn) +
                 " deg at " + num(washSpeed) + " m/s; astern " + num(back) + " m/s, turning " + num(asternTurn) + " deg; dry propeller " + num(drySpeed) + " m/s; righted up.y " + num(rightedUp) + ", top-heavy " + num(capsizedUp) +
                 "; anchored the bow at " + num(anchorReach) + " m (held at " + num(anchorHold) + ", farthest " + num(anchorFarthest) + "), weighed " + num(driftReach) + " m" +
                 "; swell: heave " + num(heave) + " m (blind " + num(blindHeave) + "), off its draft by " + num(follow) + " m, off the slope by " + num(pitchLag) + " deg; on the beam " + num(pushed) + " / " + num(unpushed) +

@@ -59,7 +59,7 @@ namespace game
             rate = 0.0f;
             for (int round = 0; round < 40; ++round)
             {
-                rate = SteadyTurnRate(boat, halfLength, rudderLever, v);
+                rate = TurnRateAt(boat, halfLength, rudderLever, v); // the rudder's, or the grip's past it
                 const float flow = v + boat.wash;
                 const float push = boat.rudderForce * flow * flow * std::sin(boat.rudderDeg * 0.0174532925f);
                 const float side = boat.mass * v * rate + push;
@@ -78,6 +78,12 @@ namespace game
             float rate = 0.0f;
             TightestTurn(boat, halfLength, rudderLever, speed, rate);
             return 2.0f * speed / std::max(rate, 1e-4f);
+        }
+
+        float InRange(float value, const char* key)
+        {
+            const physics::VesselKey* entry = physics::FindVesselKey(key);
+            return entry ? std::clamp(value, entry->lo, entry->hi) : value;
         }
 
         // A number of the boat's table, kept in its range and to four figures (what the Inspector shows and the level keeps).
@@ -121,12 +127,26 @@ namespace game
         return (-linear + std::sqrt(linear * linear + 4.0f * quadratic * push * Lever(boat, halfLength, rudderLever))) / (2.0f * quadratic);
     }
 
+    float GripAccel(const physics::VesselSettings& boat, float speed)
+    {
+        if (boat.sideGrip <= 0.0f) { return 1.0e9f; }
+        // PushVessel's limit at a steady state: the planing share by the speed, the hull in the water (its whole weight on it).
+        const float planing = SmoothStep(boat.humpSpeed, boat.planeSpeed, std::max(speed, 0.0f));
+        return 9.81f * boat.sideGrip * (1.0f - (1.0f - boat.sideGripPlane) * planing);
+    }
+
+    float TurnRateAt(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed)
+    {
+        const float v = std::max(speed, 0.5f);
+        return std::min(SteadyTurnRate(boat, halfLength, rudderLever, v), GripAccel(boat, v) / v);
+    }
+
     // The same two balances at a turn rate of speed x curvature: the rudder's force that holds that rate (the yaw's), and
     // the slide at which the water's push on the hull's side is m v w + that force (the side's).
     float SlipAngle(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed, float curvature)
     {
         const float v = std::max(speed, 0.5f);
-        const float rate = std::min(v * std::fabs(curvature), SteadyTurnRate(boat, halfLength, rudderLever, v));
+        const float rate = std::min(v * std::fabs(curvature), TurnRateAt(boat, halfLength, rudderLever, v));
         const float rudder = (kWet * (boat.yawDrag * rate * rate + boat.yawLinear * rate) + boat.mass * v * rate * boat.swayLever) / Lever(boat, halfLength, rudderLever);
         const float side = boat.mass * v * rate + rudder;
         const float a = std::max(kWet * boat.swayDrag, 1e-3f);
@@ -154,6 +174,22 @@ namespace game
         stats.turnRate = rate;
         stats.turnRadius = v / std::max(rate, 1e-4f);
         stats.lateralAccel = v * rate;
+        // The rudder's turn asks v x rate across the way, the grip holds GripAccel: the first speed where the grip is less.
+        stats.gripSpeed = stats.topSpeed;
+        const auto lets = [&boat, halfLength, rudderLever](float speed)
+        { return speed * SteadyTurnRate(boat, halfLength, rudderLever, speed) > GripAccel(boat, speed); };
+        if (lets(stats.topSpeed))
+        {
+            float lo = 0.5f;
+            float hi = stats.topSpeed;
+            for (int i = 0; i < 30; ++i)
+            {
+                const float mid = 0.5f * (lo + hi);
+                if (lets(mid)) { hi = mid; }
+                else { lo = mid; }
+            }
+            stats.gripSpeed = 0.5f * (lo + hi);
+        }
         return stats;
     }
 
@@ -193,15 +229,20 @@ namespace game
             boat.thrust = Tidy(thrust, "thrust");
         }
         boat.surgeDrag = Tidy(dragFor(boat.thrust), "surgeDrag");
-        // The circle: the rudder's force, against the rest as it now stands.
+        // The circle: the rudder's force and the hull's grip together, by one factor (the boat keeps its own share of each):
+        // flat out a hull lets go before its rudder runs out, and the rudder alone cannot tighten a circle its grip sets.
         {
             physics::VesselSettings trial = boat;
-            const float force = SolveLog(0.01f, 100000.0f, want.circle, true, [&trial, halfLength, rudderLever](float x)
+            const float rudder = boat.rudderForce;
+            const float grip = boat.sideGrip;
+            const float factor = SolveLog(1.0e-3f, 1.0e3f, want.circle, true, [&trial, rudder, grip, halfLength, rudderLever](float x)
             {
-                trial.rudderForce = x;
+                trial.rudderForce = InRange(rudder * x, "rudderForce");
+                trial.sideGrip = InRange(grip * x, "sideGrip");
                 return Circle(trial, halfLength, rudderLever);
             });
-            boat.rudderForce = Tidy(force, "rudderForce");
+            boat.rudderForce = Tidy(InRange(rudder * factor, "rudderForce"), "rudderForce");
+            if (grip > 0.0f) { boat.sideGrip = Tidy(InRange(grip * factor, "sideGrip"), "sideGrip"); }
         }
         return CardOf(boat, halfLength, rudderLever, draft);
     }

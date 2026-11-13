@@ -4,6 +4,8 @@
 #include <string_view>
 #include <vector>
 
+#include "app/game/BotMemory.h"
+#include "app/game/RacePlanner.h"
 #include "app/game/RaceTrack.h"
 #include "app/game/VesselStats.h"
 #include "physics/PhysicsWorld.h"
@@ -30,10 +32,26 @@ namespace game
         float slip = 1.0f;          // of the angle its boat slides at in the bend ahead (game::SlipAngle), the bow pointed inside the aim by it
         float avoidBoats = 1.0f;    // 1 = a boat ahead that the bow is about to reach is steered round
         float margin = 6.0f;        // m between the hull's side and a mark where the line crosses a gate: a boat holds its line within some 5 m
-        float pace = 1.0f;          // of the line's speed, every bot's: on top of its own level's
-        float easyPace = 0.8f;      // an easy bot's share of the line's speed
-        float mediumPace = 0.9f;    // a medium one's (a hard one runs all of it)
+        float pace = 1.0f;          // of its boat's top speed, the most it allows itself (on the straights), every bot's: on top of its level's
+        float easyPace = 0.8f;      // an easy bot's cap, a share of its top speed (its bends are a hard bot's: slowed there it loses its rudder)
+        float mediumPace = 0.9f;    // a medium one's (a hard one runs flat out)
         float debug = 0.0f;         // 1 = the gates and the line drawn (green fast, red slow), the aim point
+        float holdThrottle = 0.0f;  // 1 = the engine flat out whatever the bend, the bot steering: a player holding the throttle down
+        float learn = 1.0f;         // 1 = it fills its boat's turn map (game::BotMemory) and plans by it; 0 = the model alone
+        float plan = 1.0f;          // 1 = it drives by what it sees (RacePlanner: the next gates, its boat, the others); 0 = it follows its line
+        float planGates = 4.0f;     // gates it looks ahead
+        float planMargin = 4.5f;    // m between the hull's side and a mark where its plan crosses a gate (its line keeps `margin`): what the helm and the sea take off it
+        float planEvery = 0.1f;     // s between plans
+        float gripLearn = 1.0f;     // 1 = its grip share measured hard over (gripSeen); 0 = the model's still-water grip
+        float turnPower = 0.6f;     // hard over under its grip speed, the throttle never under this (the wash past the rudder); 0 = it coasts (before)
+        float turnPowerOver = 3.0f; // ... while no more than this over the speed it wants (m/s)
+        float steerByRudder = 0.0f; // its rudder's order a share of what the rudder turns it (1), of its grip's circle (0), between in log: no winner over 3 boats, 0 kept
+        float planLead = 0.5f;      // its throttle's spool time counted ahead of the plan's limits (1 = half its swing; 0 = half a second on): fewer misses for a few s a lap
+        float planTurns = 0.0f;     // 1 = the plan chooses its way through each gate too; 0 = only where it crosses (the default: A/B on reef, 6 races, the turns missed more)
+        float planBrakeBend = 0.0f; // 1 = its plan counts no engine braking where its rudder will be over (it only coasts there): fewer misses, slower laps -- off
+        float planBrake = 0.6f;     // of what its boat loses at a speed to its hull's drag and its engine 0.7 astern: what the plan brakes at
+        float rivalClearance = 3.0f; // m between hulls the plan keeps from another boat where it will be
+        float forget = 0.0f;        // 1 = every bot memory of the level emptied (and written so) at the next frame of a race; back to 0 by itself
     };
     BotSettings& BotSettingsRef();
 
@@ -84,6 +102,15 @@ namespace game
             float bestLap = 0.0f;
             float tightestRadius = 0.0f; // m, the boat's own circle (game::StatsOf)
             float airborne = 0.0f;       // the share of the last seconds the hull was out of the water
+            int memoryTrusted = 0;       // speeds its turn map trusts (BotMemory::TrustedBins)
+            bool planned = false;        // it drives by its plan (RacePlanner) this frame
+            bool recovering = false;     // pointing the wrong way: coming round slowly
+            char slowedBy = 'c';         // what set its speed: c its cap (pace, level), p its plan, l its line, a the turn it needs now, r coming round, j joining
+            float planSeconds = 0.0f;    // the plan's: to its last gate, and what it could not do (s)
+            float planPenalty = 0.0f;
+            float planOffset = 0.0f;     // m off the next gate's middle it plans to cross at
+            float gripSeen = 1.0f;       // the share of its boat's side grip (game::GripAccel) it has measured in its own hard turns:
+                                         // a sea throws the hull out of the water and takes some (wind_test's 1 m sea: ~0.75)
             float depthAhead = 0.0f;     // m of water where the bow will be in a couple of seconds (the sounding)
             bool shoal = false;          // too little: it is turning from it
             physics::VesselInput order;
@@ -112,7 +139,10 @@ namespace game
                                   const std::vector<physics::VesselHull>* others = nullptr);
         const Status& GetStatus() const { return status_; }
         const RaceLine& Line() const { return line_; }
+        const RacePlan* Plan() const { return planValid_ ? &plan_ : nullptr; }
         const VesselStats& Stats() const { return stats_; }
+        // What it learns into and plans by (game::Race hands every bot its boat's, by the level; nullptr = the model alone).
+        void SetMemory(BotMemory* memory);
 
     private:
         void EnsureLine(const RaceTrack& track, const physics::VesselHull& hull);
@@ -121,8 +151,48 @@ namespace game
         Status status_;
         // What the line was built for.
         float lineMargin_ = -1.0f;
-        static constexpr int kLineKeys = 6;
-        float lineKey_[kLineKeys] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f }; // grip, braking; the boat's top speed, m/s2 across, braking, circle
+        static constexpr int kLineKeys = 8;
+        // grip, braking; the boat's top speed, m/s2 across, braking, circle; grip seen; the turn map's version
+        float lineKey_[kLineKeys] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+        float lineBuiltAt_ = -10.0f;     // elapsed_ when it was: what its memory learned comes in at most once a second
+        BotMemory* memory_ = nullptr;
+        float hardOverSeconds_ = 0.0f;
+        // ITS boat's speed for a curvature (TurnSpeed, the model and its turn map), on a log scale of curvature, made with
+        // the line: what the line's profile and the planner look up (TurnSpeed itself tries 40 speeds).
+        static constexpr int kSpeedTable = 64;
+        float speedTable_[kSpeedTable] = {};
+        float reachCurvature_ = 0.0f;    // 1/m: the tightest it makes at any speed, a `grip` share of it
+        float recoverSpeed_ = 4.0f;      // m/s it turns tightest at: what it comes round at, pointing the wrong way
+        bool recovering_ = false;
+        float speedBefore_ = 0.0f;       // its speed, followed over half a second: a knock is the speed falling far under it
+        float knockSeconds_ = 0.0f;
+        void BuildSpeedTable(const physics::VesselSettings& boat, float share, float gripShare);
+        float SpeedFor(float curvature) const;
+        // What it turns (1/m, a `grip` share) at a speed, from 0 to its top speed: made with the speed table.
+        static constexpr int kTurnTable = 32;
+        float turnTable_[kTurnTable] = {};
+        float TurnAtSpeed(float speed) const;
+        // The plan (RacePlanner): what it sees ahead, made every bot.planEvery from where it is.
+        void MakePlan(const physics::VesselHull& hull, const std::vector<RaceGate>& gates, const std::vector<physics::VesselHull>* others,
+                      float cap);
+        RacePlan plan_;
+        bool planValid_ = false;
+        float planAge_ = 0.0f;           // s since it was made
+        std::size_t planGate_ = 0;       // gateIndex_ it was made for
+        std::size_t planFirst_ = 0;      // the first gate it goes through (the one ahead, or the next when its way already carries it through that)
+        float planAlong_ = 0.0f;         // m along it the boat is   // the rudder hard over: past a second the turn map takes the path's curvature
+        // The rate (rad/s) its boat turns at this speed, power on: its rudder's, or `gripShare` of its side grip's (what it
+        // has measured).
+        float CanTurn(const physics::VesselSettings& boat, float speed, float gripShare) const;
+        // The fastest speed (m/s, its top speed down to half of it) at which `share` of what it turns there makes a bend of
+        // that curvature; a bend tighter than it makes at any of them: the speed it turns tightest at.
+        float TurnSpeed(const physics::VesselSettings& boat, float curvature, float share, float gripShare) const;
+        float pathHeading_ = 0.0f;       // the way it moves (not the bow: the hull slides in a turn), and how fast that turns
+        float pathRate_ = 0.0f;
+        bool pathValid_ = false;
+        float gripSeen_ = 1.0f;          // Status::gripSeen. Kept through Reset: what the boat does in this sea is not the race's
+        float lineGripSeen_ = 1.0f;      // the one the line's speeds were made for
+        float saturatedSeconds_ = 0.0f;  // how long the rudder has been hard over, power on, past gripSpeed
         VesselStats stats_;      // its boat's, from its settings
         float topSpeed_ = 0.0f;
         float halfLength_ = 5.0f;

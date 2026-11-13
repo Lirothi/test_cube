@@ -420,6 +420,12 @@
     <ClCompile Include="sources/app/game/Race.cpp">
       <Filter>sources\app\game</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/game/BotMemory.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/game/RacePlanner.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/game/RaceBot.cpp">
       <Filter>sources\app\game</Filter>
     </ClCompile>
@@ -1143,6 +1149,12 @@
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/Race.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/BotMemory.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/RacePlanner.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/RaceBot.h">

@@ -115,7 +115,7 @@ std::vector<std::unique_ptr<SetVesselTuneCommand>> SetVesselTuneCommand::Card(Ed
     physics::VesselSettings solved = now;
     const game::VesselCard got = game::SolveCard(solved, shape.halfLength, shape.rudderLever, shape.draft, target);
     if (reached) { *reached = got; }
-    for (const char* name : { "mass", "thrust", "surgeDrag", "rudderForce" })
+    for (const char* name : { "mass", "thrust", "surgeDrag", "rudderForce", "sideGrip" })
     {
         const physics::VesselKey* key = physics::FindVesselKey(name);
         if (key && solved.*(key->member) != now.*(key->member)) { commands.push_back(Key(id, *key, solved.*(key->member))); }

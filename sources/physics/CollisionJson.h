@@ -108,6 +108,12 @@ namespace physics
             { "bank", "Lean into a turn (deg per m/s2)", &S::bank, 0.01f, 0.0f, 20.0f, G::Turn,
               "How far it leans in, per m/s2 across its way." },
             { "maxBank", "Most lean (deg)", &S::maxBank, 0.1f, 0.0f, 80.0f, G::Turn, "The most it leans into a turn." },
+            { "sideGrip", "Side grip (g)", &S::sideGrip, 0.005f, 0.0f, 3.0f, G::Turn,
+              "The most the water holds the hull on a curve, a share of its weight (as a tyre's): past it the boat slides wide of\n"
+              "its turn. At displacement speeds; on the plane it falls (below). Higher = a bend taken faster. 0 = no limit." },
+            { "sideGripPlane", "Side grip on the plane (share)", &S::sideGripPlane, 0.005f, 0.05f, 1.0f, G::Turn,
+              "Of the side grip, what is left on the plane, where less of the hull bites. Lower = it must slow for a tight bend\n"
+              "from flat out, and comes out of it wide if it does not." },
             { "reserveLift", "Reserve lift (of the weight)", &S::reserveLift, 0.01f, 1.0f, 50.0f, G::Sea,
               "The most the water lifts it, in its weights. Lower = it ploughs through a crest instead of flying off it (a\n"
               "light hull in the air has no keel and no rudder)." },

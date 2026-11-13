@@ -1540,8 +1540,21 @@ the grid, a start timer runs and off we go; three laps; after the finish a windo
   waits again once the player's boat has left it. wind_test: four boats carry `raceBot` (the fourth a second
   `small_yacht` at [36.5, -0.38, 124.9]; owner: "no need to import a fourth one, boats may repeat").
 - **A bot has one of three levels** (owner: "give the bots three levels of difficulty", "and when you spawn them write
-  over each one's head which it has"). A level is a share of the pace the bot can run its boat at: `bot.easyPace` 0.8,
-  `bot.mediumPace` 0.9, hard all of it (`RaceBot::SetDifficulty`; the player's own autopilot is hard). `race.difficulty`
+  over each one's head which it has"). A level CAPS the bot's speed on the straights at a share of its boat's top speed:
+  `bot.easyPace` 0.8, `bot.mediumPace` 0.9, hard flat out (`RaceBot::SetDifficulty`; the player's own autopilot is hard;
+  `bot.pace` the same cap for every bot). Its bends are a hard bot's: until 2026-11-12 the level was a share of every
+  speed of the line, and slowed in a bend these boats lose their rudder (its push is (speed + wash)^2, the wash the
+  throttle's) -- the owner's race on reef (he on fast_boat_13, flat out: "I just rolled the bots, no chance") had the easy
+  police_boat and the medium yacht miss 4 and 6 gates, nearly all in the shore's slalom and the hairpin. Capped instead,
+  one lap of reef: all easy 119.7-127.3 s, all medium 111.2-116.4, no miss; hard 105.6-111.9. A hard bot on fast_boat_13
+  laps reef as he did holding the throttle (106.8 / 106.5 s): the bots are at their boats' limit; `bot.grip` 1.2 for
+  bolder bends was a second a lap faster in single laps and no faster over three, with more misses (reef 4 against 1),
+  so it stays 0.8. **A held throttle is as fast as the bot** (owner: "did you run the new course with the throttle held
+  down?" -- I had not): `bot.holdThrottle:1` (the bots steer, the engine flat out bends and all, for measuring a course),
+  one lap of reef at x4: police_boat 104.8, fast_boat_13 105.9, the yachts 110.4 / 116.1 s, one gate missed -- the hard
+  bots in the same session 102.6-113.3. Nothing on either course asks a boat to lift: the rudder pushes by the wash and
+  every force of the hull goes as speed squared, so a boat's circle hardly changes with its speed and slowing turns
+  nothing tighter. Braking would matter only with a side grip that falls off on the plane (not there). `race.difficulty`
   says what the next race's bots get: 1 / 2 / 3 = all easy / medium / hard, 0 (the default) = one of each, which boat has
   which turned by one every race. On the grid and for the race's first 8 s every boat wears who it is (`Race::DrawLabels`,
   ImGui's foreground list, from AppController beside the results): EASY green, MEDIUM yellow, HARD red, YOU white, the
@@ -1564,7 +1577,8 @@ the grid, a start timer runs and off we go; three laps; after the finish a windo
   gates as it drifted (-443 m off gate 5's middle, in the log). Checked by pinching the thresholds
   (`race.resetOff:15;race.resetSeconds:1.5`): a yacht 17 m off at gate 3 was put back, ran on and finished, +10 s.
 - **Scripts**: `--set` / MCP `race.<key>` (one table, `game::RaceKeys`, also Developer Controls > Physics), `race.start:1`
-  (a race now: with the player if they hold a helm, the bots alone if not), `race.close:1` (the results away).
+  (a race now: with the player if they hold a helm, the bots alone if not), `race.close:1` (the results away), `race.solo:N` (the next race's bots: only the N-th of the grid; the time trial, in "The Bot
+  Drives by Sight").
   `get_readouts` `race` {phase, countdown, clock, results, armed, autopilot, atHelm, zone {center, heading, halfLength,
   halfWidth}, helm, bots [...], standing [{place, vessel, player, finished, finish, time, missed, penalty, resets,
   progress, laps}]}.
@@ -1641,7 +1655,8 @@ it", then "teach the bot to take the characteristics into account so it drives a
   surgeDrag v^2: a planing hull is 0.77 in the water); `mass`, `throttleRate` and the hump (`humpDrag`, `humpSpeed`,
   `planeSpeed`) how fast it gets there; `rudderForce` x (speed + `wash` sqrt(throttle))^2 x sin(`rudderDeg`) is the
   rudder's push -- with `yawDrag` / `yawLinear` and the keel (`swayDrag`, `swayLinear`, `swayLever`: the water's push on
-  the sliding hull's side, m v w + the rudder's, opposes the turn) its circle; `rudderRate` how fast the helm answers;
+  the sliding hull's side, m v w + the rudder's, opposes the turn) its circle -- under gripSpeed; past it `sideGrip` x
+  `sideGripPlane` of g sets it (the next section but one); `rudderRate` how fast the helm answers;
   `mass` against `swayDrag` how far it slides in a bend; `rollStiffness`, `bank`, `maxBank` its lean; `reserveLift`,
   the dampings and `slam` how it takes a sea; the propeller's depth (`propeller` y) whether it keeps its bite -- and
   every force of the hull is times its share in the water, so a hull in the air has no keel and no rudder.
@@ -1654,14 +1669,18 @@ it", then "teach the bot to take the characteristics into account so it drives a
   measured / 4.1 the card (small_yacht), 3.3 / 3.2 (fast_boat_13); the circle's radius 53.7 / 56.0 m, 30.4 / 30.1;
   the heavy boat's 67.0 / 73.2 with its first numbers. `vessels[].stats` in `get_readouts`; scratchpad-style
   `vessel_model.py` is the same model in Python, for trying numbers before they go into a mesh.json.
-- **The three roles** (written into the two mesh.json; small_yacht is as it was):
+- **The three roles** (written into the two mesh.json; small_yacht is as it was). The circle is flat out, so since the
+  side grip (the next section, 2026-11-12) it is the grip's; the circle under the rudder alone was 112 / 128 / 61 m:
 
-  | | weight | thrust | top | 20 kn in | circle | draft | in a sea |
-  |---|---|---|---|---|---|---|---|
-  | small_yacht, the all-rounder | 5.5 t | 22 kN | 31 kn | 4.1 s | 112 m | 0.38 m | out of the water 17-21 % of the open leg |
-  | police_boat, heavy and powerful | 7.5 t | 25.5 kN | 32 kn | 5.6 s | 128 m | 0.71 m | 1-8 %: it ploughs through |
-  | fast_boat_13, light and agile | 1.9 t | 9 kN | 32 kn | 3.1 s | 61 m | 0.39 m | 17-21 %, and it is thrown about (below) |
+  | | weight | thrust | top | 20 kn in | circle flat out | grip on the plane | draft | in a sea |
+  |---|---|---|---|---|---|---|---|---|
+  | small_yacht, the all-rounder | 5.5 t | 21.2 kN | 34.5 kn | 4.1 s | 162 m | 0.27 g | 0.38 m | out of the water 17-21 % of the open leg |
+  | police_boat, heavy and powerful | 7.5 t | 25.5 kN | 32 kn | 5.6 s | 172 m | 0.24 g | 0.71 m | 1-8 %: it ploughs through |
+  | fast_boat_13, light and agile | 1.9 t | 9 kN | 32 kn | 3.1 s | 117 m | 0.33 g | 0.39 m | 17-21 %, and it is thrown about (below) |
 
+  small_yacht (2026-11-12, owner: "raise small_yacht's top speed by 10 %"): its card's top speed 31.3 -> 34.5 kn by
+  `game::SolveCard` (MCP setBoatCard on a copy, the numbers read back and written into its mesh.json), the other bars held:
+  thrust 22000 -> 21200 N, surgeDrag 110 -> 87.56, rudderForce 120 -> 123.7.
   police_boat: mass 6500 -> 7500, thrust 27000 -> 25500, rudderForce 135 -> 125, throttleRate 0.45 (it had the
   default 1), humpDrag 7000 -> 10000, its trims, roll stiffness and slam scaled with the mass. fast_boat_13: surgeDrag
   26 -> 42 (it was a 41 kn boat that left the water), rudderForce 40 -> 60, throttleRate 1.6, and its propeller 0.2 m
@@ -1676,7 +1695,7 @@ it", then "teach the bot to take the characteristics into account so it drives a
   small_yacht 8.9 / 34 / 6 %; police_boat 9.1 / 31 / 8 %. A hand at its helm pays for that; a bot does not, much.
 - **The card** (`PlaySession::DrawBoatCard`, ImGui, takes no mouse and no key): on foot in Play, over every boat within
   16 m of its hull that is in the frame -- its name, length, weight and thrust, and four bars on one scale for every
-  boat, longer = better (top speed, acceleration "20 kn in 5.6 s", handling "a 128 m circle", sea keeping "7.5 t, 0.71 m
+  boat, longer = better (top speed, acceleration "20 kn in 5.6 s", handling "a 172 m circle flat out", sea keeping "7.5 t, 0.71 m
   deep"), "E take the helm" on the one E would take. Sea keeping is half the DRAFT (`VesselStats::draft`, of 0.8 m) and
   half the WEIGHT (of 8 t): a hull is out of the water -- no keel, no rudder -- when a wave has dropped away by about its
   draft (the share of the open leg out of the water follows it: 0.71 m 1-11 %, 0.38 and 0.39 m 17-22 % each), and a wave
@@ -1765,6 +1784,182 @@ it", then "teach the bot to take the characteristics into account so it drives a
 - Not there: a lane of its own for each boat (they all want one line: the pack rubs on lap 1), the sea in the bot's
   speed (it cannot buy grip with it; it could pick a line that needs less), a leg of the course tight enough to pay
   for the light boat's circle, a bot that suffers from its boat's roll as a hand does.
+
+## The Side Grip -- a Hull Lets Go on the Plane, and the Bot Learns Its Own
+
+2026-11-12 (owner, after winning every race holding the throttle down on the light boat: "make the boats' side grip fall
+with the speed, if physics allows; put it in the physics model and the characteristics' influence", then "teach the bot
+now"). Until then the rudder's push ((speed + wash)^2) and every force of the hull (speed^2) scaled alike, a boat's
+circle hardly changed with its speed, and braking for a bend bought nothing.
+
+- **The physics** (`PushVessel`, `VesselSettings::sideGrip` 0.6 g, `sideGripPlane` 0.45 of it on the plane; mesh.json
+  vessel keys, Inspector > Boat "Turning", `--set vessel.sideGrip*`): the net force across the hull -- the water on its
+  side and the rudder pushing its stern out -- is held to sideGrip x the weight, falling to sideGripPlane of it by the
+  planing share (humpSpeed -> planeSpeed), as a tyre's mu N: a planing hull bites with less of itself. N is the WEIGHT:
+  on the plane the water still carries all of it (the speed's lift the share the volume does not), so not times the
+  immersion (that measured 0.5-0.66 in a turn at speed and took a third off a second time); a hull leaving the water
+  (immersion under `kGripContact` 0.3) lets go with it. What a turn asks past it is taken back at the centre of mass:
+  the boat runs wide (understeer), the keel's moment kept, so it points along its wider path instead of spinning. 0 = no
+  limit (before). Physical: a displacement hull's side force grows with its speed squared and is never short; a planing
+  hull's is the lift that carries it, tilted -- bounded by its weight.
+- **What it does**: under `VesselStats::gripSpeed` (where the rudder's turn meets the grip, ~10-12 m/s here) the circle
+  is the rudder's and hardly changes with the speed; past it the grip's, v^2 / (g x sideGrip x sideGripPlane), growing as
+  the speed squared. So a boat brakes for a bend and powers on through it. The rudders were doubled with it (small_yacht
+  123.7 -> 247.4, police_boat 125 -> 250, fast_boat_13 60 -> 90): the grip now sets the circle flat out, and a boat slowed
+  for a hairpin turns as tight as a real one (the yacht at 0.35 throttle hard over: r 30-34 m at 4 m/s; flat out r 78 m in
+  a calm, 125 m in wind_test's sea). The model (`game::GripAccel`, `TurnRateAt`, VesselStats.cpp) equals the sim in a
+  calm to the metre (the yacht's circle flat out 90.5 / 90.5 m, fast_boat_13 83.0 / 82.9, before the rudder change;
+  scratchpad-style `grip_live.py`); a 1 m sea takes ~25-30 % of the grip (the hull out of the water), which the bot
+  measures (below). The card's Handling is the flat-out circle (`HandlingBar`: 75 m full, 250 m empty), and its drag
+  (`SolveCard`) moves the rudder force and the grip together by one factor.
+- **The bot** (`RaceBot`): (1) its line's speed in a bend is the fastest at which `bot.grip` of what the boat turns AT THAT
+  SPEED (`CanTurn`: the rudder's, or past gripSpeed the grip's) makes the bend (`TurnSpeed`); a bend tighter than it makes
+  at any speed is taken at the speed it turns tightest at. (2) The same for the turn it needs NOW, to its aim: a boat off
+  its line asks a tighter turn than the line does there, and flat out with the rudder over it only ran wider (the first
+  run of reef v2: 75 m outside the esses at 14 m/s, the line asking 17.5). (3) Over the line's speed it coasts even with
+  the rudder over -- the reach sees a bend 50 m off, so the rudder is over before the bend is, and "rudder hard over ->
+  full ahead" kept every boat at 15-17 m/s into T1 --, never astern (that takes the rudder's wash); full ahead in a hard
+  turn only under gripSpeed. (4) It MEASURES its grip (`Status::gripSeen`, `get_readouts` race bots[] `gripSeen`): with
+  the rudder hard over past gripSpeed, at a throttle whose rudder could turn it harder than the grip ever would, for 1.5 s,
+  the way's turn (velocity heading, not the bow: the hull slides 20-33 degrees) x the speed against the model's
+  GripAccel, followed over 4 s; the line's speeds follow it by steps of 0.04. Kept through a race's Reset. Reach and the
+  "straight" share use the circle at the CURRENT speed. `bot.holdThrottle:1` (the engine flat out, the bot steering) is the
+  control.
+- **Measured** (wind_test's 1 m sea, the four bots at their hardest, one lap at x4; scratchpad-style `track2_race.py`,
+  `race_trace.py` + `trace_show.py`): reef v2 laps 153-175 s, 4-7 gates missed a boat, none lost; classic 108-125 s,
+  0-4 missed; reef held flat out 138-164 s a lap but 9-11 missed and 1-2 put back each, 40-60 s worse with the penalties.
+  The first run of reef v2 with the grip and the old bot: 10-12 missed and every boat lost at T1 / the north carousel.
+  Still open: the bot plans on the model's rudder at full wash, and at ~10 m/s on part throttle the sim turns wider
+  (r ~65 against ~38); the misses left are in the esses and the shore's slalom.
+- **The bot's memory** (`game::BotMemory`, same day, owner: "a bot with saved knowledge", "make the table"): the TURN MAP, one
+  file per boat asset and level, `data/bot_memory/<level>/<boat>.json` (written when a race ends and when Play stops;
+  `RaceCourse::level` names the level; every bot at the helm of such a boat shares it): hard over for a second with the
+  power on (throttle 0.6 and over), the path's curvature at that speed (1 m/s bins, trusted after 3 s of samples), and
+  `RaceBot::CanTurn` takes it in for the model as far as it trusts it. It is the BOAT's (and the sea's), not a course's.
+  POWER ON ONLY: learned while coasting it said the boat turned wider than it does (no wash past the rudder), the bot
+  planned slower, coasted more and learned wider still -- its target under 7.5 m/s for 26-47 % of a reef lap. A COURSE
+  MEMORY (a factor on the line's speed every 10 m, down 6 % before a place it went 5 m wide or missed a gate, up 1.5 % for a
+  clean bin) was built the same day and taken out: five races of two laps on reef cut the misses (10-12 -> 2-9 a boat) and
+  slowed every lap (150-187 -> 165-190 s), lowering stretches where speed was not the cause; the bot plans by sight instead
+  (the next section). `bot.learn` (1; 0 = the model alone), `bot.forget:1` (the level's files emptied); `get_readouts`
+  race bots[] `memoryTrusted`. Gate: `intent_regression TestRaceCourseAndBot` (the map between its bins, its version, the
+  file round trip, a bot planning by a map of r 200). Trap: a range-for over `json.value(...).items()` of a temporary
+  dangles (an access violation in Load, found by the minidump's stack scan).
+- **reef v2** (same day, owner: "narrow the gates by 10 %, bend it harder, longer, harder corners", then the shore
+  section 50 m east, "the track is fine"): 20 gates, 18-23 m wide, the line 1797-1802 m, carousels north-west and south,
+  its tightest line r 32-33 m before gate 18. Saved in wind_test 2026-11-12 (the group "Race Track Reef", red).
+- **Gates**: physics `vessel` (flat out the hull holds its grip across its way, no more, and runs wider than at 0.45: r 72
+  / 41 m; the arm: without the grip 40 / 41 m), `intent_regression TestRaceCourseAndBot` (the grip sets the flat-out
+  circle, the rudder alone 0.76 of it; past gripSpeed the circle grows with the speed squared; SolveCard's circle moves
+  both).
+
+## The Bot Drives by Sight -- the Next Gates, Its Boat, the Others
+
+2026-11-12 (owner: "a bot that sees the next N gates, judges the situation and passes them as well as it can, so it does
+not learn each course", then "make the bot on sight of the gates, knowledge of its boat and sight of its rivals").
+`game::RacePlanner` (`sources/app/game/RacePlanner.*`, pure, its own checks), driven by `RaceBot::MakePlan`.
+
+- **The plan** (every `bot.planEvery` 0.1 s, at once when the gate ahead changes or the boat is past the plan's middle): a
+  path from where the boat IS -- its place, the way it moves (velocity, not bow), its speed -- through the next
+  `bot.planGates` (4) gates, a cubic Hermite through where it crosses each, the directions Catmull-Rom's scaled by each
+  piece's own chord (scaled by the neighbour's, the short piece from the boat to a near gate took an S-bend). Each crossing
+  is an offset in its gate's window: `halfWidth - (halfBeam + bot.planMargin)` (4.5 m), the gate it is about to cross
+  (within 60 m) `- (halfBeam + 1.5 m)` -- held to the margin there, a boat already safely inside the gate was dragged to its
+  edge in the last 30 m and braked to 5 m/s for the S. A gate its way carries it through inside the window within a second
+  (15 m) is passed as it goes and left out. Search: coordinate descent over the offsets from the last plan's (shifted by a
+  gate passed) and from the middles, every step halved, four sweeps (~35 paths a plan).
+- **Its cost** is time to the last gate plus penalties: speeds from the curvature (the boat's `SpeedFor`: a 64-entry log
+  table of `TurnSpeed` -- the model and its turn map --, rebuilt with the line), braked back from every slow place (its hull's
+  drag `0.77 surgeDrag v^2` and its engine 0.7 astern, x `bot.planBrake` 0.6: speed-dependent, a constant 1.9 m/s2 let a slow
+  bend come too late), accelerated forward from its speed now (`0.85 thrust/mass (1 - (v/top)^2)`); a bend past what it
+  makes at any speed (300 s per m per 1/m), a place it is too fast for (0.5 s per m per m/s), the first 6 m excepted (the
+  helm's: the way it moves now); RIVALS -- every other boat within 200 m run on at its velocity for 6 s, a place it reaches
+  when one will be there costs 1 s per m at full overlap, inside `0.5 (halfLengths) + halfBeams + bot.rivalClearance` (3 m);
+  and 0.2 s x (offset / window)^4 for a crossing at a window's very edge (on a circle the shortest path hugs every inner mark).
+  THE BUOYS are rivals that stand still and count all along the path (4 s per m at full overlap): the marks of the gates it
+  plans through and of the one before, at `halfBeam + 0.35 halfLength + 1.5 m` (a hull sliding 20 degrees sweeps wider
+  than its beam). Before them 10 of 13 knocks on a two-lap reef race were buoys 1-5 m from the hull's middle (the plan
+  only kept its crossings clear; between gates it cut over the next inner mark); with them 6 of 10, the time coming round
+  2-16 % -> 3-8 %. The gate it is about to cross takes `halfBeam + 3 m` (1.5 m hit marks).
+- **The helm by it**: pure pursuit on the plan (its reach without the off-the-line extension: the plan starts at the boat),
+  the bend for the slide from the plan's curvature, the target the plan's LIMIT half a second on (the most it may have
+  there: NOT the speed it expects to have, which is only a little over its speed now -- steered by that it never gave full
+  throttle). `TurnSpeed` (the line's and the plan's) goes down to the speed the boat turns tightest at (`recoverSpeed_`,
+  ~3.5-5 m/s by the turn map), not half its top speed: under its grip's reach a slower boat turns tighter, and bends it ran
+  wide of at 10-12 m/s with the rudder hard over were most of reef's misses. "The turn it needs now" (the pursuit's arc) is
+  the line's only (its old floor, half the top speed): with a plan it fired 29-49 % of a lap on the arc's wobble.
+- **Coming round** (owner: "a bot that hit a buoy tears off somewhere flat out instead of coming back carefully at low
+  speed"): pointing the wrong way against the COURSE where it is (its line's tangent there, over 75 degrees -- not its aim:
+  in a hairpin that lies 60-90 degrees off by design) or knocked (its speed 4 m/s under its half-second average) -> it aims at
+  the gate ahead itself (where its plan crosses it; 25 m before it if it is past it), at `recoverSpeed_`, power 0.5 and over
+  with the rudder hard over (the wash turns a crawling boat), out under 57 degrees to the course and 34 to that point.
+- **Readouts**: `get_readouts` race bots[] `planned`, `recovering`, `slowedBy` (c cap, p plan, l line, a the turn it needs
+  now, r coming round, j joining), `planSeconds`, `planPenalty`, `planOffset`; `bot.debug:1` draws every bot's plan (cyan,
+  lighter where fast). Knobs (`--set bot.*`, Developer Controls > Physics "Race bots"): plan (1; 0 = its line, the A/B),
+  planGates, planMargin, planEvery, planTurns (0), planBrake, rivalClearance, planLead (0.5), steerByRudder (0), turnPower
+  (0.6), turnPowerOver (3), gripLearn (1), planBrakeBend (0).
+- **Measured** (wind_test's 1 m sea, the four bots, one lap at x4, the camera on a bot; scratchpad-style `race_trace.py`
+  (MAXMISS stops a run that has gone wrong), `why_stats.py`, `misses.py`, `knocks.py`): reef v2 -- 0 / 1 / 0 missed (fast /
+  police / yacht), laps 168 / 181 / 172 s, two knocks, nothing in recovery long (the first plan of the day: 9 misses on four
+  boats; the line bot before the day's fixes 1-5 a boat; held flat out 9-11); classic -- 0 / 1 / 1, 115 / 131 / 151 s (the
+  yacht cautious, 10 m/s its plan's mean, three knocks in the pack). x1 against x4 the same within a race's own spread (classic
+  122-139 s against 118-155).
+- **Tuning for speed** (same night, owner: "tune for speed"). The margins are not the lever: two laps of reef with `bot.grip`
+  0.9 / 1.0 and `planBrake` 0.9 missed MORE (three of four arms stopped at 10 misses) and were no faster (161-186 s against
+  168-189). Choosing each gate's crossing DIRECTION too (`bot.planTurns`, +-20 degrees of the Catmull-Rom way, a second
+  parameter a gate for the descent) lost an A/B of six one-lap reef races, alternated: on 12+, 12+, 7 misses (two races
+  stopped), off 11, 3, 8 -- off by default, kept as the A/B. Where the misses are (53 over that series): gate 4 (T1's apex,
+  after the 400 m straight, lap 1's pack) 15, gates 3-7 (T1 and the esses) 31 in all, gate 18 (the line's r 32) 7. THE SPREAD
+  BETWEEN TWO RUNS OF ONE ARM (3 to 12+ misses, laps 173-232 s) IS LARGER THAN ANY CHANGE'S EFFECT: four boats in a pack on a
+  sea; judge a change by an alternated series, never by one race (a 0 / 1 / 0 lap earlier that night was luck). Laps on
+  reef 165-210 s, 1-3 misses a boat a lap; held flat out 138-164 s with 9-11.
+- **A time trial** (`race.solo:N`, 2026-11-12, owner: "build time trial"): `race.start:1` runs the N-th boat of the grid (1-4,
+  the fastest first) alone, the other bots' boats left where they lie -- a change of the bot measured without the pack, whose
+  spread swamped every change. Scratchpad-style `time_trial.py` (ARMS alternated, LAPS, BOATS, REPEATS; MAXMISS ends a trial
+  gone wrong; FORGET 1 = every trial from an empty turn map, or the arms teach each other through it; a trace a trial, read by
+  `incidents.py`: misses, knocks, seconds coming round and crawling). IT NAMES EVERY BOT KNOB AT ITS DEFAULT IN EVERY TRIAL:
+  `bot.*` survive `reset_settings`, and three series that night ran later arms with an earlier arm's `bot.gripLearn:0`,
+  `bot.planLead:1` or a since-dropped knob left set -- those arms were void. Solo is still noisy (laps 2+ of one
+  arm: sd 4-17 s; an incident -- a gate circled for, a knock -- costs 20-110 s), so two trials of three laps an arm and boat
+  is the least that reads.
+- **Power on in a hard turn** (`bot.turnPower` 0.6, `turnPowerOver` 3 m/s; 2026-11-12). Under gripSpeed these boats turn by the
+  propeller's wash past the rudder, (speed + wash sqrt(throttle))^2, and the helm coasted to the plan's speed with the rudder
+  hard over: the yacht, coasting at 5-9 m/s, made circles of 55-180 m (power on: 27-44 m, its turn map); about a target of
+  4 m/s its throttle went 0, 1, 0, 1 and it circled 25-37 m off its line for 10 s a gate -- three gates in a row after one
+  knock. Now hard over under gripSpeed the throttle never falls under 0.6 while the speed is under the target + 3 m/s (past it,
+  it still coasts: a boat that came in too fast slows first; coming round keeps its own rule). Measured (reef, 3 laps, two
+  trials an arm and boat, alternated, every knob named; laps 2+ mean s, misses a lap; seconds crawling under 6 m/s hard over a
+  trial): small_yacht 192.9 -> 175.2, 1.17 -> 0.83; fast_boat_13 171.7 -> 165.8, 1.17 -> 0.67; police_boat 186.8 -> 175.7,
+  1.17 -> 0.67; lap 1 205 / 226 / 186 -> 174 / 171 / 175; crawling ~105 -> ~34 s. `bot.turnPower:0` = before.
+- **Its grip, measured** (`gripSeen`, the night of 11-12): hard over with the power on (any throttle), over recoverSpeed + 2 m/s,
+  for a second -- the way's turn against the LESS of what the model gives there (the rudder at that throttle, the still-water
+  grip); the share comes into the grip only (CanTurn). Before, it asked for the speed past gripSpeed and the rudder 1.25 over the
+  grip for 1.5 s, and a planned bot was never there that long: the share stayed 1, and police_boat planned reef's T1 at 12 m/s
+  on a sea that gives three quarters of that grip, ran 10 m wide and hit the apex buoy. Reef's 1 m sea reads 0.77-0.89.
+  `bot.gripLearn:0` = the model's grip (the A/B; a clean series of it is still owed).
+- **Its engine's spool and its rudder's order** (single trials an arm, so read loosely): `bot.planLead` 1 (the least of the
+  plan's limits over the stretch it covers in half its throttle's swing from full ahead to astern) against 0 missed half as
+  many gates (0.67 / 0.33 / 0.67 against 1.33 / 0.67 / 1.67 a lap) and lapped 8-15 s slower; 0.5 is the default, between them,
+  not measured on its own. `bot.steerByRudder` (the rudder's order a share of the rudder's own turn at this speed, 1, or of
+  the grip's circle, 0; between in log): 0 / 0.5 / 1 -- the yacht 190 / 193 / 231 s, police_boat 211 / 220 / 181, fast_boat_13
+  the same -- no winner, 0 kept.
+- **Tried and dropped: giving a gate up** (`bot.giveUp`, the night of 11-12): when the plan through the gate ahead asked more
+  than the boat turns, the plan through the gates after it with the race's penalty for the miss, if cheaper. Weighed whenever
+  the plan's penalty passed 20 s it gave up 10-12 gates a lap -- T1's and the hairpin's, gates it then made -- and missed more;
+  on the geometric share alone, with the gate behind it, it fired 0-3 times a trial and lapped no better (police_boat
+  191 s / 1.33 misses against 176 / 0.67). A boat past a gate it did not cross is the race's already: 30 m on, the miss counts.
+- **What is left** (the clean series, turnPower on): gate 4, T1's apex at the end of the 400 m straight, missed in most
+  trials -- the boat brakes from 16 m/s to 12-13 by gate 3, the rudder goes hard over before it is slow enough (the reach sees
+  the bend), it coasts, and runs 15-20 m outside the apex at 6-8 m/s with the rudder hard over. Its plan brakes as if the
+  engine went astern; with the rudder over the helm only coasts. `bot.planBrakeBend` 1 makes the plan count no engine braking
+  where the helm's rudder will be over (the bend within its reach asking over 0.17 of what the boat turns there, none past 0.4;
+  RacePlan's PlanBoat::turnAt, a table by speed from the speed table): A/B (the same series' shape) 0 / 1 / planBrake 0.4 --
+  misses a lap 1.05 / 0.78 / 1.06, gate 4 missed 5 / 2 / 2 times in six trials, laps 2+ 173 / 182 / 183 s (the yacht faster
+  with it, 181 -> 173, fast_boat_13 and police_boat 15-19 s slower). Off by default; the miss there is a cost of its speed.
+- **Gates**: `intent_regression TestRaceCourseAndBot` -- the planner: a straight row straight through; a right angle faster
+  through the gates' width than their middles; from 16 m/s it brakes for it; into a hairpin it cannot brake for at 16 m/s a
+  penalty, at 8 less; a boat lying in the next gate's middle passed on one side, one far off costs nothing; the toy boat's two
+  laps through every gate (its slip 0: a toy hull does not slide).
 
 ## The World's Clock Runs Faster -- frame.timeScale
 

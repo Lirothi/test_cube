@@ -331,7 +331,7 @@ void PlaySession::DrawBoatCard(Scene& scene)
         row("Top speed", game::TopSpeedBar(stats.topSpeed), value);
         std::snprintf(value, sizeof(value), "20 kn in %.1f s", stats.toPlane);
         row("Acceleration", game::AccelerationBar(stats.toPlane), value);
-        std::snprintf(value, sizeof(value), "a %.0f m circle", 2.0f * stats.turnRadius);
+        std::snprintf(value, sizeof(value), "a %.0f m circle flat out", 2.0f * stats.turnRadius);
         row("Handling", game::HandlingBar(2.0f * stats.turnRadius), value);
         // In a sea: how deep it sits and how heavy it is, half each. A hull is out of the water -- no keel, no rudder --
         // when a wave has dropped away by about its draft (wind_test's open leg: 0.71 m is out 1-11 % of the time, 0.38-0.39 m

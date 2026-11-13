@@ -611,6 +611,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     }
 
+    raceCourse.level = sourcePath_;
     ctx.scene.SetLevelRaceCourse(std::move(raceCourse));
 
 #if WITH_EDITOR

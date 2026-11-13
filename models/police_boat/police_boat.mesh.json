@@ -82,7 +82,8 @@
       0.0
     ],
     "rollStiffness": 71000.0,
-    "rudderForce": 125.0,
+    "rudderForce": 250.0,
+    "sideGripPlane": 0.4,
     "slam": 1950.0,
     "surgeDrag": 120.0,
     "swayDrag": 2800.0,

@@ -47,7 +47,9 @@
       0.1,
       0.0
     ],
-    "thrust": 22000.0
+    "rudderForce": 247.4,
+    "surgeDrag": 87.56,
+    "thrust": 21200.0
   },
   "waterMask": true,
   "windFoliage": [

@@ -23,6 +23,7 @@ namespace physics
         constexpr float kSlamFrom = 0.5f;         // m/s: slower than this a hull just settles
         constexpr float kImpactFade = 0.25f;      // s
         constexpr float kCalmTau = 0.3f;          // s: VesselWater::calmAcross
+        constexpr float kGripContact = 0.3f;      // of its resting immersion: under it the hull is leaving the water, and its side grip goes with it
 
         float MoveToward(float value, float target, float step)
         {
@@ -228,9 +229,24 @@ namespace physics
         const float planing = SmoothStep(settings.humpSpeed, settings.planeSpeed, ahead);
         const float humpOff = (ahead - settings.humpSpeed) / std::max(0.5f * settings.humpSpeed, 0.01f);
         const float surgeForce = -settings.surgeDrag * u * std::fabs(u) - settings.humpDrag * rising * std::exp(-humpOff * humpOff);
-        const float swayForce = -(settings.swayDrag * std::fabs(sway) + settings.swayLinear) * sway;
+        const float side = -(settings.swayDrag * std::fabs(sway) + settings.swayLinear) * sway * wet;
         body.AddImpulse(forward * (surgeForce * wet * dt));
-        body.AddImpulse(starboard * (swayForce * wet * dt), centre - forward * (settings.swayLever * scale.x));
+        body.AddImpulse(starboard * (side * dt), centre - forward * (settings.swayLever * scale.x));
+        // The grip across its way (sideGrip, as a tyre's mu N): the net force across the hull -- the water on its side and the
+        // rudder pushing its stern out -- is held to a share of its weight, less on the plane, where less of the hull bites.
+        // N is the weight: on the plane the water still carries all of it, the speed's lift the share the volume does not (so
+        // not times `wet`, which measured 0.5-0.66 in a turn at speed and took a third of the grip off a second time); a hull
+        // leaving the water (`wet` under kGripContact) lets go with it. What a turn asks past it is taken back at the centre of
+        // mass: the boat runs wide of its turn (the keel's moment kept, so it points along its wider path instead of
+        // spinning). A boat's circle then grows with its speed squared: a bend a held throttle runs wide of is taken tight
+        // after a lift.
+        if (settings.sideGrip > 0.0f)
+        {
+            const float contact = std::min(wet / kGripContact, 1.0f);
+            const float most = settings.sideGrip * (1.0f - (1.0f - settings.sideGripPlane) * planing) * weight * contact;
+            const float net = side + across;
+            if (std::fabs(net) > most) { body.AddImpulse(starboard * ((std::copysign(most, net) - net) * dt), centre); }
+        }
         body.AddImpulse(JPH::Vec3::sAxisY() * (settings.planingLift * planing * weight * wet * dt));
         const float yawTorque = -(settings.yawDrag * std::fabs(yawRate) + settings.yawLinear) * yawRate;
         // The trim is the water's push on the fore part of the bottom -- a planing hull's pressure lies under it -- so it takes the bow's own immersion: a bow lifted out of the water has nothing

@@ -334,6 +334,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
             const bool hasStart = !request.fromCamera && editorController_.FindPlayerStart(start);
             game::RaceCourse course;
             editorController_.FindRaceCourse(course);
+            course.level = std::string(scene.LevelRaceCourse().level); // the document has no file of its own: the loaded level's
             editorOpenBeforePlay_ = editorController_.IsOpen();
             editorController_.SetOpen(false);
             playSession_.Begin(renderer, scene, input, hasStart ? &start : nullptr, &course, request.takeMouse, !fromBoot);
@@ -389,6 +390,7 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
     const bool hasStart = editorController_.FindPlayerStart(start);
     game::RaceCourse course;
     editorController_.FindRaceCourse(course);
+    course.level = std::string(scene.LevelRaceCourse().level);
     if (!playSession_.OnLevelLoaded(renderer, scene, input, hasStart ? &start : nullptr, &course))
     {
         editorController_.SetOpen(editorOpenBeforePlay_);

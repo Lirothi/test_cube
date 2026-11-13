@@ -87,6 +87,7 @@ namespace game
             { "missPenalty", "Missed gate penalty (s)", "Added to a racer's time for a gate it went round just outside a mark. It grows with how far from the gate's middle the boat went by: twice the gate's half width off costs twice this, five times at the most.", &S::missPenalty, 0.1f, 0.0f, 60.0f, "%.1f" },
             { "track", "Course (race.start)", "Which of the level's courses a race started by a script runs: 0 = the first (the unnamed one), then the named ones by name. A boat driven into a course's start zone picks that course itself.", &S::track, 1.0f, 0.0f, 15.0f, "%.0f" },
             { "watch", "Watch a bot", "The camera chases this racer -- its place on the grid, 1 to 4 (outside a race the N-th boat with a bot). 0 = off. Not while you hold a helm.", &S::watch, 1.0f, 0.0f, 4.0f, "%.0f" },
+            { "solo", "Time trial: one boat", "1 to 4: the next race puts only that boat with a bot on the grid (fastest first, as the grid would have them) -- a time trial, its laps with no rivals in its way; the others go back where the level has them. 0 = everyone.", &S::solo, 1.0f, 0.0f, 4.0f, "%.0f" },
         };
         return keys;
     }
@@ -103,6 +104,7 @@ namespace game
     void Race::Begin(const RaceCourse& course)
     {
         Forget();
+        level_ = course.level;
         active_ = true;
         for (const std::string& name : course.TrackNames())
         {
@@ -134,11 +136,17 @@ namespace game
 
     void Race::End(physics::World& world)
     {
+        SaveBotMemories(); // what the bots learned this session
         for (Entry& entry : bots_)
         {
             if (entry.vessel && entry.live) { world.SetPilot(entry.vessel, nullptr); }
         }
         Forget();
+    }
+
+    BotMemory* Race::MemoryOf(const RenderableObject* vessel) const
+    {
+        return vessel ? &BotMemoryFor(level_, vessel->GetGeometryPath()) : nullptr;
     }
 
     void Race::Forget()
@@ -281,6 +289,23 @@ namespace game
             const physics::VesselHull* hb = HullOf(b->vessel);
             return (ha ? TopSpeed(*ha) : 0.0f) > (hb ? TopSpeed(*hb) : 0.0f);
         });
+        // A time trial (race.solo): that one boat; the others go back where the level has them, off the course.
+        const int solo = static_cast<int>(std::lround(settings.solo));
+        if (solo >= 1 && !playerRaces_ && solo <= static_cast<int>(rivals.size()))
+        {
+            Entry* trial = rivals[static_cast<std::size_t>(solo - 1)];
+            for (Entry* entry : rivals)
+            {
+                if (entry == trial) { continue; }
+                const physics::VesselHull* hull = HullOf(entry->vessel);
+                const float away = hull ? std::atan2(hull->forward.x, hull->forward.z) : 0.0f;
+                const float draft = hull && hull->settings ? hull->settings->draft * hull->scale.y : 0.4f;
+                world.PlaceVessel(entry->vessel, Math::float3(entry->where.x, seaLevel_ - draft, entry->where.z), away);
+                entry->bot.Reset();
+            }
+            rivals.assign(1, trial);
+            LOG_INFO(logging::LogCategory::App, "race: a time trial, {} alone", trial->name);
+        }
         // Each bot its level: the one asked for, or one of each -- which boat has which turns by one every race.
         const int asked = static_cast<int>(std::lround(settings.difficulty));
         int index = 0;
@@ -456,6 +481,11 @@ namespace game
         lastDelta_ = deltaTime;
         world.CollectHulls(hulls_);
         const BotSettings& settings = BotSettingsRef();
+        if (settings.forget >= 0.5f)
+        {
+            BotSettingsRef().forget = 0.0f;
+            ForgetBotMemories(level_);
+        }
         pulse_ += deltaTime;
         if (!hulls_.empty())
         {
@@ -487,6 +517,7 @@ namespace game
             helmDriven_ = true;
             helmAt = Math::float2(hull.position.x, hull.position.z);
             const bool drive = autopilot_ && phase_ != Phase::Countdown && !(player && player->finish >= 0.0f);
+            helmBot_.SetMemory(MemoryOf(hull.object));
             if (sound && drive) { Sound(world, helmBot_, hull); }
             helmOrder_ = helmBot_.Tick(track_, hull, deltaTime, drive, &hulls_);
         }
@@ -586,6 +617,7 @@ namespace game
             if (decided)
             {
                 phase_ = Phase::Finished;
+                SaveBotMemories();
                 sinceFinish_ = 0.0f;
                 resultsOpen_ = true;
                 resultsFresh_ = true;
@@ -638,6 +670,7 @@ namespace game
                 world.SetPilot(entry.vessel, &idle);
                 continue;
             }
+            entry.bot.SetMemory(MemoryOf(entry.vessel));
             if (sound && drive) { Sound(world, entry.bot, *hull); }
             const physics::VesselInput order = entry.bot.Tick(track_, *hull, deltaTime, drive, &hulls_);
             world.SetPilot(entry.vessel, &order);
@@ -868,10 +901,10 @@ namespace game
             const RaceBot::Status& s = bot.GetStatus();
             std::snprintf(item, sizeof(item),
                           "%s{\"vessel\":\"%s\",\"state\":\"%s\",\"lap\":%d,\"started\":%s,\"nextGate\":%d,\"passed\":%d,\"missed\":%d,\"station\":%.1f,\"length\":%.1f,\"speed\":%.2f,"
-                          "\"target\":%.2f,\"slowest\":%.2f,\"lineRadius\":%.1f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
+                          "\"target\":%.2f,\"slowest\":%.2f,\"lineRadius\":%.1f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"gripSeen\":%.3f,\"memoryTrusted\":%d,\"planned\":%s,\"recovering\":%s,\"slowedBy\":\"%c\",\"planSeconds\":%.2f,\"planPenalty\":%.2f,\"planOffset\":%.2f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
                           "\"lastLap\":%.2f,\"bestLap\":%.2f,\"throttle\":%.3f,\"rudder\":%.3f,\"position\":[%.2f,%.2f,%.2f]}",
                           comma ? "," : "", name, RaceBotStateName(static_cast<unsigned char>(s.state)), s.lap, s.started ? "true" : "false", s.nextGate, s.gatesPassed,
-                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), bot.Line().TightestRadius(), s.tightestRadius, s.airborne,
+                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), bot.Line().TightestRadius(), s.tightestRadius, s.airborne, s.gripSeen, s.memoryTrusted, s.planned ? "true" : "false", s.recovering ? "true" : "false", s.slowedBy, s.planSeconds, s.planPenalty, s.planOffset,
                           std::min(s.depthAhead, 999.0f), s.shoal ? "true" : "false", s.crossTrack, s.lapSeconds, s.lastLap, s.bestLap, s.order.throttle,
                           s.order.rudder, position.x, position.y, position.z);
             out += item;
@@ -995,6 +1028,26 @@ namespace game
             const Math::float2& b = points[(i + 1) % points.size()];
             const float fast = std::clamp(line.SpeedAt(i) / top, 0.0f, 1.0f);
             draw.AddLine(Math::float3(a.x, y, a.y), Math::float3(b.x, y, b.y), Math::float4(1.0f - fast, fast, 0.1f, 1.0f));
+        }
+        // Every bot's plan (RacePlanner): what it sees ahead, cyan, lighter where it is fast.
+        const auto planOf = [&draw, y](const RaceBot& planner)
+        {
+            const RacePlan* plan = planner.Plan();
+            if (!plan) { return; }
+            float fastest = 1.0f;
+            for (const float v : plan->speed) { fastest = std::max(fastest, v); }
+            for (std::size_t i = 0; i + 1 < plan->points.size(); ++i)
+            {
+                const float fast = std::clamp(plan->speed[i] / fastest, 0.0f, 1.0f);
+                const Math::float2& a = plan->points[i];
+                const Math::float2& b = plan->points[i + 1];
+                draw.AddLine(Math::float3(a.x, y + 0.3f, a.y), Math::float3(b.x, y + 0.3f, b.y), Math::float4(0.1f, 0.4f + 0.6f * fast, 1.0f, 1.0f));
+            }
+        };
+        if (helmDriven_) { planOf(helmBot_); }
+        for (const Entry& entry : bots_)
+        {
+            if (entry.live) { planOf(entry.bot); }
         }
         const Math::float2 aim = bot->GetStatus().aim;
         draw.AddLine(Math::float3(aim.x, y, aim.y), Math::float3(aim.x, y + 3.0f, aim.y), Math::float4(1.0f, 1.0f, 0.2f, 1.0f));

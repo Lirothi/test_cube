@@ -16,6 +16,8 @@ namespace game
         float turnRate = 0.0f;     // rad/s there
         float turnRadius = 0.0f;   // m: its circle
         float lateralAccel = 0.0f; // m/s2 across its way in that turn: what a bend may ask of it
+        float gripSpeed = 0.0f;    // m/s where its rudder's turn meets its grip: slower it turns no tighter (the rudder's circle hardly
+                                   // changes with the speed), faster it runs wide (its grip's, the speed squared). Its top speed if it never lets go
         float braking = 0.0f;      // m/s2 it loses at its top speed with the engine off
         float mass = 0.0f;         // kg
         float thrust = 0.0f;       // N
@@ -41,7 +43,8 @@ namespace game
     // The bars' lengths, one scale for every boat, longer = better (the card's and the Inspector's).
     inline float TopSpeedBar(float topSpeed) { return topSpeed * 1.94384f / 45.0f; }
     inline float AccelerationBar(float toPlane) { return (7.0f - toPlane) / 5.0f; }
-    inline float HandlingBar(float circle) { return (95.0f - 0.5f * circle) / 75.0f; }
+    // Flat out, so its grip's circle since the side grip (2026-11-12): 75 m full, 250 m empty (fast_boat_13 126, the yacht 181).
+    inline float HandlingBar(float circle) { return (250.0f - circle) / 175.0f; }
     VesselCard CardOf(const physics::VesselSettings& boat, float halfLength, float rudderLever, float draft);
     // The other way (owner, 2026-11-11: "I want to drag the card's characteristics; if one moves a set of parameters,
     // that must happen by itself"): the numbers that make the card read `want`, from `boat` as it is. Each bar has its
@@ -50,8 +53,13 @@ namespace game
     // say, so one bar dragged leaves the other three where they were (the heavier boat gets the thrust and the rudder that
     // keep its acceleration and its circle). A bar out of reach stops at its number's range. Returns what it reached.
     VesselCard SolveCard(physics::VesselSettings& boat, float halfLength, float rudderLever, float draft, const VesselCard& want);
-    // The rate (rad/s) it turns at in a steady turn at a speed, full ahead and hard over.
+    // The rate (rad/s) its rudder turns it at in a steady turn at a speed, full ahead and hard over.
     float SteadyTurnRate(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed);
+    // m/s2: the most its hull holds across its way at a speed (VesselSettings::sideGrip, less on the plane; PushVessel's limit).
+    float GripAccel(const physics::VesselSettings& boat, float speed);
+    // The rate it turns at in a steady turn at a speed: its rudder's, or its grip's (GripAccel / speed) where that is less --
+    // past it the boat runs wide. What a boat can do; the bot's rudder is a share of it.
+    float TurnRateAt(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed);
     // The angle (rad) between its bow and its way in a steady turn of that curvature (1/m) at a speed: the hull slides,
     // bow inside its path. A curvature past what it turns at that speed counts as its tightest.
     float SlipAngle(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed, float curvature);

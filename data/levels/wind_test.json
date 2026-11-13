@@ -38299,13 +38299,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3576,
+      "id": 3735,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 021",
       "position": [
-        320.760009765625,
+        342.8699951171875,
         -0.30000001192092896,
-        -93.58000183105469
+        -103.80999755859375
       ],
       "raceGate": 1,
       "raceTrack": "reef",
@@ -38325,13 +38325,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3577,
+      "id": 3736,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 022",
       "position": [
-        346.7300109863281,
+        366.25,
         -0.30000001192092896,
-        -94.77999877929688
+        -104.72000122070313
       ],
       "raceGate": 1,
       "raceTrack": "reef",
@@ -38351,13 +38351,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3578,
+      "id": 3737,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 023",
       "position": [
-        330.3500061035156,
+        350.5400085449219,
         -0.30000001192092896,
-        91.94999694824219
+        69.86000061035156
       ],
       "raceGate": 2,
       "raceTrack": "reef",
@@ -38377,13 +38377,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3579,
+      "id": 3738,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 024",
       "position": [
-        354.3299865722656,
+        372.1199951171875,
         -0.30000001192092896,
-        90.83999633789063
+        69.0199966430664
       ],
       "raceGate": 2,
       "raceTrack": "reef",
@@ -38403,13 +38403,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3580,
+      "id": 3739,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 025",
       "position": [
-        337.5199890136719,
+        355.17999267578125,
         -0.30000001192092896,
-        253.47999572753906
+        205.47000122070313
       ],
       "raceGate": 3,
       "raceTrack": "reef",
@@ -38429,13 +38429,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3581,
+      "id": 3740,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 026",
       "position": [
-        359.1600036621094,
+        374.57000732421875,
         -0.30000001192092896,
-        257.44000244140625
+        209.49000549316406
       ],
       "raceGate": 3,
       "raceTrack": "reef",
@@ -38455,13 +38455,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3582,
+      "id": 3741,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 027",
       "position": [
-        324.07000732421875,
+        329.32000732421875,
         -0.30000001192092896,
-        281.1300048828125
+        241.5500030517578
       ],
       "raceGate": 4,
       "raceTrack": "reef",
@@ -38481,13 +38481,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3583,
+      "id": 3742,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 028",
       "position": [
-        338.19000244140625,
+        337.8599853515625,
         -0.30000001192092896,
-        295.2900085449219
+        257.3900146484375
       ],
       "raceGate": 4,
       "raceTrack": "reef",
@@ -38507,13 +38507,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3584,
+      "id": 3743,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 029",
       "position": [
-        296.3800048828125,
+        287.94000244140625,
         -0.30000001192092896,
-        294.5
+        244.39999389648438
       ],
       "raceGate": 5,
       "raceTrack": "reef",
@@ -38533,13 +38533,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3585,
+      "id": 3744,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 030",
       "position": [
-        300.2799987792969,
+        281.7699890136719,
         -0.30000001192092896,
-        316.1499938964844
+        263.2200012207031
       ],
       "raceGate": 5,
       "raceTrack": "reef",
@@ -38559,13 +38559,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3586,
+      "id": 3745,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 031",
       "position": [
-        232.7899932861328,
+        238.25999450683594,
         -0.30000001192092896,
-        302.04998779296875
+        231.97999572753906
       ],
       "raceGate": 6,
       "raceTrack": "reef",
@@ -38585,13 +38585,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3587,
+      "id": 3746,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 032",
       "position": [
-        237.55999755859375,
+        238.94000244140625,
         -0.30000001192092896,
-        323.5299987792969
+        249.97000122070313
       ],
       "raceGate": 6,
       "raceTrack": "reef",
@@ -38611,13 +38611,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3588,
+      "id": 3747,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 033",
       "position": [
-        138.5500030517578,
+        180.10000610351563,
         -0.30000001192092896,
-        331.5799865722656
+        263.2900085449219
       ],
       "raceGate": 7,
       "raceTrack": "reef",
@@ -38637,13 +38637,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3589,
+      "id": 3748,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 034",
       "position": [
-        140.91000366210938,
+        194.72999572753906,
         -0.30000001192092896,
-        353.45001220703125
+        273.760009765625
       ],
       "raceGate": 7,
       "raceTrack": "reef",
@@ -38663,13 +38663,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3590,
+      "id": 3749,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 035",
       "position": [
-        98.22000122070313,
+        146.63999938964844,
         -0.30000001192092896,
-        324.5400085449219
+        354.3699951171875
       ],
       "raceGate": 8,
       "raceTrack": "reef",
@@ -38689,13 +38689,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3591,
+      "id": 3750,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 036",
       "position": [
-        87.2300033569336,
+        159.30999755859375,
         -0.30000001192092896,
-        343.6000061035156
+        367.1400146484375
       ],
       "raceGate": 8,
       "raceTrack": "reef",
@@ -38715,13 +38715,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3592,
+      "id": 3751,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 037",
       "position": [
-        71.77999877929688,
+        61.72999954223633,
         -0.30000001192092896,
-        290.8800048828125
+        375.5
       ],
       "raceGate": 9,
       "raceTrack": "reef",
@@ -38741,13 +38741,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3593,
+      "id": 3752,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 038",
       "position": [
-        52.349998474121094,
+        54.630001068115234,
         -0.30000001192092896,
-        295.6600036621094
+        393.9800109863281
       ],
       "raceGate": 9,
       "raceTrack": "reef",
@@ -38767,13 +38767,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3594,
+      "id": 3753,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 039",
       "position": [
-        79.5999984741211,
+        24.239999771118164,
         -0.30000001192092896,
-        248.8000030517578
+        321.489990234375
       ],
       "raceGate": 10,
       "raceTrack": "reef",
@@ -38793,13 +38793,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3595,
+      "id": 3754,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 040",
       "position": [
-        61.029998779296875,
+        4.440000057220459,
         -0.30000001192092896,
-        237.00999450683594
+        321.989990234375
       ],
       "raceGate": 10,
       "raceTrack": "reef",
@@ -38819,13 +38819,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3596,
+      "id": 3755,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 041",
       "position": [
-        110.75,
+        47.2599983215332,
         -0.30000001192092896,
-        199.07000732421875
+        274.75
       ],
       "raceGate": 11,
       "raceTrack": "reef",
@@ -38845,13 +38845,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3597,
+      "id": 3756,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 042",
       "position": [
-        95.01000213623047,
+        35.59000015258789,
         -0.30000001192092896,
-        186.74000549316406
+        258.75
       ],
       "raceGate": 11,
       "raceTrack": "reef",
@@ -38871,13 +38871,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3598,
+      "id": 3757,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 043",
       "position": [
-        158.97000122070313,
+        165.8699951171875,
         -0.30000001192092896,
-        137.57000732421875
+        197.8300018310547
       ],
       "raceGate": 12,
       "raceTrack": "reef",
@@ -38897,13 +38897,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3599,
+      "id": 3758,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 044",
       "position": [
-        144.52000427246094,
+        154.02999877929688,
         -0.30000001192092896,
-        123.75
+        184.27999877929688
       ],
       "raceGate": 12,
       "raceTrack": "reef",
@@ -38923,13 +38923,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3600,
+      "id": 3759,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 045",
       "position": [
-        212.1300048828125,
+        212.6300048828125,
         -0.30000001192092896,
-        72.94000244140625
+        132.91000366210938
       ],
       "raceGate": 13,
       "raceTrack": "reef",
@@ -38949,13 +38949,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3601,
+      "id": 3760,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 046",
       "position": [
-        192.82000732421875,
+        198.75,
         -0.30000001192092896,
-        67.75
+        121.44999694824219
       ],
       "raceGate": 13,
       "raceTrack": "reef",
@@ -38975,13 +38975,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3602,
+      "id": 3761,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 047",
       "position": [
-        211.22999572753906,
+        263.4100036621094,
         -0.30000001192092896,
-        -8.40999984741211
+        66.47000122070313
       ],
       "raceGate": 14,
       "raceTrack": "reef",
@@ -39001,13 +39001,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3603,
+      "id": 3762,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 048",
       "position": [
-        191.22999572753906,
+        245.69000244140625,
         -0.30000001192092896,
-        -8.300000190734863
+        63.27000045776367
       ],
       "raceGate": 14,
       "raceTrack": "reef",
@@ -39027,13 +39027,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3604,
+      "id": 3763,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 049",
       "position": [
-        205.49000549316406,
+        259.4700012207031,
         -0.30000001192092896,
-        -89.88999938964844
+        -13.0
       ],
       "raceGate": 15,
       "raceTrack": "reef",
@@ -39053,13 +39053,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3605,
+      "id": 3764,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 050",
       "position": [
-        186.88999938964844,
+        241.5399932861328,
         -0.30000001192092896,
-        -82.55000305175781
+        -11.4399995803833
       ],
       "raceGate": 15,
       "raceTrack": "reef",
@@ -39079,13 +39079,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3606,
+      "id": 3765,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 051",
       "position": [
-        180.58999633789063,
+        237.52000427246094,
         -0.30000001192092896,
-        -135.7899932861328
+        -99.04000091552734
       ],
       "raceGate": 16,
       "raceTrack": "reef",
@@ -39105,13 +39105,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3607,
+      "id": 3766,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 052",
       "position": [
-        161.2899932861328,
+        219.55999755859375,
         -0.30000001192092896,
-        -130.57000732421875
+        -97.83999633789063
       ],
       "raceGate": 16,
       "raceTrack": "reef",
@@ -39131,13 +39131,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3608,
+      "id": 3767,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 053",
       "position": [
-        174.1300048828125,
+        251.44000244140625,
         -0.30000001192092896,
-        -222.75
+        -172.13999938964844
       ],
       "raceGate": 17,
       "raceTrack": "reef",
@@ -39157,13 +39157,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3609,
+      "id": 3768,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 054",
       "position": [
-        153.50999450683594,
+        233.52000427246094,
         -0.30000001192092896,
-        -230.42999267578125
+        -170.4199981689453
       ],
       "raceGate": 17,
       "raceTrack": "reef",
@@ -39183,13 +39183,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3610,
+      "id": 3769,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 055",
       "position": [
-        207.75,
+        230.49000549316406,
         -0.30000001192092896,
-        -253.92999267578125
+        -257.3399963378906
       ],
       "raceGate": 18,
       "raceTrack": "reef",
@@ -39209,13 +39209,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3611,
+      "id": 3770,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 056",
       "position": [
-        201.6300048828125,
+        211.5399932861328,
         -0.30000001192092896,
-        -275.05999755859375
+        -263.0899963378906
       ],
       "raceGate": 18,
       "raceTrack": "reef",
@@ -39235,13 +39235,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3612,
+      "id": 3771,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 057",
       "position": [
-        251.6300048828125,
+        309.3900146484375,
         -0.30000001192092896,
-        -250.63999938964844
+        -289.8900146484375
       ],
       "raceGate": 19,
       "raceTrack": "reef",
@@ -39261,13 +39261,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3613,
+      "id": 3772,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 058",
       "position": [
-        261.19000244140625,
+        318.19000244140625,
         -0.30000001192092896,
-        -270.4599914550781
+        -307.6300048828125
       ],
       "raceGate": 19,
       "raceTrack": "reef",
@@ -39287,13 +39287,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3614,
+      "id": 3773,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 059",
       "position": [
-        318.95001220703125,
+        342.1199951171875,
         -0.30000001192092896,
-        -161.66000366210938
+        -169.2899932861328
       ],
       "raceGate": 20,
       "raceTrack": "reef",
@@ -39313,13 +39313,13 @@
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
-      "id": 3615,
+      "id": 3774,
       "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
       "name": "ocean_buoy_node_Object_2 060",
       "position": [
-        340.5199890136719,
+        361.9100036621094,
         -0.30000001192092896,
-        -165.9499969482422
+        -170.0
       ],
       "raceGate": 20,
       "raceTrack": "reef",

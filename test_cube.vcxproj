@@ -322,7 +322,9 @@
     <ClCompile Include="sources/app/game/PlayerController.cpp" />
     <ClCompile Include="sources/app/game/PlaySession.cpp" />
     <ClCompile Include="sources/app/game/Race.cpp" />
+    <ClCompile Include="sources/app/game/BotMemory.cpp" />
     <ClCompile Include="sources/app/game/RaceBot.cpp" />
+    <ClCompile Include="sources/app/game/RacePlanner.cpp" />
     <ClCompile Include="sources/app/game/RaceTrack.cpp" />
     <ClCompile Include="sources/app/game/VesselStats.cpp" />
     <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp" />
@@ -602,7 +604,9 @@
     <ClInclude Include="sources/app/game/PlayerController.h" />
     <ClInclude Include="sources/app/game/PlaySession.h" />
     <ClInclude Include="sources/app/game/Race.h" />
+    <ClInclude Include="sources/app/game/BotMemory.h" />
     <ClInclude Include="sources/app/game/RaceBot.h" />
+    <ClInclude Include="sources/app/game/RacePlanner.h" />
     <ClInclude Include="sources/app/game/RaceCourse.h" />
     <ClInclude Include="sources/app/game/RaceCourseJson.h" />
     <ClInclude Include="sources/app/game/RaceTrack.h" />

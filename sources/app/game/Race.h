@@ -42,6 +42,8 @@ namespace game
                                     // a boat driven into a course's start zone picks that one itself
         float watch = 0.0f;         // the camera chases this racer (its place on the grid, 1..4; outside a race the N-th boat with a
                                     // bot); 0 = off. To watch a bots' race (owner, 2026-11-11: "hang the camera on one of the bots")
+        float solo = 0.0f;          // 1-4: the next race puts only that boat with a bot on the grid (fastest first, as the grid would): a time
+                                    // trial, no rivals; the others go back where the level has them. 0 = everyone (owner, 2026-11-12: "build the time trial")
     };
     RaceSettings& RaceSettingsRef();
 
@@ -151,6 +153,8 @@ namespace game
         std::size_t ZoneAt(const Math::float2& point) const;
 
         void Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const;
+        // Its boat's memory on this level (game::BotMemoryFor), what every bot at the helm of such a boat learns into.
+        BotMemory* MemoryOf(const RenderableObject* vessel) const;
         const physics::VesselHull* HullOf(const RenderableObject* vessel) const;
         void StartRace(physics::World& world);
         void StopRace(physics::World& world, const char* why);
@@ -166,6 +170,7 @@ namespace game
         std::vector<const Racer*> Standing() const;
 
         std::vector<Course> courses_;
+        std::string level_;      // RaceCourse::level: whose bot memories
         std::size_t current_ = 0;
         RaceTrack track_;        // courses_[current_]'s
         RaceStart start_;

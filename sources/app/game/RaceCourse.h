@@ -32,6 +32,7 @@ namespace game
     {
         std::vector<RaceMark> marks;
         std::vector<Math::float3> bots; // where the boats a bot helms stand in the level
+        std::string level;              // the level's file: whose bot memories (game::BotMemory) its races read and write
         bool Empty() const { return marks.empty() && bots.empty(); }
         // Its courses' names: the unnamed one first, then the others by name.
         std::vector<std::string> TrackNames() const
