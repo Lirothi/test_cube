@@ -51,15 +51,21 @@ void Camera::UpdateFromInput(InputManager& input, float dt, bool mouseLook) {
     }
     TakeOwedLook(dt);
 
-    // Adjust movement speed with the mouse wheel
+    // Adjust movement speed with the mouse wheel: under 1 by 0.2 a notch, from 1 up by 20 % a notch -- up to 50 (owner,
+    // 2026-11-13: 150 m/s over a 2 km race course), which is 22 notches from 1 where 0.2 a notch would be 245.
     const int wheel = input.MouseWheelDelta();
     if (wheel != 0) {
         constexpr float kWheelStep = 0.2f;
+        constexpr float kWheelRatio = 1.2f;
         constexpr float kMinMultiplier = 0.2f;
-        constexpr float kMaxMultiplier = 10.0f;
+        constexpr float kMaxMultiplier = 50.0f;
         constexpr float kWheelTicks = 120.0f;
         const float ticks = static_cast<float>(wheel) / kWheelTicks;
-        moveSpeedMultiplier_ += ticks * kWheelStep;
+        if (moveSpeedMultiplier_ > 1.0f || (moveSpeedMultiplier_ >= 1.0f && ticks > 0.0f)) {
+            moveSpeedMultiplier_ = std::max(1.0f, moveSpeedMultiplier_ * std::pow(kWheelRatio, ticks));
+        } else {
+            moveSpeedMultiplier_ += ticks * kWheelStep;
+        }
         moveSpeedMultiplier_ = Clamp(moveSpeedMultiplier_, kMinMultiplier, kMaxMultiplier);
     }
 
