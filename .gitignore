@@ -407,3 +407,6 @@ bckp/
 /videos/
 # the race bots' turn maps (game::BotMemory): learned in Play, rewritten after every race
 /data/bot_memory/
+
+# The package key a Shipping build embeds (docs/distribution_build_plan.md section 4): never committed
+sources/core/vfs/generated/

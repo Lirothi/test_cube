@@ -534,6 +534,9 @@
     <ClCompile Include="sources/core/vfs/Pak.cpp">
       <Filter>sources\core\vfs</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/vfs/PakCrypto.cpp">
+      <Filter>sources\core\vfs</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/vfs/Vfs.cpp">
       <Filter>sources\core\vfs</Filter>
     </ClCompile>
@@ -1284,6 +1287,9 @@
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/vfs/Pak.h">
+      <Filter>sources\core\vfs</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/vfs/PakCrypto.h">
       <Filter>sources\core\vfs</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/vfs/Vfs.h">

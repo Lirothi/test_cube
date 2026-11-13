@@ -186,6 +186,15 @@ namespace vfs::pak
         file.write(zeros.data(), kHeaderBytes);
         std::uint64_t offset = kHeaderBytes;
 
+        std::unique_ptr<Cipher> cipher;
+        BlockAad baseAad;
+        std::memcpy(baseAad.name, options.name.data(), std::min(options.name.size(), sizeof(baseAad.name) - 1));
+        if (options.key)
+        {
+            cipher = std::make_unique<Cipher>(*options.key);
+            if (!cipher->Ok()) { return fail("CNG has no AES-GCM / HMAC-SHA256 here"); }
+        }
+
         std::vector<TocEntry> entries(items.size());
         std::vector<TocBlock> blocks;
         std::string strings;
@@ -198,10 +207,14 @@ namespace vfs::pak
             struct Job
             {
                 std::size_t item = 0;
+                std::uint32_t index = 0;            // the block's place in its file
                 const std::uint8_t* raw = nullptr;
                 std::size_t rawSize = 0;
                 std::vector<std::uint8_t> stored;
                 Method method = Method::Store;
+                std::uint8_t nonce[12] = {};
+                std::uint8_t tag[16] = {};
+                bool sealed = true;                 // encrypted as asked (or no key)
             };
             std::vector<std::vector<std::uint8_t>> contents;
             std::vector<std::size_t> batch;
@@ -229,6 +242,7 @@ namespace vfs::pak
                 {
                     Job job;
                     job.item = b;
+                    job.index = static_cast<std::uint32_t>(at / kBlockSize);
                     job.raw = bytes.data() + at;
                     job.rawSize = std::min<std::size_t>(kBlockSize, bytes.size() - at);
                     jobs.push_back(std::move(job));
@@ -255,6 +269,17 @@ namespace vfs::pak
                         job.stored.assign(job.raw, job.raw + job.rawSize);
                         job.method = Method::Store;
                     }
+                    if (cipher)
+                    {
+                        BlockAad aad = baseAad;
+                        aad.pathHash = ContentHash(items[batch[job.item]].key.data(), items[batch[job.item]].key.size());
+                        aad.index = job.index;
+                        aad.method = static_cast<std::uint8_t>(job.method);
+                        aad.rawSize = static_cast<std::uint32_t>(job.rawSize);
+                        const auto* a = reinterpret_cast<const std::uint8_t*>(&aad);
+                        cipher->Nonce(a, sizeof(aad), job.stored.data(), job.stored.size(), job.nonce);
+                        job.sealed = cipher->Encrypt(job.nonce, a, sizeof(aad), job.stored.data(), job.stored.size(), job.tag);
+                    }
                 }
                 ZSTD_freeCCtx(context);
             };
@@ -263,6 +288,16 @@ namespace vfs::pak
             for (unsigned t = 1; t < count; ++t) { pool.emplace_back(worker); }
             worker();
             for (std::thread& t : pool) { t.join(); }
+            for (const Job& j : jobs)
+            {
+                if (!j.sealed)
+                {
+                    file.close();
+                    std::error_code ignored;
+                    std::filesystem::remove(temp, ignored);
+                    return fail("encrypting a block of '" + items[batch[j.item]].path + "' failed (CNG)");
+                }
+            }
 
             std::size_t job = 0;
             for (std::size_t b = 0; b < batch.size(); ++b)
@@ -290,7 +325,9 @@ namespace vfs::pak
                     block.storedSize = static_cast<std::uint32_t>(j.stored.size());
                     block.rawSize = static_cast<std::uint32_t>(j.rawSize);
                     block.method = static_cast<std::uint8_t>(j.method);
-                    block.crc = Crc32c(j.stored.data(), j.stored.size());
+                    block.crc = Crc32c(j.stored.data(), j.stored.size()); // of the bytes on disk (ciphertext when encrypted)
+                    std::memcpy(block.nonce, j.nonce, sizeof(block.nonce));
+                    std::memcpy(block.tag, j.tag, sizeof(block.tag));
                     file.write(reinterpret_cast<const char*>(j.stored.data()), static_cast<std::streamsize>(j.stored.size()));
                     offset += j.stored.size();
                     blocks.push_back(block);
@@ -316,11 +353,25 @@ namespace vfs::pak
         const std::size_t tocSize = ZSTD_compress(packedToc.data(), packedToc.size(), toc.data(), toc.size(), options.level);
         if (ZSTD_isError(tocSize)) { return fail(std::string("the table of contents did not compress: ") + ZSTD_getErrorName(tocSize)); }
         packedToc.resize(tocSize);
+        Header header;
+        if (cipher)
+        {
+            TocAad aad;
+            std::memcpy(aad.name, baseAad.name, sizeof(aad.name));
+            aad.priority = options.priority;
+            const auto* a = reinterpret_cast<const std::uint8_t*>(&aad);
+            cipher->Nonce(a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocNonce);
+            if (!cipher->Encrypt(header.tocNonce, a, sizeof(aad), packedToc.data(), packedToc.size(), header.tocTag))
+            {
+                return fail("encrypting the table of contents failed (CNG)");
+            }
+            header.flags |= kPackageEncrypted;
+            std::memcpy(header.keyGuid, options.key->guid.data(), sizeof(header.keyGuid));
+        }
         const std::uint64_t padding = (kAlign - offset % kAlign) % kAlign;
         file.write(zeros.data(), static_cast<std::streamsize>(padding));
         offset += padding;
 
-        Header header;
         header.tocOffset = offset;
         header.tocStoredSize = packedToc.size();
         header.tocRawSize = toc.size();
@@ -361,7 +412,7 @@ namespace vfs::pak
         if (fileHandle_) { ::CloseHandle(static_cast<HANDLE>(fileHandle_)); }
     }
 
-    std::unique_ptr<Package> Package::Open(const std::filesystem::path& path, std::string& error)
+    std::unique_ptr<Package> Package::Open(const std::filesystem::path& path, std::string& error, const KeyRing* keys)
     {
         std::unique_ptr<Package> package(new Package());
         package->file_ = path;
@@ -388,10 +439,31 @@ namespace vfs::pak
         if (h.magic != kMagic) { return refuse("not a .tcpak"); }
         if (h.version != kVersion) { return refuse("format version " + std::to_string(h.version) + ", this build reads " + std::to_string(kVersion)); }
         if (h.blockSize != kBlockSize) { return refuse("block size " + std::to_string(h.blockSize)); }
-        if ((h.flags & 1u) != 0) { return refuse("encrypted, and this build has no key (D3)"); }
+        if ((h.flags & kPackageEncrypted) != 0)
+        {
+            const Key* key = keys ? keys->Find(std::to_array(h.keyGuid)) : nullptr;
+            if (!key) { return refuse("encrypted with key " + GuidText(std::to_array(h.keyGuid)) + ", which this process does not have"); }
+            package->cipher_ = std::make_unique<Cipher>(*key);
+            if (!package->cipher_->Ok()) { return refuse("CNG has no AES-GCM here"); }
+        }
         if (h.tocOffset > package->fileBytes_ || h.tocStoredSize > package->fileBytes_ - h.tocOffset) { return refuse("the table of contents lies past the end"); }
         const std::uint8_t* storedToc = package->view_ + h.tocOffset;
         if (Crc32c(storedToc, static_cast<std::size_t>(h.tocStoredSize)) != h.tocCrc) { return refuse("the table of contents is damaged (CRC)"); }
+        std::vector<std::uint8_t> plainToc;
+        if (package->cipher_)
+        {
+            plainToc.assign(storedToc, storedToc + h.tocStoredSize);
+            TocAad aad;
+            std::memcpy(aad.name, h.name, sizeof(aad.name));
+            aad.version = h.version;
+            aad.priority = h.priority;
+            if (!package->cipher_->Decrypt(h.tocNonce, reinterpret_cast<const std::uint8_t*>(&aad), sizeof(aad), plainToc.data(),
+                                           plainToc.size(), h.tocTag))
+            {
+                return refuse("the table of contents does not authenticate (damaged, changed, or another key with this GUID)");
+            }
+            storedToc = plainToc.data();
+        }
         package->toc_.resize(static_cast<std::size_t>(h.tocRawSize));
         const std::size_t got = ZSTD_decompress(package->toc_.data(), package->toc_.size(), storedToc, static_cast<std::size_t>(h.tocStoredSize));
         if (ZSTD_isError(got) || got != package->toc_.size()) { return refuse("the table of contents does not decompress"); }
@@ -428,6 +500,7 @@ namespace vfs::pak
             for (std::uint32_t b = 0; b < entry.blockCount; ++b) { raw += package->blocks_[entry.firstBlock + b].rawSize; }
             if (raw != entry.size) { return refuse("entry " + std::to_string(e) + " does not add up"); }
             package->keys_.push_back(FoldKey(package->PathOf(entry)));
+            package->pathHashes_.push_back(ContentHash(package->keys_.back().data(), package->keys_.back().size()));
         }
         if (!std::is_sorted(package->keys_.begin(), package->keys_.end())) { return refuse("the table of contents is not sorted"); }
         package->name_ = std::string(h.name, strnlen(h.name, sizeof(h.name)));
@@ -508,12 +581,14 @@ namespace vfs::pak
         return info;
     }
 
-    const std::uint8_t* Package::DecodeBlock(std::uint32_t block, std::string_view path) const
+    const std::uint8_t* Package::DecodeBlock(int entry, std::uint32_t index) const
     {
+        const std::uint32_t block = EntryAt(entry).firstBlock + index;
         for (CachedBlock& cached : t_blocks)
         {
             if (cached.package == this && cached.block == block) { return cached.bytes.data(); }
         }
+        const std::string_view path = PathOf(EntryAt(entry));
         const TocBlock& b = BlockAt(block);
         const std::uint8_t* stored = view_ + b.offset;
         if (Crc32c(stored, b.storedSize) != b.crc)
@@ -522,10 +597,37 @@ namespace vfs::pak
             LOG_ERROR(logging::LogCategory::Vfs, "vfs: '{}' in {} is damaged: block {} fails its CRC", path, name_, block);
             return nullptr;
         }
-        if (b.method == static_cast<std::uint8_t>(Method::Store)) { return stored; }
+        if (!cipher_ && b.method == static_cast<std::uint8_t>(Method::Store)) { return stored; }
         CachedBlock& slot = t_blocks[t_nextBlock];
         t_nextBlock ^= 1;
         slot.package = nullptr;
+        if (cipher_)
+        {
+            thread_local std::vector<std::uint8_t> plain;
+            plain.assign(stored, stored + b.storedSize);
+            BlockAad aad;
+            std::memcpy(aad.name, header_.name, sizeof(aad.name));
+            aad.version = header_.version;
+            aad.pathHash = pathHashes_[static_cast<std::size_t>(entry)];
+            aad.index = index;
+            aad.method = b.method;
+            aad.rawSize = b.rawSize;
+            if (!cipher_->Decrypt(b.nonce, reinterpret_cast<const std::uint8_t*>(&aad), sizeof(aad), plain.data(), plain.size(), b.tag))
+            {
+                vfs::NoteBlockDecoded(true);
+                LOG_ERROR(logging::LogCategory::Vfs, "vfs: '{}' in {} is damaged: block {} does not authenticate", path, name_, block);
+                return nullptr;
+            }
+            if (b.method == static_cast<std::uint8_t>(Method::Store))
+            {
+                slot.bytes.swap(plain);
+                vfs::NoteBlockDecoded(false);
+                slot.package = this;
+                slot.block = block;
+                return slot.bytes.data();
+            }
+            stored = plain.data();
+        }
         slot.bytes.resize(b.rawSize);
         const std::size_t got = ZSTD_decompressDCtx(ThreadDecoder(), slot.bytes.data(), slot.bytes.size(), stored, b.storedSize);
         if (ZSTD_isError(got) || got != b.rawSize)
@@ -552,7 +654,7 @@ namespace vfs::pak
         {
             const std::uint32_t index = static_cast<std::uint32_t>(at / kBlockSize);
             const std::uint32_t block = e.firstBlock + index;
-            const std::uint8_t* raw = DecodeBlock(block, PathOf(e));
+            const std::uint8_t* raw = DecodeBlock(entry, index);
             if (!raw) { return false; }
             const std::size_t within = static_cast<std::size_t>(at - std::uint64_t{ index } * kBlockSize);
             const std::size_t take = std::min<std::size_t>(left, BlockAt(block).rawSize - within);
@@ -562,6 +664,15 @@ namespace vfs::pak
             left -= take;
         }
         return true;
+    }
+
+    const std::uint8_t* Package::StoredBytes(int entry, std::uint32_t index, std::uint32_t& bytes) const
+    {
+        const TocEntry& e = EntryAt(entry);
+        if (index >= e.blockCount) { bytes = 0; return nullptr; }
+        const TocBlock& b = BlockAt(e.firstBlock + index);
+        bytes = b.storedSize;
+        return view_ + b.offset;
     }
 
     bool Package::Verify(int entry, std::string& error) const

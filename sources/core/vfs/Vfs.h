@@ -173,6 +173,7 @@ namespace vfs
         Mode mode = Mode::Loose;
         std::filesystem::path packageDir;   // every *.tcpak in it is mounted
         std::filesystem::path recordFile;   // --vfs-record: each content file found, once, as it is first found
+        std::vector<std::filesystem::path> keyFiles; // --pak-key: keys for encrypted packages (besides the embedded one)
     };
     // Before the first read. False (and why) when a package does not open; nothing is mounted then.
     bool Configure(const Config& config, std::string& error);

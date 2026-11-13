@@ -10,6 +10,8 @@
 //   TOC = TocHeader, TocEntry[entryCount] (sorted by the folded path), TocBlock[blockCount], path strings (UTF-8).
 // Same files in -> the same bytes out: entries sorted, no times or build numbers inside, a fixed compression level.
 
+#include "core/vfs/PakCrypto.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -33,6 +35,7 @@ namespace vfs::pak
     };
 
     inline constexpr std::uint32_t kEntryDeleted = 1u << 0; // a patch's record that hides the file of a package below it
+    inline constexpr std::uint32_t kPackageEncrypted = 1u << 0; // Header::flags
 
 #pragma pack(push, 1)
     struct Header
@@ -107,6 +110,7 @@ namespace vfs::pak
         std::uint32_t priority = 0;
         int level = 19;                     // zstd level; decompression speed does not depend on it
         unsigned threads = 0;               // 0 = the machine's cores
+        const Key* key = nullptr;           // encrypt every block and the table of contents with it (§4)
     };
 
     struct BuildResult
@@ -131,7 +135,8 @@ namespace vfs::pak
         Package(const Package&) = delete;
         Package& operator=(const Package&) = delete;
 
-        static std::unique_ptr<Package> Open(const std::filesystem::path& file, std::string& error);
+        // An encrypted package needs its key in `keys` (by the GUID in its header).
+        static std::unique_ptr<Package> Open(const std::filesystem::path& file, std::string& error, const KeyRing* keys = nullptr);
 
         [[nodiscard]] const std::string& Name() const noexcept { return name_; }
         [[nodiscard]] std::uint32_t Priority() const noexcept { return header_.priority; }
@@ -139,6 +144,8 @@ namespace vfs::pak
         [[nodiscard]] const std::filesystem::path& FilePath() const noexcept { return file_; }
         [[nodiscard]] std::uint64_t FileBytes() const noexcept { return fileBytes_; }
         [[nodiscard]] std::size_t EntryCount() const noexcept { return entryCount_; }
+        [[nodiscard]] bool Encrypted() const noexcept { return cipher_ != nullptr; }
+        [[nodiscard]] std::string KeyGuid() const { return GuidText(std::to_array(header_.keyGuid)); }
 
         // The entry of a normalised virtual path (case-insensitive), or -1. A deleted record answers its index too:
         // ask Deleted().
@@ -163,13 +170,15 @@ namespace vfs::pak
         bool Read(int entry, std::uint64_t offset, void* destination, std::size_t bytes) const;
         // Every block decoded and the content hash compared.
         bool Verify(int entry, std::string& error) const;
+        // A block's bytes as they lie in the file (the self-test: encrypted blocks of equal files differ).
+        [[nodiscard]] const std::uint8_t* StoredBytes(int entry, std::uint32_t index, std::uint32_t& bytes) const;
 
     private:
         Package() = default;
         const TocEntry& EntryAt(int entry) const;
         const TocBlock& BlockAt(std::uint32_t block) const;
         std::string_view PathOf(const TocEntry& entry) const;
-        const std::uint8_t* DecodeBlock(std::uint32_t block, std::string_view path) const;
+        const std::uint8_t* DecodeBlock(int entry, std::uint32_t index) const;
 
         std::filesystem::path file_;
         std::string name_;
@@ -185,5 +194,28 @@ namespace vfs::pak
         const TocBlock* blocks_ = nullptr;
         const char* strings_ = nullptr;
         std::vector<std::string> keys_;     // folded, in entry order (sorted)
+        std::vector<std::uint64_t> pathHashes_; // ContentHash of each folded path: the blocks' AAD
+        std::unique_ptr<Cipher> cipher_;    // encrypted packages only
     };
+
+    // What every block and the table of contents authenticate besides their bytes (§4): the package's name and format,
+    // and the block's file and place in it -- a block moved elsewhere fails its tag.
+#pragma pack(push, 1)
+    struct BlockAad
+    {
+        char name[32] = {};
+        std::uint32_t version = kVersion;
+        std::uint64_t pathHash = 0;
+        std::uint32_t index = 0;
+        std::uint8_t method = 0;
+        std::uint32_t rawSize = 0;
+    };
+    struct TocAad
+    {
+        char name[32] = {};
+        std::uint32_t version = kVersion;
+        std::uint32_t priority = 0;
+        char what[4] = { 'T', 'O', 'C', 0 };
+    };
+#pragma pack(pop)
 }

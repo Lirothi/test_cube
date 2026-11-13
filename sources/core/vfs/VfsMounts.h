@@ -21,6 +21,8 @@ namespace vfs::detail
 
     // The process's table: loose only until Configure says otherwise.
     Mounts& Global();
+    // The keys packages open with: the one the build embedded (Shipping), and --pak-key's.
+    pak::KeyRing& Keys();
 
     std::optional<Stat> StatIn(const Mounts& mounts, const Path& path);
     File OpenIn(const Mounts& mounts, const Path& path);

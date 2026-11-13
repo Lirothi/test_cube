@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <optional>
 #include <cstring>
 #include <fstream>
 #include <random>
@@ -80,6 +82,20 @@ namespace vfs
             {
                 options.priority = static_cast<std::uint32_t>(std::atoi(priority.c_str()));
             }
+            std::optional<pak::Key> key;
+            if (HasFlag(cmd, "--pak-encrypt"))
+            {
+                const std::string keyFile = ArgValue(cmd, "--pak-key=");
+                std::string why;
+                key = keyFile.empty() ? std::nullopt : pak::LoadKeyFile(FsPath(keyFile), why);
+                if (!key)
+                {
+                    LOG_ERROR(logging::LogCategory::Vfs, "pak build: --pak-encrypt needs --pak-key=<key.json> ({})",
+                              keyFile.empty() ? std::string("none given") : why);
+                    return 1;
+                }
+                options.key = &*key;
+            }
             const pak::BuildResult result = pak::Build(FsPath(out), std::move(files), options);
             if (!result.ok)
             {
@@ -87,10 +103,11 @@ namespace vfs
                 return 1;
             }
             LOG_INFO(logging::LogCategory::Vfs,
-                     "pak build: {} -- {} files, {:.1f} MB -> {:.1f} MB ({:.1f} %), {} blocks ({} stored as they were), zstd {}, {:.1f} s",
+                     "pak build: {} -- {} files, {:.1f} MB -> {:.1f} MB ({:.1f} %), {} blocks ({} stored as they were), zstd {}{}, {:.1f} s",
                      out, result.files, result.rawBytes / 1048576.0, result.packageBytes / 1048576.0,
                      result.rawBytes ? 100.0 * static_cast<double>(result.packageBytes) / static_cast<double>(result.rawBytes) : 0.0,
-                     result.blocks, result.storedBlocks, options.level, result.seconds);
+                     result.blocks, result.storedBlocks, options.level,
+                     key ? ", encrypted with key " + pak::GuidText(key->guid) : std::string(), result.seconds);
             return 0;
         }
 
@@ -98,7 +115,7 @@ namespace vfs
         {
             const std::string file = ArgValue(cmd, "--pak-list=");
             std::string error;
-            const std::unique_ptr<pak::Package> package = pak::Package::Open(FsPath(file), error);
+            const std::unique_ptr<pak::Package> package = pak::Package::Open(FsPath(file), error, &detail::Keys());
             if (!package)
             {
                 LOG_ERROR(logging::LogCategory::Vfs, "pak list: {}", error);
@@ -112,9 +129,45 @@ namespace vfs
                 LOG_INFO(logging::LogCategory::Vfs, "pak list: {} {} bytes, {} blocks, hash {:016x}{}", info.path, info.size,
                          info.blocks, info.contentHash, info.deleted ? " (deleted)" : "");
             }
-            LOG_INFO(logging::LogCategory::Vfs, "pak list: {} '{}' priority {} -- {} files, {:.1f} MB of content in {:.1f} MB, id {:016x}",
+            LOG_INFO(logging::LogCategory::Vfs, "pak list: {} '{}' priority {} -- {} files, {:.1f} MB of content in {:.1f} MB, id {:016x}{}",
                      file, package->Name(), package->Priority(), package->EntryCount(), bytes / 1048576.0,
-                     package->FileBytes() / 1048576.0, package->ContentId());
+                     package->FileBytes() / 1048576.0, package->ContentId(),
+                     package->Encrypted() ? ", encrypted with key " + package->KeyGuid() : std::string());
+            return 0;
+        }
+
+        // --pak-keygen=<key.json>: a new key (never over an existing file). --pak-key-header=<key.json>,<out.h>: the header a
+        // Shipping build embeds it from.
+        int KeyTool(const char* cmd)
+        {
+            std::string error;
+            if (HasFlag(cmd, "--pak-keygen="))
+            {
+                const std::string file = ArgValue(cmd, "--pak-keygen=");
+                const pak::Key key = pak::GenerateKey();
+                if (!pak::SaveKeyFile(key, FsPath(file), error))
+                {
+                    LOG_ERROR(logging::LogCategory::Vfs, "pak keygen: {}", error);
+                    return 1;
+                }
+                LOG_INFO(logging::LogCategory::Vfs, "pak keygen: {} -- key {}. Keep a copy: packages built with it cannot be read without it.",
+                         file, pak::GuidText(key.guid));
+                return 0;
+            }
+            const std::string arg = ArgValue(cmd, "--pak-key-header=");
+            const std::size_t comma = arg.find(',');
+            if (comma == std::string::npos)
+            {
+                LOG_ERROR(logging::LogCategory::Vfs, "pak key header: --pak-key-header=<key.json>,<out.h>");
+                return 1;
+            }
+            const std::optional<pak::Key> key = pak::LoadKeyFile(FsPath(arg.substr(0, comma)), error);
+            if (!key || !pak::WriteKeyHeader(*key, FsPath(arg.substr(comma + 1)), error))
+            {
+                LOG_ERROR(logging::LogCategory::Vfs, "pak key header: {}", error);
+                return 1;
+            }
+            LOG_INFO(logging::LogCategory::Vfs, "pak key header: {} -- key {} in four masked parts", arg.substr(comma + 1), pak::GuidText(key->guid));
             return 0;
         }
 
@@ -122,7 +175,8 @@ namespace vfs
         {
             const std::string file = ArgValue(cmd, "--pak-verify=");
             std::string error;
-            const std::unique_ptr<pak::Package> package = pak::Package::Open(FsPath(file), error);
+            const auto started = std::chrono::steady_clock::now();
+            const std::unique_ptr<pak::Package> package = pak::Package::Open(FsPath(file), error, &detail::Keys());
             if (!package)
             {
                 LOG_ERROR(logging::LogCategory::Vfs, "pak verify: FAIL {}", error);
@@ -138,8 +192,9 @@ namespace vfs
                     ++failures;
                 }
             }
-            LOG_INFO(logging::LogCategory::Vfs, "pak verify: {} {} -- {} files, {} damaged", file, failures == 0 ? "PASS" : "FAIL",
-                     package->EntryCount(), failures);
+            LOG_INFO(logging::LogCategory::Vfs, "pak verify: {} {} -- {} files, {} damaged{}, {:.2f} s", file, failures == 0 ? "PASS" : "FAIL",
+                     package->EntryCount(), failures, package->Encrypted() ? ", every tag checked" : "",
+                     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
             return failures;
         }
 
@@ -358,6 +413,92 @@ namespace vfs
             }
             package.reset();
 
+            // Encryption (§4): the same reads through an encrypted package, nothing in the clear, and the controls.
+            {
+                const pak::Key key = pak::GenerateKey();
+                pak::KeyRing ring;
+                ring.Add(key);
+                pak::BuildOptions secret;
+                secret.name = "secret";
+                secret.level = 3;
+                secret.key = &key;
+                std::vector<pak::BuildFile> encFiles = files;
+                encFiles.push_back({ "twin/random_copy.bin", src / Widen(cases[7].path), false }); // the same bytes, another path
+                const std::filesystem::path encA = root / L"enc_a.tcpak";
+                const std::filesystem::path encB = root / L"enc_b.tcpak";
+                const pak::BuildResult sealed = pak::Build(encA, encFiles, secret);
+                t.Expect(sealed.ok, "encrypted build: " + sealed.error);
+                secret.threads = 1;
+                t.Expect(pak::Build(encB, encFiles, secret).ok && ReadOs(encA) == ReadOs(encB),
+                         "an encrypted build is deterministic too (the synthetic nonce)");
+                std::string why;
+                std::unique_ptr<pak::Package> enc = pak::Package::Open(encA, why, &ring);
+                t.Expect(enc && enc->Encrypted(), "open with the key: " + why);
+                if (enc)
+                {
+                    for (std::size_t i = 0; i < cases.size(); ++i)
+                    {
+                        const int entry = enc->Find(cases[i].path);
+                        std::vector<std::uint8_t> whole(cases[i].size);
+                        std::string verifyWhy;
+                        t.Expect(entry >= 0 && enc->Read(entry, 0, whole.data(), whole.size()) && whole == contents[i] &&
+                                 enc->Verify(entry, verifyWhy), "encrypted: whole + verify " + cases[i].path);
+                        if (entry >= 0 && cases[i].size > 2 * pak::kBlockSize)
+                        {
+                            std::vector<std::uint8_t> part(1000);
+                            t.Expect(enc->Read(entry, pak::kBlockSize - 500, part.data(), part.size()) &&
+                                     std::equal(part.begin(), part.end(), contents[i].begin() + (pak::kBlockSize - 500)),
+                                     "encrypted: a range across a block boundary of " + cases[i].path);
+                        }
+                    }
+                    const std::vector<std::uint8_t> raw = ReadOs(encA);
+                    const auto plain = contents[7].begin() + 4096;
+                    t.Expect(std::search(raw.begin(), raw.end(), plain, plain + 64) == raw.end(),
+                             "the random file's bytes are not in the package in the clear");
+                    const std::string name = "compressible.bin";
+                    t.Expect(std::search(raw.begin(), raw.end(), name.begin(), name.end()) == raw.end(),
+                             "the file names are not in the package in the clear (the table of contents is encrypted)");
+                    std::uint32_t n1 = 0, n2 = 0;
+                    const std::uint8_t* b1 = enc->StoredBytes(enc->Find("big/random.bin"), 0, n1);
+                    const std::uint8_t* b2 = enc->StoredBytes(enc->Find("twin/random_copy.bin"), 0, n2);
+                    t.Expect(b1 && b2 && n1 == n2 && std::memcmp(b1, b2, n1) != 0, "the same bytes under two paths encrypt differently");
+                }
+                enc.reset();
+                why.clear();
+                t.Expect(!pak::Package::Open(encA, why) && why.find(pak::GuidText(key.guid)) != std::string::npos,
+                         "control: without the key the package is refused, naming its key");
+                pak::Key impostor = pak::GenerateKey();
+                impostor.guid = key.guid;
+                pak::KeyRing wrong;
+                wrong.Add(impostor);
+                why.clear();
+                t.Expect(!pak::Package::Open(encA, why, &wrong) && why.find("authenticate") != std::string::npos,
+                         "control: another key under the same GUID does not open it");
+
+                // The cipher itself: a changed byte, tag or AAD is refused.
+                pak::Cipher cipher(key);
+                std::vector<std::uint8_t> data = Pattern(1000, 5, false);
+                const std::vector<std::uint8_t> original = data;
+                const std::uint8_t aadA[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+                const std::uint8_t aadB[8] = { 1, 2, 3, 4, 5, 6, 7, 9 };
+                std::uint8_t nonce[12] = {};
+                std::uint8_t tag[16] = {};
+                cipher.Nonce(aadA, sizeof(aadA), data.data(), data.size(), nonce);
+                t.Expect(cipher.Encrypt(nonce, aadA, sizeof(aadA), data.data(), data.size(), tag) && data != original, "encrypt");
+                std::vector<std::uint8_t> copy = data;
+                copy[17] ^= 1;
+                t.Expect(!cipher.Decrypt(nonce, aadA, sizeof(aadA), copy.data(), copy.size(), tag), "control: a changed byte fails the tag");
+                copy = data;
+                t.Expect(!cipher.Decrypt(nonce, aadB, sizeof(aadB), copy.data(), copy.size(), tag), "control: another AAD (a moved block) fails the tag");
+                copy = data;
+                std::uint8_t badTag[16];
+                std::memcpy(badTag, tag, 16);
+                badTag[0] ^= 0x80;
+                t.Expect(!cipher.Decrypt(nonce, aadA, sizeof(aadA), copy.data(), copy.size(), badTag), "control: a changed tag fails");
+                copy = data;
+                t.Expect(cipher.Decrypt(nonce, aadA, sizeof(aadA), copy.data(), copy.size(), tag) && copy == original, "decrypt");
+            }
+
             // Control arms: damage must be caught, and named.
             {
                 std::vector<std::uint8_t> bytes = ReadOs(pakA);
@@ -425,7 +566,18 @@ namespace vfs
         }
         if (const std::string dir = ArgValue(cmd, "--pak-dir="); !dir.empty()) { config.packageDir = FsPath(dir); }
         if (const std::string record = ArgValue(cmd, "--vfs-record="); !record.empty()) { config.recordFile = FsPath(record); }
-        if (config.mode != Config::Mode::Loose || !config.recordFile.empty())
+        // The key of encrypted packages: --pak-key=<key.json>, or the TC_PAK_KEY environment variable naming one.
+        if (const std::string keyFile = ArgValue(cmd, "--pak-key="); !keyFile.empty() && !HasFlag(cmd, "--pak-keygen="))
+        {
+            config.keyFiles.push_back(FsPath(keyFile));
+        }
+        else if (const DWORD n = ::GetEnvironmentVariableW(L"TC_PAK_KEY", nullptr, 0); n > 1)
+        {
+            std::wstring value(n, L'\0');
+            value.resize(::GetEnvironmentVariableW(L"TC_PAK_KEY", value.data(), n));
+            config.keyFiles.push_back(std::filesystem::path(value));
+        }
+        if (config.mode != Config::Mode::Loose || !config.recordFile.empty() || !config.keyFiles.empty())
         {
             std::string error;
             if (!Configure(config, error))
@@ -440,6 +592,7 @@ namespace vfs
         }
 
         if (HasFlag(cmd, "--vfs-selftest")) { return SelfTestTool(); }
+        if (HasFlag(cmd, "--pak-keygen=") || HasFlag(cmd, "--pak-key-header=")) { return KeyTool(cmd); }
         if (HasFlag(cmd, "--pak-build=")) { return BuildTool(cmd); }
         if (HasFlag(cmd, "--pak-list=")) { return ListTool(cmd); }
         if (HasFlag(cmd, "--pak-verify=")) { return VerifyTool(cmd); }

@@ -427,6 +427,17 @@ namespace vfs
             return mounts;
         }
 
+        pak::KeyRing& Keys()
+        {
+            static pak::KeyRing keys = []
+            {
+                pak::KeyRing ring;
+                if (const std::optional<pak::Key> embedded = pak::EmbeddedKey()) { ring.Add(*embedded); }
+                return ring;
+            }();
+            return keys;
+        }
+
         void SortPackages(std::vector<std::unique_ptr<pak::Package>>& packages)
         {
             std::stable_sort(packages.begin(), packages.end(), [](const auto& a, const auto& b)
@@ -766,6 +777,17 @@ namespace vfs
 
     bool Configure(const Config& config, std::string& error)
     {
+        for (const std::filesystem::path& keyFile : config.keyFiles)
+        {
+            std::string why;
+            const std::optional<pak::Key> key = pak::LoadKeyFile(keyFile, why);
+            if (!key)
+            {
+                error = why;
+                return false;
+            }
+            detail::Keys().Add(*key);
+        }
         detail::Mounts mounts;
         mounts.loose = config.mode != Config::Mode::Packages;
         mounts.looseFirst = true;
@@ -777,7 +799,7 @@ namespace vfs
             {
                 if (!entry.is_regular_file(ec) || entry.path().extension() != L".tcpak") { continue; }
                 std::string why;
-                std::unique_ptr<pak::Package> package = pak::Package::Open(entry.path(), why);
+                std::unique_ptr<pak::Package> package = pak::Package::Open(entry.path(), why, &detail::Keys());
                 if (!package)
                 {
                     error = why;
@@ -818,7 +840,7 @@ namespace vfs
         for (const std::unique_ptr<pak::Package>& p : mounts.packages)
         {
             out.push_back(p->Name() + " (" + Narrow(p->FilePath().filename().wstring()) + ", " +
-                          std::to_string(p->EntryCount()) + " files)");
+                          std::to_string(p->EntryCount()) + " files" + (p->Encrypted() ? ", encrypted" : "") + ")");
         }
         if (mounts.loose && !mounts.looseFirst) { out.push_back("loose"); }
         return out;
