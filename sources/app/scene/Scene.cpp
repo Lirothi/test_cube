@@ -3741,6 +3741,10 @@ void Scene::Render(Renderer* renderer) {
     // The GI probe volumes a graphics level (or a knob) turned off give their memory back (GPU idle).
     sceneRenderer_.ReleaseUnwantedGi(renderer, frameData_.settings.giEnabled && renderer->IsRaytracingSupported(),
                                      frameData_.settings.giFarCascade);
+    // Likewise the bloom's convolution grids (3 x 32 MB at 1440p, 3 x 64 MB at 4K) while the pyramid bloom runs or none,
+    // and the clouds' volumes while the clouds are off (docs/scalability_plan.md §4.3).
+    renderer->SetBloomFftResidency(frameData_.settings.bloom.enabled && frameData_.settings.bloom.method == 1u);
+    sceneRenderer_.ReleaseUnwantedClouds(renderer, frameData_.settings.volumetricCloud.enabled);
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {

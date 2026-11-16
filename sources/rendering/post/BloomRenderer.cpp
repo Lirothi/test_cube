@@ -230,7 +230,7 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                         resources_->GetBloomFftCBSizeBytes() > 0u &&
                         resources_->GetBloomConvCBSizeBytes() > 0u &&
                         DB.bloomFftA != nullptr && DB.bloomFftB != nullptr &&
-                        DB.bloomFftKernel != nullptr &&
+                        DB.bloomFftKernel != nullptr && DB.bloomFftResident &&
                         DB.lensFlare.Get() != nullptr;
     bloomActive_ = frame.settings.bloom.enabled &&
                    frame.settings.bloom.intensity > 0.0f &&

@@ -604,9 +604,39 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         {
             graphicsSettings.ResetControl(control, renderer, scene, settings);
         }
+        // docs/scalability_plan.md §3.3: a control a graphics level sets wears a dot on its reset icon -- blue while the
+        // level's value holds, orange once it was changed by hand over the level (an override, also listed in the
+        // Scalability tab). Its reset then goes back to the level, not to the project default.
+        std::string manager;
+        bool overridden = false;
+        if (const char* knob = ScalabilityKnobOf(control))
+        {
+            const settings::Scalability& sc = settings::TheScalability();
+            manager = sc.ManagerLabel(knob);
+            overridden = !manager.empty() && sc.Overrides().count(knob) != 0u;
+        }
+        if (!manager.empty())
+        {
+            const ImVec2 iconMax = ImGui::GetItemRectMax();
+            const ImVec2 iconMin = ImGui::GetItemRectMin();
+            const float r = std::max(3.0f, (iconMax.y - iconMin.y) * 0.2f);
+            const ImU32 dot = overridden ? ImGui::GetColorU32(ImVec4(1.0f, 0.42f, 0.05f, 1.0f))
+                                         : ImGui::GetColorU32(ImVec4(0.15f, 0.45f, 1.0f, 1.0f));
+            ImGui::GetWindowDrawList()->AddCircleFilled(ImVec2(iconMax.x - r, iconMin.y + r), r, dot);
+        }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
-            ImGui::SetTooltip("Reset this control to the project default.");
+            if (manager.empty()) { ImGui::SetTooltip("Reset this control to the project default."); }
+            else if (overridden)
+            {
+                ImGui::SetTooltip("Set by hand over the graphics level (%s).\nReset: back to the level's value.",
+                                  manager.c_str());
+            }
+            else
+            {
+                ImGui::SetTooltip("Set by the graphics level (%s; Developer Controls > Scalability).\nA change here is kept "
+                                  "over the level, as set by hand. Reset: back to the level's value.", manager.c_str());
+            }
         }
         ImGui::PopID();
 

@@ -4,6 +4,7 @@
 
 #include <cassert>
 
+#include "core/diagnostics/CrashHandler.h"
 #include "core/logging/Log.h"
 #include "core/profiling/Profiler.h"
 #include "core/threading/ThreadRole.h"
@@ -156,6 +157,7 @@ bool RenderThread::InFlightForGame()
 void RenderThread::Main()
 {
     logging::SetCurrentThreadName("Render");
+    crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
     Profiler::Get().SetThreadName("RenderThread");
     SetCurrentRole(ThreadRole::Render); // the role the frame's tasks inherit (plan section 3.4)
     for (;;)

@@ -280,15 +280,37 @@ bool BuildJob::Running() const
     return state_->status.running;
 }
 
-BuildStatus BuildJob::Status() const
+BuildStatus BuildJob::Status(std::size_t maxEvents) const
 {
     std::lock_guard<std::mutex> lock(state_->mutex);
-    return state_->status;
+    const BuildStatus& held = state_->status;
+    BuildStatus out;
+    out.id = held.id;
+    out.running = held.running;
+    out.finished = held.finished;
+    out.cancelled = held.cancelled;
+    out.exitCode = held.exitCode;
+    out.request = held.request;
+    out.stage = held.stage;
+    out.fraction = held.fraction;
+    out.seconds = held.seconds;
+    out.stages = held.stages;
+    out.errors = held.errors;
+    out.warningCount = held.warningCount;
+    out.folder = held.folder;
+    out.zip = held.zip;
+    out.report = held.report;
+    out.version = held.version;
+    out.bytes = held.bytes;
+    out.eventCount = held.events.size();
+    const std::size_t take = std::min(maxEvents, held.events.size());
+    out.events.assign(held.events.end() - static_cast<std::ptrdiff_t>(take), held.events.end());
+    return out;
 }
 
 std::string BuildJob::StatusJson(int id) const
 {
-    const BuildStatus s = Status();
+    const BuildStatus s = Status(12);
     nlohmann::json out;
     if (s.id == 0 || (id != 0 && id != s.id))
     {

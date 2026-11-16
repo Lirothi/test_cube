@@ -51,7 +51,8 @@ namespace dist
         std::string stage;
         double fraction = 0.0;
         double seconds = 0.0;
-        std::vector<BuildEvent> events;      // all of them (capped at 4000)
+        std::vector<BuildEvent> events;      // the newest Status(maxEvents) of them (the job keeps 4000)
+        std::size_t eventCount = 0;          // how many the job holds
         std::vector<StageTime> stages;
         std::vector<std::string> errors;
         int warningCount = 0;
@@ -75,7 +76,9 @@ namespace dist
         bool Start(const BuildRequest& request, std::string& why);
         void Cancel();
         [[nodiscard]] bool Running() const;
-        [[nodiscard]] BuildStatus Status() const;
+        // A copy taken under the lock, with the newest `maxEvents` events (the window draws 200 a frame; a caller that
+        // reads none asks for 0 -- the whole list was copied up to four times a frame).
+        [[nodiscard]] BuildStatus Status(std::size_t maxEvents = 0) const;
         // build_dist_status's answer: a JSON object (the last 12 events, the errors, the result).
         [[nodiscard]] std::string StatusJson(int id) const;
 

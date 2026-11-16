@@ -3463,6 +3463,32 @@ void EditorController::Draw(
                     return mcpLevelHost_.Save(why);
                 };
                 hooks.playing = [this] { return playing_; };
+                hooks.selectObject = [this](const std::string& level, const std::string& object, std::string& why)
+                {
+                    // The cook names a content path; the document may hold an absolute one.
+                    std::string open = NormalizeLevelPath(document_.LevelPath());
+                    std::string named = NormalizeLevelPath(level);
+                    const auto lower = [](std::string& s) { for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); } };
+                    lower(open);
+                    lower(named);
+                    const bool same = open == named ||
+                        (open.size() > named.size() && open.compare(open.size() - named.size(), named.size(), named) == 0 &&
+                         open[open.size() - named.size() - 1u] == '/');
+                    if (!same)
+                    {
+                        why = "'" + object + "' is in " + level + ": open that level first";
+                        return false;
+                    }
+                    for (const EditorObject& obj : document_.Objects())
+                    {
+                        if (obj.name != object) { continue; }
+                        selection_.Replace(obj.id);
+                        showInspector_ = true;
+                        return true;
+                    }
+                    why = "the open level has no object named '" + object + "' (renamed or deleted since the check)";
+                    return false;
+                };
                 buildDistPanel_.Draw(&showBuildDistPanel_, hooks);
             }));
 

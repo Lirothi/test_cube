@@ -287,6 +287,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE bloomFftKernelSRV{}, bloomFftKernelUAV{};
         UINT bloomFftWidth = 1, bloomFftHeight = 1;
         UINT bloomFftImageWidth = 1, bloomFftImageHeight = 1;
+        // The grids are at full size (the convolution method runs); false = the placeholder (SetBloomFftResidency).
+        bool bloomFftResident = false;
         D3D12_CPU_DESCRIPTOR_HANDLE lensFlareRTV{}, lensFlareSRV{};
         UINT lensFlareWidth = 1, lensFlareHeight = 1;
         D3D12_CPU_DESCRIPTOR_HANDLE streakASRV{}, streakAUAV{};
@@ -374,6 +376,10 @@ public:
     // working with no null handling. MUST be called at GPU idle (the shadow-mode reconcile waits).
     void SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full);
     bool IsLocalShadowFull() const { return localShadowFull_; }
+    // docs/scalability_plan.md §4.3 (S3): the bloom's convolution grids at full size (held) or a 16x16 placeholder,
+    // the views rebuilt either way. Kept across Create. MUST be called at GPU idle (Renderer::SetBloomFftResidency waits).
+    void SetBloomFftResidency(ID3D12Device* dev, ResourceDeclarations decls, bool held);
+    bool IsBloomFftHeld() const { return bloomFftHeld_; }
     // The CSM atlas edge. Changing it REALLOCATES the atlas and rebuilds its views, so the
     // caller must be at GPU idle (Scene::ReconcileShadowMode, beside the residency switch).
     // A no-op while the atlas is the VSM-mode 1x1 placeholder -- the size is remembered and
@@ -480,6 +486,8 @@ private:
     // Plan S9: `pages` array slices -- spot pages resolution^2, point pages 3 x 2 faces of `resolution`.
     void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages);
     void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages);
+    // P8C: the three convolution grids + every frame's views, at full size or the placeholder (bloomFftHeld_).
+    void CreateBloomFftGrids(ID3D12Device* dev, ResourceDeclarations decls);
 
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
@@ -500,6 +508,11 @@ private:
     GpuResource bloomFftA_;
     GpuResource bloomFftB_;
     GpuResource bloomFftKernel_;
+    static constexpr UINT kBloomFftPlaceholder = 16;
+    DXGI_FORMAT bloomFftFormat_ = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    UINT bloomFftFullWidth_ = 1, bloomFftFullHeight_ = 1;   // the padded grid the display asks for (Sizes)
+    UINT bloomFftImageWidth_ = 1, bloomFftImageHeight_ = 1;
+    bool bloomFftHeld_ = true; // S3: full size while the convolution method runs, else the placeholder
     UINT localSpotPages_ = 1;  // plan S9: the page counts to build (kept across Create / the residency toggle)
     UINT localPointPages_ = 1;
     bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)

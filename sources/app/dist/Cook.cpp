@@ -264,18 +264,22 @@ namespace
         }
 
         // `follow`: walk what it names. `level`: the shipped level whose walk this is ("" for the other roads).
-        void Add(std::string_view raw, const std::string& referrer, bool follow, const std::string& level, const char* road)
+        // `where`: what the messages name instead of the referrer -- a level's object ("<level>, object '<name>'": the
+        // Build Distribution window selects it on a click); the report keeps the file as the referrer.
+        void Add(std::string_view raw, const std::string& referrer, bool follow, const std::string& level, const char* road,
+                 const std::string& where = {})
         {
+            const std::string& namedBy = where.empty() ? referrer : where;
             const std::optional<std::string> normalised = Normalise(raw);
             if (!normalised)
             {
-                Warning("not a content path: \"" + std::string(raw) + "\" (named by " + referrer + ")");
+                Warning("not a content path: \"" + std::string(raw) + "\" (named by " + namedBy + ")");
                 return;
             }
             std::string path = *normalised;
             if (StartsWith(path, "shaders/"))
             {
-                if (!IsFileCached(path)) { Error("missing shader source " + path + " (named by " + referrer + ")"); }
+                if (!IsFileCached(path)) { Error("missing shader source " + path + " (named by " + namedBy + ")"); }
                 return; // the shaders package carries the sources
             }
             if (follow && IsImage(path))
@@ -286,7 +290,7 @@ namespace
             if (NeverInBase(path)) { return; }
             if (!IsFileCached(path))
             {
-                Error("missing file " + path + " (named by " + referrer + ")");
+                Error("missing file " + path + " (named by " + namedBy + ")");
                 return;
             }
             if (!vfs::IsLooseFile(path))
@@ -363,35 +367,45 @@ namespace
                           " -- open a level with it in the editor once (it bakes) and cook again");
                 }
             }
-            Visit(json, std::string_view(), path, level);
+            Visit(json, std::string_view(), path, level, std::string());
         }
 
-        void Visit(const Json& value, std::string_view key, const std::string& path, const std::string& level)
+        // `where`: inside a level's object (its objects, point and spot lights), "<level>, object '<name>'" -- the
+        // messages name it.
+        void Visit(const Json& value, std::string_view key, const std::string& path, const std::string& level,
+                   const std::string& where)
         {
             if (value.is_object())
             {
+                std::string inner;
+                if (where.empty() && (path == level || StartsWith(path, "data/levels/")) &&
+                    (key == "objects" || key == "pointLights" || key == "spotLights"))
+                {
+                    const auto name = value.find("name");
+                    if (name != value.end() && name->is_string()) { inner = path + ", object '" + name->get<std::string>() + "'"; }
+                }
                 for (auto it = value.begin(); it != value.end(); ++it)
                 {
                     // `source`: the import's glTF, never read at runtime; `_comment`: prose.
                     if (it.key() == "source" || it.key() == "_comment") { continue; }
-                    Visit(it.value(), it.key(), path, level);
+                    Visit(it.value(), it.key(), path, level, inner.empty() ? where : inner);
                 }
             }
             else if (value.is_array())
             {
-                for (const Json& item : value) { Visit(item, key, path, level); }
+                for (const Json& item : value) { Visit(item, key, path, level, where); }
             }
             else if (value.is_string())
             {
                 const std::string& s = value.get_ref<const std::string&>();
                 if (s.find('/') != std::string::npos || s.find('\\') != std::string::npos)
                 {
-                    if (HasContentExtension(s)) { Add(s, path, true, level, "level"); }
+                    if (HasContentExtension(s)) { Add(s, path, true, level, "level", where); }
                 }
                 else if (!s.empty() && s.size() < 128 && s.find_first_of(":*?\"<>|") == std::string::npos)
                 {
                     const std::string material = "data/materials/" + s + ".json";
-                    if (IsFileCached(material)) { Add(material, path, true, level, "level"); }
+                    if (IsFileCached(material)) { Add(material, path, true, level, "level", where); }
                 }
             }
         }
@@ -1015,6 +1029,12 @@ namespace
         for (const std::string& level : profile_.levels)
         {
             walked_.clear();
+            // A level in a folder no package carries (logs/, dist/, ...) would ship as nothing, silently.
+            if (const std::optional<std::string> normalised = Normalise(level); normalised && NeverInBase(*normalised))
+            {
+                Error("level " + level + " lies in a folder no package carries -- move it under data/levels/");
+                continue;
+            }
             Add(level, "profile levels", true, level, "level");
             const std::string memory = "data/bot_memory/" + FileStem(level);
             if (vfs::IsDirectory(memory))

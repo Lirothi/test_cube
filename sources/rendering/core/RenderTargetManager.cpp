@@ -990,54 +990,14 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     // second frame's copy would hold nothing the first one does not (2 x 96 MB at 1440p). They
     // rest shader-readable like everything else here, and the transform flips them to UAV for its
     // own duration. The views stay per-frame, in the per-frame heaps, built against the one set.
-    {
-        const UINT fw = std::max(1u, sizes.bloomFftWidth);
-        const UINT fh = std::max(1u, sizes.bloomFftHeight);
-        currentTargetWidth = fw;
-        currentTargetHeight = fh;
-        const D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.bloomFft, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-        auto createGrid = [&](GpuResource& res, const wchar_t* name) {
-            ThrowIfFailed(gpu::CreateCommittedTexture(dev,
-                heapProps, D3D12_HEAP_FLAG_NONE, rd,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Bloom, name,
-                res.GetAddressOfForCreate()));
-            res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
-        };
-        createGrid(bloomFftA_, L"BloomFftA");
-        createGrid(bloomFftB_, L"BloomFftB");
-        createGrid(bloomFftKernel_, L"BloomFftKernel");
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-        sd.Format = formats.bloomFft;
-        sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.Texture2D.MipLevels = 1;
-        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
-        ud.Format = formats.bloomFft;
-        ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-        for (UINT f = 0; f < render::kFrameCount; ++f)
-        {
-            auto& D = deferred_[f];
-            auto views = [&](ID3D12Resource* res, DeferredSrvSlot srvSlot, DeferredSrvSlot uavSlot,
-                             D3D12_CPU_DESCRIPTOR_HANDLE& srv, D3D12_CPU_DESCRIPTOR_HANDLE& uav) {
-                srv = DeferredSrvCPU(f, srvSlot);
-                dev->CreateShaderResourceView(res, &sd, srv);
-                uav = DeferredSrvCPU(f, uavSlot);
-                dev->CreateUnorderedAccessView(res, nullptr, &ud, uav);
-            };
-            D.bloomFftA = bloomFftA_.Get();
-            D.bloomFftB = bloomFftB_.Get();
-            D.bloomFftKernel = bloomFftKernel_.Get();
-            views(D.bloomFftA, DeferredSrvSlot::BloomFftA, DeferredSrvSlot::BloomFftAUAV, D.bloomFftASRV, D.bloomFftAUAV);
-            views(D.bloomFftB, DeferredSrvSlot::BloomFftB, DeferredSrvSlot::BloomFftBUAV, D.bloomFftBSRV, D.bloomFftBUAV);
-            views(D.bloomFftKernel, DeferredSrvSlot::BloomFftKernel, DeferredSrvSlot::BloomFftKernelUAV,
-                  D.bloomFftKernelSRV, D.bloomFftKernelUAV);
-            D.bloomFftWidth = fw;
-            D.bloomFftHeight = fh;
-            D.bloomFftImageWidth = std::max(1u, sizes.bloomFftImageWidth);
-            D.bloomFftImageHeight = std::max(1u, sizes.bloomFftImageHeight);
-        }
-    }
+    // docs/scalability_plan.md §4.3 (S3): full size only while the convolution method runs (SetBloomFftResidency); the
+    // residency is kept across a recreation of the targets.
+    bloomFftFormat_ = formats.bloomFft;
+    bloomFftFullWidth_ = std::max(1u, sizes.bloomFftWidth);
+    bloomFftFullHeight_ = std::max(1u, sizes.bloomFftHeight);
+    bloomFftImageWidth_ = std::max(1u, sizes.bloomFftImageWidth);
+    bloomFftImageHeight_ = std::max(1u, sizes.bloomFftImageHeight);
+    CreateBloomFftGrids(dev, decls);
 
     // S3.5: the cascade shadow atlas is ONE resource for every frame in flight, so it is
     // created here rather than inside the loop above; the per-frame DSV/SRV are built inside.
@@ -1255,6 +1215,80 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
             dev->CreateDepthStencilView(D.pointShadow, &dsv, D.pointShadowDSV[page]);
         }
     }
+}
+
+// P8C: the convolution grids and every frame's views onto them. Held: the padded power-of-two grid; not held (the
+// convolution method off, docs/scalability_plan.md §4.3): a placeholder of kBloomFftPlaceholder texels a side -- the views
+// stay valid, so every positional table and declaration keeps working with nothing to null-check, and the bloom's gate
+// reads `bloomFftResident`. GetAddressOfForCreate resets and unregisters the outgoing grid.
+void RenderTargetManager::CreateBloomFftGrids(ID3D12Device* dev, ResourceDeclarations decls)
+{
+    const UINT fw = bloomFftHeld_ ? bloomFftFullWidth_ : kBloomFftPlaceholder;
+    const UINT fh = bloomFftHeld_ ? bloomFftFullHeight_ : kBloomFftPlaceholder;
+    D3D12_HEAP_PROPERTIES heapProps{};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+    heapProps.CreationNodeMask = 1;
+    heapProps.VisibleNodeMask = 1;
+    D3D12_RESOURCE_DESC rd{};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = fw;
+    rd.Height = fh;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = bloomFftFormat_;
+    rd.SampleDesc.Count = 1;
+    rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    auto createGrid = [&](GpuResource& res, const wchar_t* name) {
+        ThrowIfFailed(gpu::CreateCommittedTexture(dev,
+            heapProps, D3D12_HEAP_FLAG_NONE, rd,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Bloom, name,
+            res.GetAddressOfForCreate()));
+        res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
+    };
+    createGrid(bloomFftA_, L"BloomFftA");
+    createGrid(bloomFftB_, L"BloomFftB");
+    createGrid(bloomFftKernel_, L"BloomFftKernel");
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = bloomFftFormat_;
+    sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels = 1;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+    ud.Format = bloomFftFormat_;
+    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        auto& D = deferred_[f];
+        auto views = [&](ID3D12Resource* res, DeferredSrvSlot srvSlot, DeferredSrvSlot uavSlot,
+                         D3D12_CPU_DESCRIPTOR_HANDLE& srv, D3D12_CPU_DESCRIPTOR_HANDLE& uav) {
+            srv = DeferredSrvCPU(f, srvSlot);
+            dev->CreateShaderResourceView(res, &sd, srv);
+            uav = DeferredSrvCPU(f, uavSlot);
+            dev->CreateUnorderedAccessView(res, nullptr, &ud, uav);
+        };
+        D.bloomFftA = bloomFftA_.Get();
+        D.bloomFftB = bloomFftB_.Get();
+        D.bloomFftKernel = bloomFftKernel_.Get();
+        views(D.bloomFftA, DeferredSrvSlot::BloomFftA, DeferredSrvSlot::BloomFftAUAV, D.bloomFftASRV, D.bloomFftAUAV);
+        views(D.bloomFftB, DeferredSrvSlot::BloomFftB, DeferredSrvSlot::BloomFftBUAV, D.bloomFftBSRV, D.bloomFftBUAV);
+        views(D.bloomFftKernel, DeferredSrvSlot::BloomFftKernel, DeferredSrvSlot::BloomFftKernelUAV,
+              D.bloomFftKernelSRV, D.bloomFftKernelUAV);
+        D.bloomFftWidth = fw;
+        D.bloomFftHeight = fh;
+        D.bloomFftImageWidth = bloomFftImageWidth_;
+        D.bloomFftImageHeight = bloomFftImageHeight_;
+        D.bloomFftResident = bloomFftHeld_;
+    }
+}
+
+void RenderTargetManager::SetBloomFftResidency(ID3D12Device* dev, ResourceDeclarations decls, bool held)
+{
+    if (held == bloomFftHeld_) { return; }
+    bloomFftHeld_ = held;
+    // Before the targets exist the flag alone is enough: Create builds the grids by it.
+    if (dev && IsCreated() && bloomFftA_.Get() != nullptr) { CreateBloomFftGrids(dev, decls); }
 }
 
 void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full)

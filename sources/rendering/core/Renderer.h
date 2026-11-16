@@ -399,6 +399,10 @@ public:
     // Step 24c: full-res (Legacy) vs 1x1 (VSM) legacy spot/point shadow atlases — the shadow-mode
     // reconcile calls this at GPU idle so only the active mode's shadow memory is resident.
     void SetLocalShadowResidency(bool full) { if (GetDevice()) { rtManager_.SetLocalShadowResidency(GetDevice(), Declarations(), full); } }
+    // docs/scalability_plan.md §4.3 (S3): the bloom's convolution grids held at full size only while the FFT method runs.
+    // Waits for the GPU when it changes them (and bumps the targets' generation: the kernel spectrum is rebuilt). True if
+    // it changed anything.
+    bool SetBloomFftResidency(bool held);
     bool IsLocalShadowFull() const { return rtManager_.IsLocalShadowFull(); }
     // The CSM atlas edge (Legacy and SDSM share it). MUST be called at GPU idle -- it reallocates
     // the atlas and rebuilds every view onto it.

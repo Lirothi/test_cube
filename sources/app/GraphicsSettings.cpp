@@ -1800,6 +1800,55 @@ bool GraphicsSettingsManager::ResetAll(Renderer& renderer, Scene& scene,
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
+const char* ScalabilityKnobOf(GraphicsControl control)
+{
+    switch (control)
+    {
+    case GraphicsControl::DlssMode:                        return "dlss.mode";
+    case GraphicsControl::Fxaa:                            return "aa.fxaa";
+    case GraphicsControl::RenderScale:                     return "aa.renderScale";
+    case GraphicsControl::UeSsrQuality:                    return "ssr.ueQuality";
+    case GraphicsControl::WaterReflectionNormalCascades:   return "ssr.waterNormalCascades";
+    case GraphicsControl::ReflectionResolution:            return "reflections.resolution";
+    case GraphicsControl::OceanReflectionResolution:       return "reflections.oceanResolution";
+    case GraphicsControl::ReflectionSource:                return "render.reflectionSource";
+    case GraphicsControl::RtAlphaMode:                     return "rt.alphaMode";
+    case GraphicsControl::FogGridPixels:                   return "fog.gridPixels";
+    case GraphicsControl::FogGridZ:                        return "fog.gridZ";
+    case GraphicsControl::CloudCaptureTexels:              return "cloud.captureTexels";
+    case GraphicsControl::LodPixelError:                   return "lod.pixelError";
+    case GraphicsControl::ChunkLodFactor:                  return "lod.chunkFactor";
+    case GraphicsControl::ShadowMode:                      return "shadow.mode";
+    case GraphicsControl::LocalShadowWindRange:            return "shadow.localWindRange";
+    case GraphicsControl::CsmFilter:                       return "csm.filterMode";
+    case GraphicsControl::CsmAtlasRes:                     return "csm.atlasRes";
+    case GraphicsControl::SdsmPartitions:                  return "sdsm.partitions";
+    case GraphicsControl::SdsmCacheFrames:                 return "sdsm.cacheFrames";
+    case GraphicsControl::ContactEnabled:                  return "contact.enabled";
+    case GraphicsControl::ContactSteps:                    return "contact.steps";
+    case GraphicsControl::VsmResolutionLodBiasDirectional: return "vsm.resolutionLodBiasDirectional";
+    case GraphicsControl::VsmSmrtRays:                     return "vsm.smrtRayCount";
+    case GraphicsControl::VsmSmrtSamples:                  return "vsm.smrtSamplesPerRay";
+    case GraphicsControl::VsmLocalSmrtRays:                return "vsm.localSmrtRayCount";
+    case GraphicsControl::TessyLodPixelError:              return "tessy.lodPixelError";
+    case GraphicsControl::VsmWindRange:                    return "vsm.windRange";
+    case GraphicsControl::StreamingPoolSizeMB:             return "streaming.poolSizeMB";
+    case GraphicsControl::StreamingMipBias:                return "streaming.mipBias";
+    case GraphicsControl::StreamingAnisotropy:             return "textures.anisotropy";
+    case GraphicsControl::GiEnabled:                       return "gi.enabled";
+    case GraphicsControl::GiFar:                           return "gi.far";
+    case GraphicsControl::GiDivisor:                       return "gi.divisor";
+    case GraphicsControl::GiFarDivisor:                    return "gi.farDivisor";
+    case GraphicsControl::GiRays:                          return "gi.rays";
+    case GraphicsControl::GiRayDistance:                   return "gi.rayDistance";
+    case GraphicsControl::SkyVisEnabled:                   return "skyVis.enabled";
+    case GraphicsControl::SkyVisRays:                      return "skyVis.rays";
+    case GraphicsControl::SkyVisFogRays:                   return "skyVis.fogRays";
+    case GraphicsControl::SkyVisFilterRadius:              return "skyVis.filterRadius";
+    default:                                               return nullptr;
+    }
+}
+
 bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& renderer,
                                            Scene& scene, SceneRenderSettings& settings)
 {

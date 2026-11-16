@@ -513,6 +513,32 @@ bool Scalability::ManagedProjectKnob(const std::string& name) const
     return false;
 }
 
+std::string Scalability::ManagerLabel(const std::string& name) const
+{
+    const ScalabilityKnob* knob = FindScalabilityKnob(name);
+    if (!knob || knob->content || pinned_.count(name) != 0u) { return {}; }
+    const auto levelLabel = [&](const std::array<std::string, kScalabilityLevels>& labels, int level) {
+        const std::size_t l = static_cast<std::size_t>(level);
+        return labels[l].empty() ? table_.levelNames[l] : labels[l];
+    };
+    for (std::size_t g = 0; g < table_.groups.size(); ++g)
+    {
+        if (groupLevels_[g] < 0) { continue; }
+        for (const auto& [n, op] : table_.groups[g].levels[static_cast<std::size_t>(groupLevels_[g])])
+        {
+            if (n == name) { return table_.groups[g].label + ": " + levelLabel(table_.groups[g].levelLabels, groupLevels_[g]); }
+        }
+    }
+    if (const ScalabilityCell* cell = ResolutionCell(resolutionLevel_))
+    {
+        for (const auto& [n, op] : *cell)
+        {
+            if (n == name) { return table_.resolutionLabel + ": " + levelLabel(table_.resolutionLevelLabels, resolutionLevel_); }
+        }
+    }
+    return {};
+}
+
 std::map<std::string, float> Scalability::ManagedValues() const
 {
     std::map<std::string, float> out;
@@ -987,6 +1013,7 @@ int RunScalabilitySelfTest()
         ScalabilityTable t;
         ScalabilityGroup g;
         g.key = "test";
+        g.label = "Test group";
         for (int l = 0; l < kScalabilityLevels; ++l)
         {
             const bool top = l == kScalabilityLevels - 1;
@@ -1038,6 +1065,11 @@ int RunScalabilitySelfTest()
         o.SetPreset(0);
         o.Apply("self-test Low");
         check(!o.NoteManualValues() && o.Overrides().empty(), "nothing changed by hand: no override");
+        // Developer Controls' dot beside a control (ManagerLabel): who sets a project knob now; a level's knob is the level's.
+        check(o.ManagerLabel("gi.rays") == "Test group: Low" && o.ManagerLabel("cloud.viewSampleCountMax").empty() &&
+                  o.ManagerLabel("gi.spacing").empty(),
+              "the knob's manager is named: \"" + o.ManagerLabel("gi.rays") + "\"; a level's knob and one outside the table "
+              "have none");
         knobs["gi.rays"] = 48.0f; // a Developer Controls edit while Low is chosen
         const bool noted = o.NoteManualValues();
         check(noted && o.Overrides().count("gi.rays") && o.Overrides().at("gi.rays") == 48.0f,
@@ -1063,6 +1095,7 @@ int RunScalabilitySelfTest()
         o.Pin("gi.rays");
         knobs["gi.rays"] = 50.0f; // a --set
         check(!o.NoteManualValues() && o.Overrides().empty(), "a pinned knob (--set) never becomes an override");
+        check(o.ManagerLabel("gi.rays").empty(), "a pinned knob has no manager (the dot is not drawn)");
     }
     LOG_INFO(logging::LogCategory::App, "scalability self-test: {} ({} failed)", failed == 0 ? "PASS" : "FAIL", failed);
     return failed;

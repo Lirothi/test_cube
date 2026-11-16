@@ -152,6 +152,9 @@ namespace settings
         void SetOverride(const std::string& name, float value) { overrides_[name] = value; }
         // The project knob a managed group sets at its level (no content knob, no pin): the cell's knobs.
         bool ManagedProjectKnob(const std::string& name) const;
+        // Who sets a project knob now: "Shadows: Low", "Render resolution: Balanced" -- "" when no managed group or
+        // resolution sets it, or a script pinned it (Developer Controls' mark beside the control).
+        std::string ManagerLabel(const std::string& name) const;
 
         // -1 = the group is not managed (scalability leaves its knobs alone).
         int GroupLevel(int group) const;

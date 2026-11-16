@@ -1,3 +1,4 @@
+#include "core/diagnostics/CrashHandler.h"
 #include "core/logging/Log.h"
 #include "core/memory/MemScope.h"
 #include "core/profiling/Profiler.h"
@@ -498,6 +499,7 @@ void TaskSystem::WorkerLoop(std::size_t index)
     char name[32];
     std::snprintf(name, sizeof(name), "Worker%zu", index);
     logging::SetCurrentThreadName(name);
+    crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
     while (true) {
         // Snapshot BEFORE looking for work: a publication/shutdown between the
         // last failed pop and wait changes the value and cannot be missed.

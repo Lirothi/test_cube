@@ -100,6 +100,8 @@ public:
     ~VolumetricCloud();
     void Prepare(Renderer* renderer, const VolumetricCloudSettings& settings);
     bool Ready() const { return initialized_ && !failed_; }
+    // The fixed resources are allocated (Prepare made them; Reset frees them).
+    bool Held() const { return heap_ != nullptr; }
     void Reset(); // caller has drained the GPU on level/device teardown
 
     // C1: the generated textures -- the weather map when the seed changes, the formation and cells

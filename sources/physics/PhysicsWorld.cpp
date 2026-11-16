@@ -22,6 +22,7 @@
 
 #include "app/Systems.h"
 #include "core/diagnostics/BootProfile.h"
+#include "core/diagnostics/CrashHandler.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "core/memory/MemScope.h"
@@ -218,6 +219,7 @@ namespace physics
             void Main()
             {
                 logging::SetCurrentThreadName("Physics");
+                crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
                 Profiler::Get().SetThreadName("Physics Step"); // its row in a --trace
                 Profiler::MarkThreadCrossFrame();
                 std::unique_lock<std::mutex> lock(mutex_);
@@ -509,6 +511,7 @@ namespace physics
                 jobs->SetThreadInitFunction([](int index)
                 {
                     logging::SetCurrentThreadName("Physics");
+                    crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
                     Profiler::Get().SetThreadName("Physics " + std::to_string(index)); // its row in a --trace
                     Profiler::MarkThreadCrossFrame(); // a step lies across the frames beside it; dropped otherwise, the longest ones first
                 });

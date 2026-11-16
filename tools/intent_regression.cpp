@@ -53,6 +53,7 @@
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/EditorMcpServer.h"
 #include "editor/dist/DistBuildJob.h"
+#include "editor/ui/BuildDistributionPanel.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "editor/scene/EnvironmentRuntime.h"
@@ -1213,6 +1214,17 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         Check(distHost.starts == 3 && distHost.last.flavour == "development", "flavour:development asks for the Development exe");
         Check(dist::BuildCommandLine(L"python", distHost.last).find(L" --flavour=development") != std::wstring::npos,
               "the Development request reaches build_dist.py as --flavour=development");
+        {
+            // The Build Distribution window's click on a check message: the cook's exact words for a level's object
+            // (tools/dist/check_gate.py proves the cook writes them) give the level and the object; others give nothing.
+            std::string level, object;
+            Check(BuildDistributionPanel::ObjectOfMessage(
+                      "missing file models/x/x.mesh.json (named by data/levels/wind_test.json, object 'palm 001')", level, object) &&
+                      level == "data/levels/wind_test.json" && object == "palm 001",
+                  "a check message naming a level's object gives its level and name: " + level + " / " + object);
+            Check(!BuildDistributionPanel::ObjectOfMessage("missing file data/x.json (named by profile include)", level, object),
+                  "a check message without an object is no button");
+        }
         struct PlayingHost final : editormcp::PlayHost
         {
             bool Playing() const override { return true; }

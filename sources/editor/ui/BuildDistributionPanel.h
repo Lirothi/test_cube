@@ -22,6 +22,9 @@ public:
         std::function<bool()> levelDirty;                    // the open level has unsaved edits
         std::function<bool(std::string& why)> saveLevel;     // Ctrl+S
         std::function<bool()> playing;                       // a Play session runs
+        // A check's message names a level's object ("<level>, object '<name>'"): select it in the open level (the
+        // Inspector shows it). False with `why` when that level is not the open one or has no such object.
+        std::function<bool(const std::string& level, const std::string& object, std::string& why)> selectObject;
     };
 
     void Draw(bool* open, const Hooks& hooks);
@@ -29,6 +32,9 @@ public:
     // What MCP's build_dist refuses before starting anything (the window refuses the same): a level that is not a file,
     // a boot level that is not shipped, a mode that is not one. Empty `why` = fine.
     static bool ValidateRequest(const dist::BuildRequest& request, std::string& why);
+    // A cook message that names a level's object ("... (named by <level>, object '<name>')", Cook.cpp Visit): its level
+    // and object -- the line the window turns into a button that selects it. False for any other message.
+    static bool ObjectOfMessage(const std::string& message, std::string& level, std::string& object);
 
 private:
     struct LevelStat
@@ -43,8 +49,11 @@ private:
     bool SaveProfile(const std::string& name, std::string& why);
     void StartRun(const std::string& mode, const Hooks& hooks);
     void ReadCheckReport(const std::string& path, bool allLevels);
+    // One message of a check: a line that names a level's object is a button that selects it.
+    void DrawMessage(const std::string& message, const char* level, const Hooks& hooks);
+    std::string selectStatus_; // what the last click on a message did
     void DrawProfile();
-    void DrawLevels();
+    void DrawLevels(const Hooks& hooks);
     void DrawContent();
     void DrawOptions();
     void DrawChecks(const Hooks& hooks);

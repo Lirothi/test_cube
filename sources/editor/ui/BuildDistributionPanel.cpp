@@ -428,7 +428,7 @@ void BuildDistributionPanel::DrawProfile()
     InputString("Output folder", profile_, "out", "dist");
 }
 
-void BuildDistributionPanel::DrawLevels()
+void BuildDistributionPanel::DrawLevels(const Hooks& hooks)
 {
     ImGui::SeparatorText("Levels");
     if (!profile_.contains("levels") || !profile_["levels"].is_array()) { profile_["levels"] = nlohmann::json::array(); }
@@ -526,8 +526,43 @@ void BuildDistributionPanel::DrawLevels()
     }
     if (!allLevelsErrors_.empty() && ImGui::TreeNode("levels_errors", "%zu problem(s) in the levels on disk", allLevelsErrors_.size()))
     {
-        for (const std::string& e : allLevelsErrors_) { ImGui::TextColored(LevelColour("error"), "%s", e.c_str()); }
+        for (const std::string& e : allLevelsErrors_) { DrawMessage(e, "error", hooks); }
+        if (!selectStatus_.empty()) { ImGui::TextDisabled("%s", selectStatus_.c_str()); }
         ImGui::TreePop();
+    }
+}
+
+bool BuildDistributionPanel::ObjectOfMessage(const std::string& message, std::string& level, std::string& object)
+{
+    const std::size_t by = message.find("(named by ");
+    const std::size_t mark = by == std::string::npos ? std::string::npos : message.find(", object '", by);
+    const std::size_t end = mark == std::string::npos ? std::string::npos : message.rfind("')");
+    if (mark == std::string::npos || end == std::string::npos || end <= mark + 10u) { return false; }
+    level = message.substr(by + 10u, mark - (by + 10u));
+    object = message.substr(mark + 10u, end - (mark + 10u));
+    return !level.empty() && !object.empty();
+}
+
+void BuildDistributionPanel::DrawMessage(const std::string& message, const char* level, const Hooks& hooks)
+{
+    // The cook names a level's object as "named by <level>, object '<name>')" (Cook.cpp Visit): such a line is a button.
+    std::string levelPath;
+    std::string object;
+    if (!hooks.selectObject || !ObjectOfMessage(message, levelPath, object))
+    {
+        ImGui::TextColored(LevelColour(level), "%s", message.c_str());
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, LevelColour(level));
+    ImGui::PushID(&message);
+    const bool clicked = ImGui::Selectable(message.c_str(), false);
+    ImGui::PopID();
+    ImGui::PopStyleColor();
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Click: select '%s' in %s", object.c_str(), levelPath.c_str()); }
+    if (clicked)
+    {
+        std::string why;
+        selectStatus_ = hooks.selectObject(levelPath, object, why) ? "selected '" + object + "'" : why;
     }
 }
 
@@ -671,8 +706,9 @@ void BuildDistributionPanel::DrawChecks(const Hooks& hooks)
     if (selectionChecked_ && (!checkErrors_.empty() || !checkWarnings_.empty()) &&
         ImGui::TreeNode("check_list", "the check's errors and warnings"))
     {
-        for (const std::string& e : checkErrors_) { ImGui::TextColored(LevelColour("error"), "%s", e.c_str()); }
-        for (const std::string& w : checkWarnings_) { ImGui::TextColored(LevelColour("warning"), "%s", w.c_str()); }
+        for (const std::string& e : checkErrors_) { DrawMessage(e, "error", hooks); }
+        for (const std::string& w : checkWarnings_) { DrawMessage(w, "warning", hooks); }
+        if (!selectStatus_.empty()) { ImGui::TextDisabled("%s", selectStatus_.c_str()); }
         ImGui::TreePop();
     }
 }
@@ -734,7 +770,7 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     if (ImGui::Button("Cancel")) { job.Cancel(); }
     ImGui::EndDisabled();
 
-    const dist::BuildStatus status = job.Status();
+    const dist::BuildStatus status = job.Status(200);
     if (status.id == 0) { return; }
     // A finished run's report is read once: the size check fills the level table, a check of the shipped levels the checks.
     if (status.finished && status.id != handledJobId_)
@@ -764,8 +800,7 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     ImGui::TextWrapped("%s", stages.c_str());
     if (ImGui::BeginChild("buildlog", ImVec2(0.0f, 150.0f), ImGuiChildFlags_Borders))
     {
-        const std::size_t from = status.events.size() > 200 ? status.events.size() - 200 : 0;
-        for (std::size_t i = from; i < status.events.size(); ++i)
+        for (std::size_t i = 0; i < status.events.size(); ++i)
         {
             const dist::BuildEvent& e = status.events[i];
             if (e.event == "stage_end") { continue; }
@@ -890,7 +925,7 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
     ImGui::TextDisabled("docs/distribution_build_plan.md -- the same profile from the console: python tools/build_dist.py --profile=%s",
                         profileName_.c_str());
     DrawProfile();
-    DrawLevels();
+    DrawLevels(hooks);
     DrawContent();
     DrawOptions();
     DrawChecks(hooks);

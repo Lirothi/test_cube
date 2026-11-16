@@ -495,6 +495,22 @@ static uint64_t s_deferredTargetsGeneration = 0u;
 
 uint64_t Renderer::GetDeferredTargetsGeneration() const { return s_deferredTargetsGeneration; }
 
+bool Renderer::SetBloomFftResidency(bool held)
+{
+    if (!GetDevice() || !rtManager_.IsCreated() || rtManager_.IsBloomFftHeld() == held) { return false; }
+    WaitForPreviousFrame(); // nothing in flight reads the grids replaced below
+    rtManager_.SetBloomFftResidency(GetDevice(), Declarations(), held);
+    // The grids are deferred targets: a new generation makes the bloom rebuild its cached kernel spectrum
+    // (BloomRenderer's BloomKernelKey) -- a grid made again comes back empty.
+    ++s_deferredTargetsGeneration;
+    const auto& D = rtManager_.Deferred(0);
+    const double mb = 3.0 * D.bloomFftWidth * D.bloomFftHeight * 16.0 / (1024.0 * 1024.0);
+    LOG_INFO(logging::LogCategory::Render, "bloom FFT grids: {} -- 3 x {}x{} ({:.1f} MB)",
+             held ? "made (the convolution method runs)" : "freed (the convolution method is off)",
+             D.bloomFftWidth, D.bloomFftHeight, mb);
+    return true;
+}
+
 // The renderer the terminate handler below reports through, and the one-shot install flag.
 //
 // A device removal usually surfaces as a ThrowIfFailed, and when that happens on a WORKER thread

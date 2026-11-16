@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include "core/diagnostics/CrashHandler.h"
 #include "core/logging/Log.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -162,6 +163,7 @@ void RhiQueue::RethrowPending()
 void RhiQueue::Main()
 {
     logging::SetCurrentThreadName("RHI");
+    crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
     Profiler::Get().SetThreadName("RHIThread");
     Profiler::MarkThreadCrossFrame(); // frame N's submit runs while the game thread closes N and opens N + 1
     threading::SetCurrentRole(threading::ThreadRole::Render); // the render half's queue work, handed over in order

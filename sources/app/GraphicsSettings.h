@@ -211,6 +211,10 @@ enum class GraphicsControl
     SkyVisFallbackFade,           // ...and its edge's fade (share of the radius it traces in full)
 };
 
+// The scalability table's `--set` name a control writes (data/config/scalability.json's knobs), or nullptr. Developer
+// Controls marks a control a graphics level manages, and one changed by hand over it (docs/scalability_plan.md §3.3).
+const char* ScalabilityKnobOf(GraphicsControl control);
+
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
 // exposure and colour grading) stay in the level. The CSM fit has no level-serialization path, so
 // it is a project default here and is re-applied whenever a level is loaded.

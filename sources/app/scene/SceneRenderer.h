@@ -63,6 +63,9 @@ public:
     // freed here with the GPU drained -- the caller's idle point, Scene::Render's reconciles --, made again by
     // EnsureFrameResources when wanted. ~51 MB a cascade. True when something was freed.
     bool ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool farWanted);
+    // The clouds' fixed resources (weather, shadow, the noise volumes, ~40 MB) while cloud.enabled is off, the same way;
+    // VolumetricCloud::Prepare makes them again.
+    bool ReleaseUnwantedClouds(Renderer* renderer, bool wanted);
 
     // I2: drop the cached RT acceleration structures + bindless geometry-info so the next RT frame
     // re-registers every mesh with its CURRENT material SRVs. Needed after a material's textures are

@@ -89,6 +89,17 @@ bool SceneRenderer::ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool fa
     return true;
 }
 
+bool SceneRenderer::ReleaseUnwantedClouds(Renderer* renderer, bool wanted)
+{
+    if (!renderer || wanted || !volumetricCloud_.Held()) { return false; }
+    renderer->WaitForPreviousFrame(); // nothing in flight reads the volumes freed below
+    volumetricCloud_.Reset();         // Prepare makes them again when the clouds come back
+    cloudHistoryFrames_ = 0u;
+    cloudLogged_ = -1;
+    LOG_INFO(logging::LogCategory::Render, "volumetric clouds: resources freed (cloud.enabled off)");
+    return true;
+}
+
 void SceneRenderer::Reset()
 {
     resources_ = SceneResourceBootstrapper{};

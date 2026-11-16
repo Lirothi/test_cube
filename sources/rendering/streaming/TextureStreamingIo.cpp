@@ -1,4 +1,5 @@
 #include "rendering/streaming/TextureStreamingIo.h"
+#include "core/diagnostics/CrashHandler.h"
 #include "core/memory/MemScope.h"
 
 #include <windows.h>
@@ -83,6 +84,7 @@ void TextureStreamingIo::CloseAll_()
 void TextureStreamingIo::Run_()
 {
     MEM_SCOPE(MemTag::TexStream); // the IO thread's buffers (memory profiling M3)
+    crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
     std::vector<std::uint8_t> tight;
     for (;;)
     {
