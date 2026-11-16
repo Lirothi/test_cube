@@ -1111,8 +1111,17 @@ Debug-редакторе) собирается тот же пакет, что и
   - **Обработчик падений на потоках движка.** Рабочие потоки задач, рендер, RHI, шаг физики и задачи Jolt, ввод-вывод
     стриминга текстур вызывают `crash::InstallThisThread()`: обработчик std::terminate в CRT MSVC у каждого потока свой, и
     поток получает 64 КБ гарантии стека.
-- **Не сделано:** только то, что за владельцем — лицензии (§11 п.13), «чистая машина» в Windows Sandbox, Windows 10,
-  видеокарты AMD и Intel.
+  - **Переопределение лицензий на одну сборку** (владелец: «при сборке релиз конфига кука сделай галку оверрайда
+    лицух»). `--override-licences` у сборщика и `build_dist.py`, в окне — галка «Override the licences for this build» под
+    «Every licence known», в MCP — `build_dist {overrideLicences: true}`. Ассет, который `strictLicences` отказывает,
+    уходит в сборку с предупреждением «shipped anyway»; список таких ассетов попадает в отчёт сборщика
+    (`licencesOverridden`), в вывод `build_dist.py` и в запись истории (в истории окна профиль такой сборки помечен «*»,
+    список — в подсказке). Профиль своё правило не меняет: окно галку не сохраняет, загрузка профиля её сбрасывает, а
+    установка галки сбрасывает результат прошлой проверки. Проверка `release`: 4 ошибки → 0, все 4 ассета в списке. На
+    профиле без `strictLicences` флаг ничего не меняет и сообщает об этом. `--build-dist=release,override-licences` открывает
+    окно на этом профиле с поставленной галкой (для снимка).
+- **Не сделано:** только то, что за владельцем — лицензии (§11 п.13; до решения `release` собирается только с
+  переопределением), «чистая машина» в Windows Sandbox, Windows 10, видеокарты AMD и Intel.
 - Пять конфигураций собираются без предупреждений; `check_file_io` (шире: `_wfsopen`, `_wopen`, `CreateFile2FromAppW`,
   `CreateFileMapping`, `D3DReadFileToBlob`, `LoadFrom*File`, `CreateBlobFromFile`, `basic_ifstream`, `filesystem::status`) /
   `check_logging` / `check_render_knobs` / `check_gpu_alloc` 0; `intent_regression` (Debug) PASS.

@@ -285,6 +285,7 @@ void BuildDistributionPanel::LoadProfile(const std::string& name)
     if (!profile_.is_object()) { profile_ = nlohmann::json::object(); }
     saved_ = profile_;
     flavour_ = profile_.value("flavour", std::string("shipping")) == "development" ? "development" : "shipping";
+    overrideLicences_ = false;
     includeLoaded_ = false;
     selectionChecked_ = false;
     checkErrors_.clear();
@@ -367,6 +368,7 @@ void BuildDistributionPanel::StartRun(const std::string& mode, const Hooks& hook
     request.profile = profileName_;
     request.mode = mode;
     request.flavour = flavour_;
+    request.overrideLicences = LicencesOverridden();
     std::string why;
     if (!ValidateRequest(request, why) || !dist::TheBuildJob().Start(request, why))
     {
@@ -449,6 +451,7 @@ void BuildDistributionPanel::DrawLevels(const Hooks& hooks)
         request.profile = profileName_;
         request.mode = "check";
         request.levels = levelsOnDisk_;
+        request.overrideLicences = LicencesOverridden();
         std::string why;
         if (dist::TheBuildJob().Start(request, why)) { sizesJob_ = true; }
         else { message_ = "Not measured: " + why; }
@@ -658,6 +661,29 @@ void BuildDistributionPanel::DrawOptions()
     CheckboxKey("Symbol archive", profile_, "symbols", false);
     ImGui::SameLine();
     CheckboxKey("Every licence known", profile_, "strictLicences", false);
+    if (profile_.value("strictLicences", false))
+    {
+        // The release rule stays in the profile; this build ships the assets it refuses. The last check was made the
+        // other way: its errors no longer say what a build would do -- Check again.
+        if (ImGui::Checkbox("Override the licences for this build", &overrideLicences_))
+        {
+            selectionChecked_ = false;
+            checkErrors_.clear();
+            checkWarnings_.clear();
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("An asset without a known licence in CREDITS.md (a ## section with \"license type:\" or \"License:\")\n"
+                              "stops a profile that wants every licence known. Ticked, the next Check and builds ship it\n"
+                              "anyway: a warning each, listed in the cook report and the history (--override-licences).\n"
+                              "Not saved: the profile keeps its rule, and loading a profile clears this.");
+        }
+        if (overrideLicences_)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(LevelColour("warning"), "assets without a known licence ship in this build");
+        }
+    }
 }
 
 void BuildDistributionPanel::DrawChecks(const Hooks& hooks)
@@ -699,6 +725,10 @@ void BuildDistributionPanel::DrawChecks(const Hooks& hooks)
     if (GetDiskFreeSpaceExW(vfs::ContentRoot().c_str(), &freeBytes, nullptr, nullptr) && freeBytes.QuadPart < (3ull << 30))
     {
         line("warning", "under 3 GB free on the build's drive");
+    }
+    if (LicencesOverridden())
+    {
+        line("warning", "the licence check is overridden for this build: assets without a known licence ship");
     }
     if (!selectionChecked_) { line("info", "Check walks the shipped levels: missing files, licences, sizes"); }
     else if (checkErrors_.empty()) { line("info", "the last check: no errors, " + std::to_string(checkWarnings_.size()) + " warning(s)"); }
@@ -781,7 +811,8 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
         Refresh();
     }
     const std::string title = "#" + std::to_string(status.id) + " " + status.request.mode + " " + status.request.profile +
-                              (status.request.flavour == "development" ? " (Development)" : "") + ": " +
+                              (status.request.flavour == "development" ? " (Development)" : "") +
+                              (status.request.overrideLicences ? " (licences overridden)" : "") + ": " +
                               (status.running ? status.stage : status.cancelled ? "cancelled" : status.exitCode == 0 ? "done" :
                                                                                   "FAILED (exit " + std::to_string(status.exitCode) + ")");
     ImGui::ProgressBar(static_cast<float>(status.running ? status.fraction : 1.0), ImVec2(-FLT_MIN, 0.0f), title.c_str());
@@ -876,7 +907,22 @@ void BuildDistributionPanel::DrawHistory()
             // Builds before the flavour existed were all Shipping.
             ImGui::TextUnformatted(h.value("flavour", std::string("shipping")) == "development" ? "Development" : "Shipping");
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(h.value("profile", std::string()).c_str());
+            // A build that shipped assets without a known licence (--override-licences) says so, and which.
+            const nlohmann::json overridden = h.value("licencesOverridden", nlohmann::json::array());
+            if (overridden.is_array() && !overridden.empty())
+            {
+                ImGui::TextColored(LevelColour("warning"), "%s *", h.value("profile", std::string()).c_str());
+                if (ImGui::IsItemHovered())
+                {
+                    std::string list;
+                    for (const nlohmann::json& a : overridden)
+                    {
+                        if (a.is_string()) { list += "\n  " + a.get<std::string>(); }
+                    }
+                    ImGui::SetTooltip("Shipped without a known licence (licences overridden):%s", list.c_str());
+                }
+            }
+            else { ImGui::TextUnformatted(h.value("profile", std::string()).c_str()); }
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(h.value("date", std::string()).c_str());
             ImGui::TableNextColumn();
@@ -904,6 +950,15 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
         return;
     }
     if (!refreshed_) { Refresh(); }
+    if (!openOn_.empty())
+    {
+        const std::size_t comma = openOn_.find(',');
+        const std::string name = openOn_.substr(0, comma);
+        if (std::find(profiles_.begin(), profiles_.end(), name) != profiles_.end()) { LoadProfile(name); }
+        else { LOG_WARNING(logging::LogCategory::Editor, "--build-dist={}: no profile tools/dist/{}.json", openOn_, name); }
+        overrideLicences_ = comma != std::string::npos && openOn_.substr(comma + 1) == "override-licences";
+        openOn_.clear();
+    }
     // The level table's sizes, once: the walk over every level on disk (a check, a second or two) -- unless a build has run
     // in this editor already (MCP opened the window for it): its status is what the caller polls, a check would replace it.
     if (!sizesRequested_ && !profileName_.empty())
@@ -917,6 +972,7 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
         request.profile = profileName_;
         request.mode = "check";
         request.levels = levelsOnDisk_;
+        request.overrideLicences = LicencesOverridden();
         std::string why;
         if (dist::TheBuildJob().Start(request, why)) { sizesJob_ = true; }
     }

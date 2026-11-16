@@ -784,9 +784,18 @@ distribution: packages, our file system over packages and direct paths, encrypti
   build shares. The version is `a.b.c[-suffix]` (checked in the script, the window and MCP: it is a folder name, a C string
   and a command-line value). The key: `%USERPROFILE%\.test_cube\pak_key.json`, made on the first encrypted build --
   KEEP A COPY; a lost key leaves its packages unreadable. `release` needs `versionMustGrow` and every licence known (until
-  the owner settles `rocks` and three textures in `import_staging/`, it does not build).
-- **The window and MCP**: Level Editor > File > Build Distribution... (`--build-dist` opens it), MCP `build_dist {profile,
-  mode, levels, bootLevel, version, encrypt, flavour}` -> `{id}`, `build_dist_status {id}`, `build_dist_cancel` -- one job
+  the owner settles `rocks` and three textures in `import_staging/`, it builds only with the licences overridden).
+  **`--override-licences`** (2026-11-16, owner: "a checkbox to override the licences when building the release config";
+  the window's "Override the licences for this build" under "Every licence known", MCP `build_dist {overrideLicences:
+  true}`): ONE build ships what a profile's `strictLicences` refuses -- the cook makes each such asset a warning
+  ("... -- shipped anyway: the licence check is overridden for this build") and lists them in the report's
+  `licencesOverridden`, build_dist.py prints them and writes them into the history entry (the window's History marks that
+  build's profile "*" with the list as its tooltip); the profile keeps its rule, the window never saves the tick and a
+  profile loaded clears it, ticking it drops the last check's result (Check again). release's check: 4 errors -> 0, the
+  4 assets listed; on a profile without `strictLicences` it changes nothing and says so.
+- **The window and MCP**: Level Editor > File > Build Distribution... (`--build-dist` opens it;
+  `--build-dist=<profile>[,override-licences]` on that profile, the override ticked -- for a `--shot`), MCP `build_dist {profile,
+  mode, levels, bootLevel, version, encrypt, overrideLicences, flavour}` -> `{id}`, `build_dist_status {id}`, `build_dist_cancel` -- one job
   (`dist::TheBuildJob`, a job object: Cancel and the editor closing end the whole tree). The window and the console give
   the same bytes (checked from Release_Editor and Debug). content / full write `dist/`, record rewrites `tools/dist/*.txt`:
   only when the person asked. A check message that names a level's object -- the cook says `(named by <level>, object

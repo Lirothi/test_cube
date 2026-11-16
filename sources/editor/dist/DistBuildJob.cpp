@@ -66,6 +66,7 @@ std::wstring BuildCommandLine(const std::wstring& python, const BuildRequest& re
     if (!request.version.empty()) { cmd += L" " + Quote(L"--version=" + vfs::Widen(request.version)); }
     if (!request.flavour.empty()) { cmd += L" --flavour=" + vfs::Widen(request.flavour); }
     if (request.noEncrypt) { cmd += L" --no-encrypt"; }
+    if (request.overrideLicences) { cmd += L" --override-licences"; }
     if (request.skipBuild) { cmd += L" --skip-build"; }
     return cmd;
 }
@@ -326,6 +327,7 @@ std::string BuildJob::StatusJson(int id) const
     out["mode"] = s.request.mode;
     out["profile"] = s.request.profile;
     out["flavour"] = s.request.flavour.empty() ? "profile's" : s.request.flavour;
+    if (s.request.overrideLicences) { out["overrideLicences"] = true; }
     out["stage"] = s.stage;
     out["fraction"] = s.fraction;
     out["seconds"] = s.seconds;

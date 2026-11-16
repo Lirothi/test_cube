@@ -14,6 +14,7 @@
 // Water mask bakes are re-keyed for the geometry's content hash (its vfs::Stat::version in a package). shaders.tcpak is
 // Material::CookShaders over the profile's shader list. A missing file, a mask that does not serve its geometry, and --
 // in a profile with "strictLicences" -- an asset without a known licence are errors: nothing is built then.
+// --override-licences makes the last a warning for one build (the profile keeps its rule); the report lists what shipped.
 
 #include "app/dist/Cook.h"
 
@@ -207,6 +208,9 @@ namespace
         bool encrypt = false;
         bool shaderSources = true;
         bool strictLicences = false;
+        // --override-licences: this build ships what strictLicences refuses -- a warning each, the assets listed in the
+        // report's "licencesOverridden". Never in a profile: a release rule is not switched off by saving a file.
+        bool licenceOverride = false;
         // "shipping" or "development" (docs/scalability_plan.md §7.5): a Development distribution also carries `devInclude`,
         // what only its developer windows read (the ocean window's presets). No literal path here: the literal scan of
         // sources/ would take it for this file's reference and ship it in both (the reset icons go by DeveloperWindow's).
@@ -692,7 +696,12 @@ namespace
                     entry["licence"] = nullptr;
                     entry["licenceProblem"] = why;
                     const std::string message = "no known licence: " + asset + " (" + why + ")";
-                    if (profile_.strictLicences) { Error(message); }
+                    if (profile_.strictLicences && !profile_.licenceOverride) { Error(message); }
+                    else if (profile_.strictLicences)
+                    {
+                        licencesOverridden_.push_back(asset);
+                        Warning(message + " -- shipped anyway: the licence check is overridden for this build");
+                    }
                     else { Warning(message); }
                 }
                 if (staging)
@@ -903,6 +912,7 @@ namespace
             if (profile_.encrypt) { report["key"] = keyPath_; }
             report["errors"] = errors_;
             report["warnings"] = warnings_;
+            if (profile_.licenceOverride) { report["licencesOverridden"] = licencesOverridden_; }
 
             std::uint64_t rawBytes = 0, storedBytes = 0, estimate = 0;
             Json files = Json::array();
@@ -997,6 +1007,7 @@ namespace
         std::vector<std::string> warnings_;
         std::set<std::string> warned_;
         Json assetsReport_ = Json::array();
+        std::vector<std::string> licencesOverridden_; // assets that ship without a known licence (--override-licences)
         Json waterMasksReport_ = Json::array();
         Json packagesReport_ = Json::array();
         Json shadersReport_ = Json::object();
@@ -1267,6 +1278,11 @@ int RunCook(const char* cmd)
     {
         profile->encrypt = false;
         overrides.push_back("--no-encrypt");
+    }
+    if (HasFlag(cmd, "--override-licences"))
+    {
+        profile->licenceOverride = true;
+        overrides.push_back("--override-licences");
     }
     if (const std::string flavour = ArgValue(cmd, "--flavour="); !flavour.empty())
     {

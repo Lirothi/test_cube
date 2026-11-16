@@ -765,7 +765,9 @@ namespace editormcp
                   "(tools/dist/<name>.json) -- the Build Distribution window's road, one build at a time. mode: check (the "
                   "dependency walk and its report, seconds), record (Release runs -> shader_list.txt, minutes), content (cook + "
                   "the folder from the Shipping exe as built, ~1 min), full (MSBuild Cook + Shipping first). levels / bootLevel / "
-                  "version / encrypt override the profile for this build; flavour picks the exe: shipping (the game) or development "
+                  "version / encrypt override the profile for this build, overrideLicences: true ships the assets a profile with "
+                  "strictLicences refuses (release: no known licence in CREDITS.md; a warning each, listed in the report) -- only "
+                  "when the person asked; flavour picks the exe: shipping (the game) or development "
                   "(the same packaged game with Developer Controls and the whole command line, folder <product>-<version>-dev, "
                   "never encrypted). Refused while the level plays, while a build runs, for a "
                   "level that is not a file, a bootLevel outside levels. Answers {id}; poll build_dist_status. content / full write "
@@ -778,6 +780,8 @@ namespace editormcp
                     { "bootLevel", { { "type", "string" }, { "description", "the level the build starts in (one of levels)" } } },
                     { "version", { { "type", "string" }, { "description", "e.g. 0.1.1 (default: the profile's)" } } },
                     { "encrypt", { { "type", "boolean" }, { "description", "false = this build unencrypted" } } },
+                    { "overrideLicences", { { "type", "boolean" },
+                        { "description", "true = this build ships assets without a known licence (the profile's strictLicences kept)" } } },
                     { "flavour", { { "type", "string" },
                         { "description", "shipping | development (default: the profile's, else shipping)" } } } }) },
             },
@@ -1304,6 +1308,8 @@ namespace editormcp
                 request.version = arguments.value("version", std::string());
                 request.flavour = arguments.value("flavour", std::string());
                 request.noEncrypt = arguments.contains("encrypt") && arguments["encrypt"].is_boolean() && !arguments["encrypt"].get<bool>();
+                request.overrideLicences = arguments.contains("overrideLicences") && arguments["overrideLicences"].is_boolean() &&
+                                           arguments["overrideLicences"].get<bool>();
                 if (arguments.contains("levels"))
                 {
                     if (!arguments["levels"].is_array()) { return Error("build_dist `levels` is an array of level paths."); }

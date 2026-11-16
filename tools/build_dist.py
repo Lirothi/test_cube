@@ -9,6 +9,9 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
 
     --levels=a.json,b.json  --boot-level=a.json  --version=1.2.3  --no-encrypt
                             override the profile for this build (named in the report)
+    --override-licences     this build ships the assets the profile's "strictLicences" refuses (no known licence in
+                            CREDITS.md): a warning each, listed in the cook report and the build's history entry
+                            ("licencesOverridden"); the profile keeps its rule
     --flavour=shipping|development
                             which exe goes into the folder (docs/scalability_plan.md §7): Shipping (the game, the developer
                             features stripped) or Development (the same packaged game with Developer Controls, the F keys,
@@ -415,6 +418,7 @@ def main():
     ap.add_argument("--boot-level")
     ap.add_argument("--version")
     ap.add_argument("--no-encrypt", action="store_true")
+    ap.add_argument("--override-licences", action="store_true")
     ap.add_argument("--flavour", choices=["shipping", "development"])
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--out")
@@ -478,6 +482,8 @@ def build(args, progress):
         overrides.append(f"--version={args.version}")
     if args.no_encrypt:
         overrides.append("--no-encrypt")
+    if args.override_licences:
+        overrides.append("--override-licences")
     if args.flavour:
         overrides.append(f"--flavour={args.flavour}")
 
@@ -485,6 +491,12 @@ def build(args, progress):
                               f"{', encrypted' if encrypt else ''}{' ' + ' '.join(overrides) if overrides else ''}")
     if flavour == "development" and profile.get("encrypt", False) and not args.no_encrypt:
         progress.emit("a Development build is not encrypted (the profile's \"encrypt\" is for Shipping)")
+    if args.override_licences:
+        if profile.get("strictLicences", False):
+            progress.emit("the licence check is overridden for this build: an asset without a known licence ships (a warning "
+                          "each, listed in the cook report and the history)", level="warning")
+        else:
+            progress.emit("--override-licences: the profile does not require every licence -- nothing to override")
     # The staging beside the output (the same volume: the folder is renamed into place whole). A killed build left one:
     # nothing of it is a distribution.
     tmp_root = out_dir.parent / ".dist_tmp"
@@ -605,6 +617,10 @@ def build(args, progress):
             raise BuildError(f"the cook failed with {len(report.get('errors', []))} error(s); the report: {report_path}")
         report_kept = work / "cook_report.json"
         shutil.move(str(report_path), report_kept)
+        overridden = report.get("licencesOverridden", [])
+        if overridden:
+            progress.emit(f"shipped without a known licence ({len(overridden)}, --override-licences): {', '.join(overridden)}",
+                          level="warning")
 
         # ---- the folder ----
         progress.begin("stage", f"the folder {folder_name}")
@@ -725,10 +741,11 @@ def build(args, progress):
                         "profile": profile["_name"], "flavour": flavour, "git": git_hash, "dirty": dirty, "date": date,
                         "result": "built",
                         "folder": str(final), "bytes": total, "zip": str(zip_path) if zip_path else None,
-                        "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt})
+                        "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt,
+                        **({"licencesOverridden": overridden} if overridden else {})})
         save_history(out_dir, history)
         progress.emit("done", event="done", folder=str(final), zip=str(zip_path) if zip_path else None, bytes=total,
-                      report=str(kept_report), flavour=flavour,
+                      report=str(kept_report), flavour=flavour, licencesOverridden=len(overridden),
                       version=version_text, warnings=len(report.get("warnings", [])))
         return 0
     finally:

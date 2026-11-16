@@ -1246,9 +1246,16 @@ int WINAPI WinMain(
         // "--show-import[=<name>]": the Import Assets window open at boot, <name> selected (implies
         // --editor). Not "--import...": that prefix is the offline converter's, matched by strstr.
         // "--build-dist": the Build Distribution window open at boot (implies --editor), for a --shot of it.
-        if (std::strstr(lpCmdLine, "--build-dist")) {
+        if (const char* flag = std::strstr(lpCmdLine, "--build-dist")) {
             g_bootBuildDist = true;
             g_bootEditor = true;
+            // "--build-dist=<profile>[,override-licences]": the profile it opens on.
+            if (flag[std::strlen("--build-dist")] == '=') {
+                const char* value = flag + std::strlen("--build-dist=");
+                const char* end = value;
+                while (*end && *end != ' ' && *end != '\t') { ++end; }
+                g_bootBuildDistProfile.assign(value, end);
+            }
         }
         if (const char* flag = std::strstr(lpCmdLine, "--show-import")) {
             const char* value = flag + std::strlen("--show-import");

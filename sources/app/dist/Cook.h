@@ -4,8 +4,11 @@
 // levels' dependencies, the files code names, the record runs' list, a report, and the packages base.tcpak + shaders.tcpak.
 //
 //   x64/Cook/test_cube.exe --cook=tools/dist/test.json --cook-out=<folder> [--cook-check] [--levels=a.json,b.json]
-//                          [--boot-level=a.json] [--version=1.2.3] [--no-encrypt] [--pak-key=<key.json>]
+//                          [--boot-level=a.json] [--version=1.2.3] [--no-encrypt] [--override-licences]
+//                          [--pak-key=<key.json>]
 //
+// --override-licences: a profile's "strictLicences" refuses an asset without a known licence in CREDITS.md; this build
+// ships it with a warning instead, and the report lists such assets ("licencesOverridden").
 // --cook-check walks and reports (sizes before compression and an estimate after), builds nothing. The report is
 // <folder>/cook_report.json; the exit code is the number of errors (0 = cooked). No window, no device.
 

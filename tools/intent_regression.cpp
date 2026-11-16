@@ -1208,10 +1208,19 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         unencrypted["encrypt"] = false;
         call(1206, "tools/call", { { "name", "build_dist" }, { "arguments", unencrypted } });
         Check(distHost.starts == 2 && distHost.last.noEncrypt, "encrypt:false asks for an unencrypted build");
+        Check(!distHost.last.overrideLicences &&
+                  dist::BuildCommandLine(L"python", distHost.last).find(L"--override-licences") == std::wstring::npos,
+              "no overrideLicences = the profile's licence rule");
+        json overridden = good;
+        overridden["overrideLicences"] = true;
+        call(1212, "tools/call", { { "name", "build_dist" }, { "arguments", overridden } });
+        Check(distHost.starts == 3 && distHost.last.overrideLicences &&
+                  dist::BuildCommandLine(L"python", distHost.last).find(L" --override-licences") != std::wstring::npos,
+              "overrideLicences:true reaches build_dist.py as --override-licences");
         json development = good;
         development["flavour"] = "development";
         call(1211, "tools/call", { { "name", "build_dist" }, { "arguments", development } });
-        Check(distHost.starts == 3 && distHost.last.flavour == "development", "flavour:development asks for the Development exe");
+        Check(distHost.starts == 4 && distHost.last.flavour == "development", "flavour:development asks for the Development exe");
         Check(dist::BuildCommandLine(L"python", distHost.last).find(L" --flavour=development") != std::wstring::npos,
               "the Development request reaches build_dist.py as --flavour=development");
         {
@@ -1232,7 +1241,7 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         } playing;
         editormcp::SetPlayHost(&playing);
         const std::optional<json> inPlay = call(1207, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
-        Check((*inPlay)["result"]["isError"].get<bool>() && text(inPlay).find("playing") != std::string::npos && distHost.starts == 3,
+        Check((*inPlay)["result"]["isError"].get<bool>() && text(inPlay).find("playing") != std::string::npos && distHost.starts == 4,
               "build_dist is refused while the level plays: " + text(inPlay));
         editormcp::SetPlayHost(nullptr);
         const std::optional<json> status = call(1208, "tools/call", { { "name", "build_dist_status" }, { "arguments", { { "id", 7 } } } });

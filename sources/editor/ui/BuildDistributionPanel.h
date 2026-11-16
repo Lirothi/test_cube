@@ -35,6 +35,8 @@ public:
     // A cook message that names a level's object ("... (named by <level>, object '<name>')", Cook.cpp Visit): its level
     // and object -- the line the window turns into a button that selects it. False for any other message.
     static bool ObjectOfMessage(const std::string& message, std::string& level, std::string& object);
+    // "--build-dist=<profile>[,override-licences]": the window opens on that profile (and the licence override ticked).
+    void OpenOn(const std::string& spec) { openOn_ = spec; }
 
 private:
     struct LevelStat
@@ -69,6 +71,11 @@ private:
     // shipping | development (docs/scalability_plan.md §7): which exe the folder gets. The profile's "flavour" when it is
     // loaded, then this window's choice -- passed with each run, never written into the profile.
     std::string flavour_ = "shipping";
+    // This window's "Override for this build" beside the profile's "Every licence known": the next runs ship the assets
+    // without a known licence (--override-licences). Never written into the profile; a profile loaded clears it.
+    bool overrideLicences_ = false;
+    std::string openOn_; // OpenOn's spec, taken by the first Draw after the profiles are listed
+    [[nodiscard]] bool LicencesOverridden() const { return overrideLicences_ && profile_.value("strictLicences", false); }
     nlohmann::json profile_;
     nlohmann::json saved_;
     char saveAsName_[64] = {};

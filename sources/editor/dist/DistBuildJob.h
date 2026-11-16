@@ -21,6 +21,8 @@ namespace dist
         // shipping | development (docs/scalability_plan.md §7): which exe the folder gets; empty = the profile's (shipping).
         std::string flavour;
         bool noEncrypt = false;
+        // --override-licences: ship the assets the profile's "strictLicences" refuses (a warning each); the profile keeps it.
+        bool overrideLicences = false;
         bool skipBuild = false;
     };
 

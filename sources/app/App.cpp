@@ -111,6 +111,7 @@ bool g_playByLevelRule = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
 bool g_bootBuildDist = false;
+std::string g_bootBuildDistProfile;
 std::string g_bootImportItem;
 std::string g_bootInspect;
 std::string g_intentPhrase;

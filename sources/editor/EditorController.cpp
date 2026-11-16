@@ -3225,6 +3225,7 @@ void EditorController::Draw(
     {
         showBuildDistPanel_ = true;
         g_bootBuildDist = false;
+        if (!g_bootBuildDistProfile.empty()) { buildDistPanel_.OpenOn(g_bootBuildDistProfile); }
         LOG_INFO(logging::LogCategory::Editor, "--build-dist: opened Build Distribution");
     }
     // "--show-import[=<name>]": once, the Import Assets window open with <name> selected.
