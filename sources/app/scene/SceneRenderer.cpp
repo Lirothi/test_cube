@@ -75,6 +75,20 @@ void SceneRenderer::RefreshMaterialHandles(Renderer* renderer,
     resources_.RefreshMaterialHandles(renderer, objects, skybox);
 }
 
+bool SceneRenderer::ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool farWanted)
+{
+    const bool freeNear = ddgi_[0].Held() && !giWanted;
+    const bool freeFar = ddgi_[1].Held() && (!giWanted || !farWanted);
+    if (!renderer || (!freeNear && !freeFar)) { return false; }
+    renderer->WaitForPreviousFrame(); // nothing in flight reads the probes freed below
+    if (freeFar) { ddgi_[1].Reset(); }
+    if (freeNear) { ddgi_[0].Reset(); }
+    LOG_INFO(logging::LogCategory::Render, "GI probe volumes: {} freed (the knob turned {} off)",
+             freeNear && freeFar ? "both cascades" : freeNear ? "the near cascade" : "the far cascade",
+             freeNear ? "gi.enabled" : "gi.far");
+    return true;
+}
+
 void SceneRenderer::Reset()
 {
     resources_ = SceneResourceBootstrapper{};

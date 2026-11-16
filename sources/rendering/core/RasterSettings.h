@@ -25,4 +25,18 @@ inline void SetRasterBindless(bool on)
     if (g_rasterBindless != on) { g_rasterBindless = on; ++g_rasterBindlessGen; }
 }
 
+// The material samplers' anisotropy (docs/scalability_plan.md §4.4, S3; UE r.MaxAnisotropy; the group Textures; `--set
+// textures.anisotropy:1|2|4|8|16`, user_settings.json graphics streaming.anisotropy, Developer Controls > Streaming):
+// every surface sampler the G-buffer, the
+// instanced models, glass and the ocean bind (SamplerManager::AnisoWrap). Live: the samplers are staged a frame by their
+// description, so a change is the next frame's -- no pipeline is rebuilt. 16 = today.
+inline std::uint32_t g_textureAnisotropy = 16u;
+inline std::uint32_t g_textureAnisotropy_game = 16u;
+inline const bool g_textureAnisotropy_knob = ::knob::Register(g_textureAnisotropy_game, g_textureAnisotropy, "render::g_textureAnisotropy");
+
+inline std::uint32_t ClampAnisotropy(std::uint32_t a)
+{
+    return a <= 1u ? 1u : a <= 2u ? 2u : a <= 4u ? 4u : a <= 8u ? 8u : 16u;
+}
+
 } // namespace render

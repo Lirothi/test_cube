@@ -81,8 +81,11 @@ def main():
                 shaders |= got_s
                 files |= got_v
 
+    # The levels the runs went over: build_dist.py warns about a build whose levels were not among them.
+    recorded = sorted(set(l.replace("\\", "/") for l in args.levels))
     header = "# docs/distribution_build_plan.md §5: the shader permutations a shipped build asks for -- file|entry|stage|defines.\n" \
-             "# Written by tools/dist/record_shaders.py; --shader-cook compiles exactly these.\n"
+             "# Written by tools/dist/record_shaders.py; --shader-cook compiles exactly these.\n" \
+             f"# levels: {' '.join(recorded)}\n"
     old_s = {l for l in read_lines(pathlib.Path(args.shader_list)) if not l.startswith("#")}
     old_v = {l for l in read_lines(pathlib.Path(args.vfs_list)) if not l.startswith("#")}
     write_sorted(pathlib.Path(args.shader_list), shaders, header)

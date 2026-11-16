@@ -1,5 +1,6 @@
 # docs/distribution_build_plan.md §5: the shader permutations a shipped build asks for -- file|entry|stage|defines.
 # Written by tools/dist/record_shaders.py; --shader-cook compiles exactly these.
+# levels: data/levels/wind_test.json
 shaders/bloom_conv_cs.hlsl|CSMain|cs|
 shaders/bloom_cs.hlsl|CSMain|cs|
 shaders/bloom_fft_cs.hlsl|CSMain|cs|

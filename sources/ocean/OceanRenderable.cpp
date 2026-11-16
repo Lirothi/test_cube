@@ -1,4 +1,5 @@
 #include "ocean/OceanRenderable.h"
+#include "rendering/core/RasterSettings.h" // render::g_textureAnisotropy
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
 #include <algorithm>
@@ -1137,7 +1138,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         *SamplerManager::LinearWrap(),
         *SamplerManager::LinearClamp(),
         *SamplerManager::PointClamp(),
-        *SamplerManager::AnisoWrap(16),
+        *SamplerManager::AnisoWrap(render::g_textureAnisotropy), // textures.anisotropy
         *SamplerManager::ComparisonLinearClamp() }; // s4: the sun's shadow, glass's s1
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 

@@ -106,6 +106,8 @@ enum class SamplerPresetIndex : size_t {
     PointClamp,
     FontMinPointMagLinearClamp,
     ComparisonLinearClamp,
+    AnisoWrap1,
+    AnisoWrap2,
     AnisoWrap4,
     AnisoWrap8,
     AnisoWrap16,
@@ -186,6 +188,8 @@ struct PrebakedSamplers {
         descs[static_cast<size_t>(SamplerPresetIndex::ComparisonLinearClamp)] =
             makeComparisonLinearClamp();
 
+        descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap1)] = makeAnisoWrap(1);
+        descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap2)] = makeAnisoWrap(2);
         descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap4)] = makeAnisoWrap(4);
         descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap8)] = makeAnisoWrap(8);
         descs[static_cast<size_t>(SamplerPresetIndex::AnisoWrap16)] = makeAnisoWrap(16);
@@ -219,6 +223,12 @@ const D3D12_SAMPLER_DESC* SamplerManager::PointClamp() {
 
 const D3D12_SAMPLER_DESC* SamplerManager::AnisoWrap(UINT aniso) {
     const UINT requested = aniso == 0 ? 8u : aniso;
+    if (requested <= 1) {
+        return ResolveSampler(SamplerPresetIndex::AnisoWrap1);
+    }
+    if (requested <= 2) {
+        return ResolveSampler(SamplerPresetIndex::AnisoWrap2);
+    }
     if (requested <= 4) {
         return ResolveSampler(SamplerPresetIndex::AnisoWrap4);
     }

@@ -67,6 +67,7 @@ namespace
         float streamingHiddenScale = 0.5f;
         bool streamingMipFade = true;
         bool streamingPerTextureBias = true; // UE r.Streaming.UsePerTextureBias: mip bias is a budget ceiling, not a cap
+        std::uint32_t textureAnisotropy = 16u; // UE r.MaxAnisotropy: the material samplers (render::g_textureAnisotropy)
         // GI: the DDGI probe volume (SceneFrameData.h SceneRenderSettings::gi*, the same defaults).
         bool giEnabled = true;
         float giSpacing = 0.5f;
@@ -142,6 +143,7 @@ namespace
         render::ShadowMode shadowMode = render::ShadowMode::VSM;
         bool giIndirectShadows = true;
         float localShadowWindRange = 30.0f; // render::g_localShadowWindRange_game (metres, < 0 = every light sways)
+        unsigned localShadowMaxRes = 2048u; // render::g_localShadowMaxRes_game: UE r.Shadow.MaxResolution of the lamps' atlases
         CascadeShadowConfig csm{};
         // The CSM atlas edge (render::g_csmAtlasRes_game) -- a RESOURCE size, shared by Legacy and
         // SDSM, reallocated at GPU idle by Scene::ReconcileShadowMode.
@@ -190,6 +192,7 @@ namespace
         std::uint32_t vsmLruFrames = vsm::kLruFrameThreshold;
         int vsmClipmapFirstLevel = 6;
         float vsmResolutionLodBiasDirectional = 0.0f;
+        float vsmResolutionLodBiasLocal = 0.0f;
         std::uint32_t smrtRayCount = 8u;
         std::uint32_t smrtSamplesPerRay = 4u;
         std::uint32_t localSmrtRayCount = 4u;
@@ -427,6 +430,7 @@ namespace
         s.contactMaxDistance = std::clamp(finite(s.contactMaxDistance, 0.0f), 0.0f, 2000.0f);
         s.contactFadeBand = std::clamp(finite(s.contactFadeBand, 10.0f), 0.1f, 200.0f);
         s.localShadowWindRange = std::clamp(finite(s.localShadowWindRange, 30.0f), -1.0f, 2000.0f);
+        s.localShadowMaxRes = std::clamp(s.localShadowMaxRes, render::kLocalShadowMaxResMin, render::kLocalShadowMaxResMax);
         // --set gi.*'s own ranges (App.cpp ApplySweepValue).
         s.giSpacing = std::clamp(finite(s.giSpacing, 0.5f), 0.1f, 8.0f);
         s.giHysteresis = std::clamp(finite(s.giHysteresis, 0.98f), 0.0f, 0.99f);
@@ -457,6 +461,7 @@ namespace
         s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, vsm::kMaxLruFrames);
         s.vsmClipmapFirstLevel = std::clamp(s.vsmClipmapFirstLevel, 0, 16);
         s.vsmResolutionLodBiasDirectional = std::clamp(finite(s.vsmResolutionLodBiasDirectional, 0.0f), -4.0f, 4.0f);
+        s.vsmResolutionLodBiasLocal = std::clamp(finite(s.vsmResolutionLodBiasLocal, 0.0f), -4.0f, 4.0f);
         s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);
         s.smrtSamplesPerRay = std::clamp(s.smrtSamplesPerRay, 1u, vsm::kSmrtMaxSamplesPerRay);
         s.localSmrtRayCount = std::min(s.localSmrtRayCount, vsm::kSmrtMaxRays);
@@ -534,6 +539,7 @@ namespace
         put("contact.steps", s.contactSteps);
         put("vsm.windRange", s.vsmWindRange);
         put("shadow.localWindRange", s.localShadowWindRange);
+        put("shadow.localMaxRes", s.localShadowMaxRes);
         put("gi.enabled", s.giEnabled);
         put("gi.far", s.giFar);
         put("gi.rays", s.giRays);
@@ -558,6 +564,7 @@ namespace
         put("cloud.captureTexels", s.cloudCaptureTexels);
         put("streaming.poolSizeMB", s.streamingPoolSizeMB);
         put("streaming.mipBias", s.streamingMipBias);
+        put("textures.anisotropy", s.textureAnisotropy);
         put("dlss.mode", s.dlssMode);
         put("aa.renderScale", s.renderScale);
         put("aa.fxaa", s.fxaa);
@@ -593,6 +600,7 @@ namespace
         s.streamingEnabled = streaming::g_enabled_game;
         s.streamingPoolSizeMB = streaming::g_poolSizeMB_game;
         s.streamingMipBias = streaming::g_mipBias_game;
+        s.textureAnisotropy = render::g_textureAnisotropy_game;
         s.streamingBoost = streaming::g_boost_game;
         s.streamingHiddenScale = streaming::g_hiddenScale_game;
         s.streamingMipFade = streaming::g_mipFade_game;
@@ -668,6 +676,7 @@ namespace
         s.shadowMode = render::g_shadowModeFromCli_game ? render::g_shadowModePersisted_game : render::g_shadowMode_game;
         s.giIndirectShadows = render::g_giIndirectShadowsEnabled_game;
         s.localShadowWindRange = render::g_localShadowWindRange_game;
+        s.localShadowMaxRes = render::g_localShadowMaxRes_game;
         s.csm = scene.CascadeConfig();
         s.csmAtlasRes = render::g_csmAtlasRes_game;
 
@@ -709,6 +718,7 @@ namespace
         s.vsmLruFrames = vsm::g_lruThreshold_game;
         s.vsmClipmapFirstLevel = vsm::g_clipmapFirstLevel_game;
         s.vsmResolutionLodBiasDirectional = vsm::g_resolutionLodBiasDirectional_game;
+        s.vsmResolutionLodBiasLocal = vsm::g_resolutionLodBiasLocal_game;
         s.smrtRayCount = vsm::g_smrtRayCount_game;
         s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay_game;
         s.localSmrtRayCount = vsm::g_localSmrtRayCount_game;
@@ -800,6 +810,7 @@ namespace
         streaming::g_hiddenScale_game = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
         streaming::g_mipFade_game = s.streamingMipFade;
         streaming::g_perTextureBias_game = s.streamingPerTextureBias;
+        render::g_textureAnisotropy_game = render::ClampAnisotropy(s.textureAnisotropy);
     }
 
     void ApplyGi(const GraphicsSettingsSnapshot& s, SceneRenderSettings& settings)
@@ -920,6 +931,7 @@ namespace
         if (!render::g_shadowModeFromCli_game) { render::g_shadowMode_game = s.shadowMode; }
         render::g_giIndirectShadowsEnabled_game = s.giIndirectShadows;
         render::g_localShadowWindRange_game = s.localShadowWindRange;
+        render::g_localShadowMaxRes_game = s.localShadowMaxRes; // Scene::ReconcileShadowMode reallocates on a change
         render::g_shadowLodBias_game = s.shadowLodBias;
         render::g_shadowLodBiasNearTier_game = s.shadowLodBiasNearTier;
         render::g_shadowLodTierStride_game = s.shadowLodTierStride;
@@ -928,6 +940,7 @@ namespace
         vsm::g_lruThreshold_game = s.vsmLruFrames;
         vsm::g_clipmapFirstLevel_game = s.vsmClipmapFirstLevel;
         vsm::g_resolutionLodBiasDirectional_game = s.vsmResolutionLodBiasDirectional;
+        vsm::g_resolutionLodBiasLocal_game = s.vsmResolutionLodBiasLocal;
         vsm::g_smrtRayCount_game = s.smrtRayCount;
         vsm::g_smrtSamplesPerRay_game = s.smrtSamplesPerRay;
         vsm::g_localSmrtRayCount_game = s.localSmrtRayCount;
@@ -1016,7 +1029,8 @@ namespace
                 { "boost", s.streamingBoost },
                 { "hiddenScale", s.streamingHiddenScale },
                 { "mipFade", s.streamingMipFade },
-                { "perTextureBias", s.streamingPerTextureBias }
+                { "perTextureBias", s.streamingPerTextureBias },
+                { "anisotropy", s.textureAnisotropy }
             } },
             { "gi", {
                 { "enabled", s.giEnabled },
@@ -1110,6 +1124,7 @@ namespace
                 { "mode", ShadowModeName(s.shadowMode) },
                 { "gpuInstancedCasters", s.giIndirectShadows },
                 { "localLightWindRange", s.localShadowWindRange },
+                { "localLightMaxResolution", s.localShadowMaxRes },
                 { "contact", {
                     { "enabled", s.contactEnabled },
                     { "localLightMode", s.contactLocalMode },
@@ -1177,6 +1192,7 @@ namespace
                     { "lruFrames", s.vsmLruFrames },
                     { "clipmapFirstLevel", s.vsmClipmapFirstLevel },
                     { "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional },
+                    { "resolutionLodBiasLocal", s.vsmResolutionLodBiasLocal },
                     { "smrtRayCount", s.smrtRayCount },
                     { "smrtSamplesPerRay", s.smrtSamplesPerRay },
                     { "localSmrtRayCount", s.localSmrtRayCount },
@@ -1253,6 +1269,7 @@ namespace
         Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
         Read(streamingSec, "mipFade", s.streamingMipFade);
         Read(streamingSec, "perTextureBias", s.streamingPerTextureBias);
+        Read(streamingSec, "anisotropy", s.textureAnisotropy);
         const json& gi = Section(root, "gi");
         Read(gi, "enabled", s.giEnabled);
         Read(gi, "spacing", s.giSpacing);
@@ -1360,6 +1377,7 @@ namespace
         }
         Read(shadows, "gpuInstancedCasters", s.giIndirectShadows);
         Read(shadows, "localLightWindRange", s.localShadowWindRange);
+        Read(shadows, "localLightMaxResolution", s.localShadowMaxRes);
         Read(contact, "enabled", s.contactEnabled);
         Read(contact, "localLightMode", s.contactLocalMode);
         Read(contact, "temporalDither", s.contactTemporalDither);
@@ -1433,6 +1451,7 @@ namespace
         Read(vsmSettings, "lruFrames", s.vsmLruFrames);
         Read(vsmSettings, "clipmapFirstLevel", s.vsmClipmapFirstLevel);
         Read(vsmSettings, "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
+        Read(vsmSettings, "resolutionLodBiasLocal", s.vsmResolutionLodBiasLocal);
         Read(vsmSettings, "smrtRayCount", s.smrtRayCount);
         Read(vsmSettings, "smrtSamplesPerRay", s.smrtSamplesPerRay);
         Read(vsmSettings, "localSmrtRayCount", s.localSmrtRayCount);
@@ -1921,6 +1940,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
     case GraphicsControl::StreamingPoolSizeMB:            current.streamingPoolSizeMB = defaults.streamingPoolSizeMB; break;
     case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
+    case GraphicsControl::StreamingAnisotropy:            current.textureAnisotropy = defaults.textureAnisotropy; break;
     case GraphicsControl::StreamingBoost:                 current.streamingBoost = defaults.streamingBoost; break;
     case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
     case GraphicsControl::StreamingMipFade:               current.streamingMipFade = defaults.streamingMipFade; break;
@@ -2041,7 +2061,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyContact(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::StreamingEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::StreamingPerTextureBias))
+             value <= static_cast<unsigned>(GraphicsControl::StreamingAnisotropy))
     {
         ApplyStreaming(current);
     }

@@ -420,8 +420,7 @@ namespace vfs
                 const std::vector<std::uint8_t> saved = Pattern(123, 11, true);
                 t.Expect(WriteBytes(overlay / L"edge.bin", saved) && WriteBytes(overlay / L"new.bin", saved) &&
                          WriteBytes(overlay / L"one.bin", saved), "writing the overlay's files");
-                mounts.overlayPrefix = "dir/Sub/";
-                mounts.overlayFolder = overlay;
+                mounts.overlays = { { "dir/Other/", root / L"other_overlay" }, { "dir/Sub/", overlay } };
                 const std::optional<Stat> over = detail::StatIn(mounts, Path("DIR/sub/edge.bin"));
                 t.Expect(over && over->size == saved.size(), "the overlay's file wins over the package's (any case)");
                 std::vector<std::uint8_t> back;
@@ -439,7 +438,14 @@ namespace vfs
                 t.Expect(std::count(overList.begin(), overList.end(), std::string("new.bin")) == 1 &&
                          std::count(overList.begin(), overList.end(), std::string("edge.bin")) == 1 && overList.size() == 5,
                          "a list under the prefix: the overlay's files (its one.bin is dir/Sub/one.bin), the shared one once");
-                mounts.overlayPrefix.clear();
+                // Two overlays (Shipping's data/bot_memory/ and data/ocean/): each serves its own prefix only.
+                const std::vector<std::uint8_t> other = Pattern(77, 5, true);
+                t.Expect(WriteBytes(root / L"other_overlay" / L"edge.bin", other), "writing the second overlay's file");
+                const std::optional<Stat> second = detail::StatIn(mounts, Path("dir/Other/edge.bin"));
+                const std::optional<Stat> first = detail::StatIn(mounts, Path("dir/Sub/edge.bin"));
+                t.Expect(second && second->size == other.size() && first && first->size == saved.size(),
+                         "two overlays: each prefix reads its own folder");
+                mounts.overlays.clear();
             }
             package.reset();
 

@@ -1085,6 +1085,24 @@ Debug-редакторе) собирается тот же пакет, что и
   видит `%LOCALAPPDATA%` через виртуализацию пакета MSIX (`Packages\Claude_...\LocalCache`) — у игрока этого нет.
 - Windows Sandbox: компонент `Containers-DisposableClientVM` выключен; его включение меняет систему и требует перезагрузки —
   за владельцем. Windows 10 — по-прежнему нет машины.
+
+### Хвосты (2026-11-16)
+
+Владелец: «доделывай остальные пункты».
+
+- **Уровни записи шейдеров.** `record_shaders.py` пишет в `shader_list.txt` строку `# levels:` со списком уровней, по которым
+  шла запись. `build_dist.py` предупреждает о уровнях сборки вне этого списка и печатает команду перезаписи; окно Build
+  Distribution показывает их жёлтой строкой. Строка добавлена и в нынешний список: `wind_test`, по которому его записали.
+- **Осадка в ключе маски воды.** Запечка с другой осадкой, чем в блоке `vessel` из mesh.json, перестраивается сборщиком с
+  осадкой ассета (отчёт: «rebuilt (the bake was made for another draft)»). Стеклянные слоты — это материалы, сборщик их не
+  судит; если они разошлись, игра строит маску при загрузке.
+- **Shipping без кода Developer Controls** — scalability_plan §7, §10 п.12.
+- **Оверлеи пользователя** — `vfs::Config::overlays`, несколько префиксов: `data/bot_memory/` и `data/ocean/`.
+- **Не сделано:**
+  - щелчок по ошибке в окне сборки не выделяет объект;
+  - отдельного гейта режима `check` нет;
+  - нет гарантии стека на рабочих потоках обработчика падений — отчёт после переупорядочивания стек не требует;
+  - не убрана копия событий в `Status()`.
 - Пять конфигураций собираются без предупреждений; `check_file_io` (шире: `_wfsopen`, `_wopen`, `CreateFile2FromAppW`,
   `CreateFileMapping`, `D3DReadFileToBlob`, `LoadFrom*File`, `CreateBlobFromFile`, `basic_ifstream`, `filesystem::status`) /
   `check_logging` / `check_render_knobs` / `check_gpu_alloc` 0; `intent_regression` (Debug) PASS.

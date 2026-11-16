@@ -3,6 +3,39 @@
 #include <string>
 #include <vector>
 
+#if TC_SHIPPING
+// A shipped build has no Developer Controls (docs/scalability_plan.md §7.1, §10 item 12): the class is this stub, its
+// 4000 lines and the windows it owns (the ocean's, the texture inspector, the log viewer, the memory tab) are not
+// compiled in -- the linker drops what nothing reaches. The same interface, every call a no-op.
+#if WITH_EDITOR
+class EditorController;
+#endif
+class InputManager;
+class GraphicsSettingsManager;
+class LevelManager;
+class Renderer;
+class Scene;
+struct SceneRenderSettings;
+
+class DeveloperWindow
+{
+public:
+    bool IsOpen() const { return false; }
+    void SetOpen(bool) {}
+    void ToggleOpen() {}
+    void ToggleTextureInspector() {}
+    void ReleaseGpuResources() {}
+    void ToggleOceanControls() {}
+    void OpenOceanControls() {}
+    void OpenMemoryTab() {}
+    bool OpenTab(const std::string&) { return false; }
+    bool IsLogWindowOpen() const { return false; }
+    bool AnyWindowOpen() const { return false; }
+    void ToggleLogWindow() {}
+    bool Draw(Renderer&, Scene&, const InputManager&, LevelManager&, SceneRenderSettings&, GraphicsSettingsManager&) { return false; }
+};
+#else
+
 #include "app/scene/SceneFrameData.h"
 #include "app/ui/LogWindow.h"
 #include "app/ui/MemoryTab.h"
@@ -96,3 +129,4 @@ private:
     bool resetIconAtlasReady_ = false;
     bool open_ = false;
 };
+#endif // TC_SHIPPING

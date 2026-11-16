@@ -130,12 +130,12 @@
     {
       "key": "textures",
       "label": "Textures",
-      "hint": "The texture streaming pool and a mip bias: lower levels keep less texture memory and blur distant textures sooner.",
+      "hint": "The texture streaming pool, a mip bias and the filtering at grazing angles (anisotropy): lower levels keep less texture memory, blur distant textures sooner and smear the ground seen at a slant.",
       "levels": {
-        "Low": { "streaming.poolSizeMB": 384, "streaming.mipBias": 1 },
-        "Medium": { "streaming.poolSizeMB": 640, "streaming.mipBias": 0 },
-        "High": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0 },
-        "Ultra": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0 }
+        "Low": { "streaming.poolSizeMB": 384, "streaming.mipBias": 1, "textures.anisotropy": 4 },
+        "Medium": { "streaming.poolSizeMB": 640, "streaming.mipBias": 0, "textures.anisotropy": 8 },
+        "High": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0, "textures.anisotropy": 16 },
+        "Ultra": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0, "textures.anisotropy": 16 }
       }
     },
     {

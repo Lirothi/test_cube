@@ -51,7 +51,7 @@ namespace
         { "lightShafts.enabled", true, 'L' }, { "gtao.enabled", true, 'L' }, { "gtao.numSteps", true, 'L' },
         { "gtao.numAngles", true, 'L' },
         // Textures
-        { "streaming.poolSizeMB", false, 'L' }, { "streaming.mipBias", false, 'L' },
+        { "streaming.poolSizeMB", false, 'L' }, { "streaming.mipBias", false, 'L' }, { "textures.anisotropy", false, 'L' },
         // Effects. The boats' spray is capped by runtime ceilings over the ocean's own rate and mist (Scene::Sync), never
         // written into its OceanRenderConfig: the editor saves that config into the level.
         { "spray.rateMax", false, 'L' }, { "spray.mistMax", false, 'L' }, { "particles.spawnScale", false, 'L' },

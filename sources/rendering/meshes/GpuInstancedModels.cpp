@@ -1,4 +1,5 @@
 #include "rendering/meshes/GpuInstancedModels.h"
+#include "rendering/core/RasterSettings.h" // render::g_textureAnisotropy
 #include "core/logging/Log.h"
 
 #include <array>
@@ -236,7 +237,7 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     srvs[count++] = instanceBuffer_.GetSRVCPU();
     if (auto* data = GetMaterialData(); data && !bindless) { data->AppendGBufferSRVs(srvs.data(), count); }
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs, count).gpu;
-    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(render::g_textureAnisotropy); // textures.anisotropy
     aniso.MipLODBias = renderer->GetDlssMipBias(); // match the material path's DLSS mip bias
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, aniso);
 

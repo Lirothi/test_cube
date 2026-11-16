@@ -1,10 +1,12 @@
 #include "ocean/OceanSimulation.h"
 #include "core/memory/MemScope.h"
+#include "core/vfs/Vfs.h" // the ocean's Save goes where the game keeps what it saves
 #include "rendering/core/TextureCreate.h"
 
 #include <cassert>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <cstdio>
 #include <random>
 #include <vector>
@@ -278,6 +280,16 @@ bool OceanSimulation::SaveConfig(const std::wstring& path) const
     if (path.empty())
     {
         return false;
+    }
+    // A content path ("data/ocean/x.json") goes where the game keeps what it saves: the tree in a dev build, the user's
+    // ocean folder in a packaged one, which the VFS overlay reads back as data/ocean/ (docs/scalability_plan.md §7.4).
+    const std::filesystem::path target(path);
+    if (target.is_relative())
+    {
+        const std::filesystem::path saved = vfs::WritablePath(vfs::Writable::Saved, vfs::Narrow(target.generic_wstring()));
+        std::error_code ec;
+        std::filesystem::create_directories(saved.parent_path(), ec);
+        return SaveOceanSimulationConfigToFile(saved.wstring(), config_);
     }
     return SaveOceanSimulationConfigToFile(path, config_);
 }

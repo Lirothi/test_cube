@@ -702,30 +702,36 @@ distribution: packages, our file system over packages and direct paths, encrypti
   or stored, CRC32C each, AES-256-GCM through CNG when encrypted (HKDF sub-keys, synthetic nonce, AAD per block), TOC at the
   end, deterministic (same files -> same bytes), "deleted" records for patches. Tools (no window): `--pak-build=<out>
   --pak-files=<list>`, `--pak-list=`, `--pak-verify=`, `--pak-keygen=<key.json>` (never over a file), `--pak-key-header=
-  <key.json>,<out.h>`, `--vfs-selftest` (123 checks with their controls). A package that opens is checked whole: the
+  <key.json>,<out.h>`, `--vfs-selftest` (125 checks with their controls). A package that opens is checked whole: the
   block layout Read relies on, the header's TOC size against its zstd frame, a disk read error on the mapped view read as
   damage (`EXCEPTION_IN_PAGE_ERROR`), not a crash.
 - **Shaders**: `--shader-model=6.6` caps the target (a mounted `shaders.tcpak` sets its own: `shaders/dxil/cooked.txt`);
   `--shader-record=<file>` lists every compile request; cooked DXIL is looked up first (`shaders/dxil/<id>.dxil`, the id
   without absolute paths, Release flags), a miss logs `shader permutation not cooked` once and compiles from the packaged
   HLSL. `tools/dist/record_shaders.py` re-records `tools/dist/shader_list.txt` (264) and `vfs_record.txt`: run it (or
-  `build_dist.py --mode=record`) after adding a shader permutation a shipped level can reach, and review the diff.
+  `build_dist.py --mode=record`) after adding a shader permutation a shipped level can reach, and review the diff. The list
+  names the levels its runs went over (`# levels:`); `build_dist.py` warns and the Build Distribution window says which of a
+  build's levels are not among them (their permutations may compile at the player's).
 - **The cook** (`Cook|x64`, `x64/Cook/test_cube.exe --cook=tools/dist/<profile>.json --cook-out=<dir> [--cook-check]
   [--levels= --boot-level= --version= --no-encrypt --pak-key=]`, `sources/app/dist/Cook.cpp`): walks the profile's levels
   (strings with a slash and a content extension, bare names as `data/materials/<name>.json`, derived files), the
   `include`, the record list and string literals of `sources/` outside the editor; re-keys water mask bakes for the
-  package (a bake made for another write of the geometry is REBUILT from its stored draft and glass slots; one that cannot
-  serve -- an old bake version, a hull no longer masked -- is LEFT OUT with a Warning: the game builds it at load); errors
+  package (a bake made for another write of the geometry is REBUILT from its stored draft and glass slots; one keyed with
+  another draft than the asset's mesh.json vessel says now is REBUILT with that draft -- the glass slots are the materials'
+  and are not judged by the cook; one that cannot serve -- an old bake version, a hull no longer masked -- is LEFT OUT with a
+  Warning: the game builds it at load); errors
   on a missing file and -- with `strictLicences` -- an asset without a licence in CREDITS.md (a
   `## <asset>` section with `license type:` or `License:`). It writes `cook_report.json` (every file, who named it, sizes,
   per level, licences) and `base.tcpak` + `shaders.tcpak`. While it compiles shaders, a Debug exe uses Release flags too.
 - **Shipping|x64** (`TC_PACKAGED=1; TC_SHIPPING=1`, no rendering change): content from `<exe>\content\*.tcpak` only; the user's folder
   (`%LOCALAPPDATA%\test_cube` or `--user-dir`) is created and becomes the CURRENT DIRECTORY before the log opens, so
   everything written relative (logs/, `settings/imgui.ini`, artifacts, `crashes/`, `--shot`) lands there;
-  `WritablePath` maps Settings / Cache / Saved (`data/bot_memory/` read back through the user overlay). Switches: only
+  `WritablePath` maps Settings / Cache / Saved (`data/bot_memory/` and `data/ocean/` -- Development's F7 presets, Save
+  goes through `WritablePath(Saved)` -- read back through the user overlays, `vfs::Config::overlays`). Switches: only
   `--window --level --log-level --user-dir --shot --shot-delay --cam-pos --cam-rot --wind-freeze --time --play
   --crash-selftest` (the rest is logged as ignored; `--name value` is read as `--name=value`). No developer keys or
-  windows; Esc is the game's menu (Continue, the levels the packages hold -- `data/levels/*.json` --, Quit;
+  windows -- the Developer Controls' code is not even compiled in (DeveloperWindow.h is a no-op stub under TC_SHIPPING, the
+  windows it owns left to the linker: the exe 9.67 -> 9.13 MB); Esc is the game's menu (Continue, the levels the packages hold -- `data/levels/*.json` --, Quit;
   `AppController::DrawGameMenu`). Starts by `config/boot.json` (the profile's `bootLevel` / `startMode`); with `startMode`
   "play" every level goes by its own rule (owner, 2026-11-13; `g_playByLevelRule`): a Player Start -> first person from it,
   none -> the free camera at its `freeCameraStart`, none -> the free camera at the origin, level (F8 still walks from there).
@@ -750,7 +756,8 @@ distribution: packages, our file system over packages and direct paths, encrypti
   `--reimport`, `--cook`, `--pak-build`, `--tessy-upgrade`, `--lod-report`, `--water-mask-lid`, `--uv-density`,
   `--shader-cook/-record`, `--vfs-selftest`) refuse with an Error, exit 2. It says so: "DEVELOPMENT BUILD <version>" on the
   HUD's first line, " [Development]" in the title, `development` in the log's name; its user folder is
-  `%LOCALAPPDATA%\test_cube_dev` (never Shipping's). The distribution: x64/Development's exe AND its PDB in the folder
+  `%LOCALAPPDATA%\test_cube_dev` (never Shipping's). `--scene-stress` there churns the packages' first three levels when
+  the tree's demo levels are not in them. The distribution: x64/Development's exe AND its PDB in the folder
   `<product>-<version>-dev`, never encrypted, the profile's `devInclude` cooked too (default `data/ocean/*.json`, the
   ocean window's presets; not a literal path in `Cook.cpp`: the cook's literal scan would ship it in both), `flavour` in
   the history, the manifest and
@@ -907,8 +914,18 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   at Low and the ceilings holding, then not managed again and every knob against the start -- 320 reads on wind_test; a
   reload that never finishes FAILs after 3000 frames; exit = the failures).
   `tools/dist/record_shaders.py` records per preset (Low / Medium add SDSM's and the sky occlusion map's permutations).
-- Not done (plan §9): S3 (anisotropy, foliage density, freeing class-A resources on a lower level). A knob's override is
-  shown in Developer Controls' Scalability tab, not beside the knob in its own tab. The cost table above was measured before
+- **S3** (2026-11-16): `textures.anisotropy` (UE r.MaxAnisotropy; render::g_textureAnisotropy, every material sampler's
+  AnisoWrap, live -- the samplers are staged a frame by description; Developer Controls > Streaming, graphics
+  `streaming.anisotropy`; the Textures group 4 / 8 / 16 / 16; 1 against 16 moves 13.9 % of the start view's pixels, the
+  same arm twice 0.24 %); the GI probe volumes FREED when a knob turns them off (`SceneRenderer::ReleaseUnwantedGi` at
+  Scene::Render's reconcile, the GPU drained; made again when wanted): gpu local 2111 MB with GI, 2038 without (-73), 2068
+  without the far cascade (-43) -- the scalability gate frees and remakes them twice, narrowed GBV
+  (`GiTrace,GiUpdate,Lighting,Skybox`) clean; `shadow.localMaxRes` and `vsm.resolutionLodBiasLocal` persisted (graphics
+  `shadows.localLightMaxResolution`, `vsm.resolutionLodBiasLocal`).
+- Not done (plan §9): the foliage density (plan §4.4) -- wind_test's plants are 1650 staticMesh copies, no instancedModels,
+  so thinning them means hiding copies of chosen assets (a mesh.json key) with their shadows and collisions: the owner's
+  call which assets; the bloom's FFT and the clouds keep their memory on a lower level. A knob's override is shown in
+  Developer Controls' Scalability tab, not beside the knob in its own tab. The cost table above was measured before
   the 11-14 review fixes (Low's 4 shadow partitions and 4x4 filter, the clouds' min, three constant knobs dropped).
 
 ## Reproducing a Camera View From a Screenshot

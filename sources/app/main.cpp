@@ -424,8 +424,9 @@ int WINAPI WinMain(
         vfs::Config config;
         config.mode = vfs::Config::Mode::Packages;
         config.packageDir = shipping::ExeFolder() / L"content";
-        config.overlayPrefix = "data/bot_memory/";
-        config.overlayFolder = shippingUserFolder / L"bot_memory";
+        // What the player saved over what shipped: the bots' memory, and the ocean window's presets (Development's F7).
+        config.overlays = { { "data/bot_memory/", shippingUserFolder / L"bot_memory" },
+                            { "data/ocean/", shippingUserFolder / L"ocean" } };
 #if !TC_SHIPPING
         // Development takes a package key besides the one built in (an encrypted build made with another): --pak-key or
         // TC_PAK_KEY, as a dev build does.

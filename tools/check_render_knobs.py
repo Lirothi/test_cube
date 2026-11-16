@@ -14,7 +14,9 @@ import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources')
 GAME_FILES = ['app/App.cpp', 'app/GraphicsSettings.cpp', 'app/ui/DeveloperWindow.cpp', 'app/AppController.cpp',
-              'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'ocean/OceanControlsWindow.cpp', 'app/ui/MemoryTab.cpp']
+              'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'ocean/OceanControlsWindow.cpp', 'app/ui/MemoryTab.cpp',
+              'app/settings/Scalability.cpp', 'app/settings/UserSettings.cpp', 'app/settings/DisplayMode.cpp',
+              'app/ui/GameSettingsMenu.cpp']
 REG = re.compile(r'::knob::Register\(\s*\w+_game\s*,\s*\w+\s*,\s*"([\w:]+)"\s*\)')
 
 

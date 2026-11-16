@@ -83,4 +83,6 @@ private:
     std::string message_;
     std::uint64_t shaderListLines_ = 0;
     std::string shaderListDate_;
+    std::vector<std::string> shaderListLevels_; // the levels the record runs went over (its "# levels:" line)
+    bool shaderListNamesLevels_ = false;        // the list says them (one recorded before 2026-11-16 does not)
 };

@@ -4,6 +4,8 @@
 #include "core/math/Math.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
+#include "core/vfs/Vfs.h" // the churn's levels: the tree's or the packages'
+#include <algorithm>
 
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
@@ -1416,12 +1418,36 @@ private:
         }
     }
 
-    int LevelCount_() const { return g_sceneStressExtraLevel.empty() ? 3 : 4; }
-    std::string CurrentLevelPath_() const
+    // The churn's levels: the three demo levels where they are (the tree), else -- a packaged Development build holds only
+    // its profile's levels (docs/scalability_plan.md §7.4) -- the first three of the packages' data/levels; then
+    // --stress-level's. Found once, at the first ask.
+    const std::vector<std::string>& Levels_() const
     {
-        const int i = nextLevelIndex_ % LevelCount_();
-        return i < 3 ? std::string(kLevels_[i]) : g_sceneStressExtraLevel;
+        if (levels_.empty())
+        {
+            for (const char* level : kLevels_)
+            {
+                if (vfs::Exists(level)) { levels_.push_back(level); }
+            }
+            if (levels_.empty())
+            {
+                std::vector<std::string> packaged;
+                vfs::List("data/levels", "*.json", [&packaged](const vfs::ListEntry& e)
+                {
+                    if (!e.directory) { packaged.push_back("data/levels/" + e.name); }
+                });
+                std::sort(packaged.begin(), packaged.end());
+                for (std::size_t i = 0; i < packaged.size() && i < 3; ++i) { levels_.push_back(packaged[i]); }
+                LOG_INFO(logging::LogCategory::App, "scene-stress: the demo levels are not here -- the packages' {} level(s)", levels_.size());
+            }
+            if (!g_sceneStressExtraLevel.empty()) { levels_.push_back(g_sceneStressExtraLevel); }
+            if (levels_.empty()) { levels_.push_back(kLevels_[0]); } // nothing found: the load says why
+        }
+        return levels_;
     }
+    int LevelCount_() const { return static_cast<int>(Levels_().size()); }
+    std::string CurrentLevelPath_() const { return Levels_()[static_cast<std::size_t>(nextLevelIndex_ % LevelCount_())]; }
+    mutable std::vector<std::string> levels_;
 
     HWND hWnd_ = nullptr;
     Renderer& renderer_;

@@ -226,6 +226,19 @@ def version_header(product, version, build, git_hash, dirty, date):
 """
 
 
+def recorded_levels():
+    """The levels tools/dist/shader_list.txt says its record runs went over; None when it does not say (an old list)."""
+    path = ROOT / "tools" / "dist" / "shader_list.txt"
+    if not path.exists():
+        return None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("# levels:"):
+            return set(line[len("# levels:"):].split())
+        if not line.startswith("#"):
+            break
+    return None
+
+
 def git_state():
     try:
         head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
@@ -498,6 +511,15 @@ def build(args, progress):
             return 0
 
         git_hash, dirty, changed = git_state()
+        # The shader record names the levels it ran over (tools/dist/shader_list.txt "# levels:"): a level outside them may
+        # ask for permutations nobody cooked -- compiled from the packaged HLSL at first sight, a stall and "not cooked".
+        recorded = recorded_levels()
+        build_levels = [l.replace("\\", "/") for l in (args.levels.split(",") if args.levels else profile.get("levels", []))]
+        unrecorded = [l for l in build_levels if recorded is not None and l not in recorded]
+        if unrecorded:
+            progress.emit(f"not in the shader record runs: {', '.join(unrecorded)} -- its permutations may be compiled at "
+                          f"first sight; python tools/dist/record_shaders.py --levels {' '.join(sorted(set(build_levels) | recorded))}"
+                          f" (or --mode=record), then review the diff", level="warning")
         if dirty:
             progress.emit(f"uncommitted changes ({len(changed)}: {', '.join(changed[:5])}{'...' if len(changed) > 5 else ''})"
                           f" -- the version says -dirty", level="warning")

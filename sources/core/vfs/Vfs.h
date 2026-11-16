@@ -180,10 +180,10 @@ namespace vfs
         std::filesystem::path packageDir;   // every *.tcpak in it is mounted
         std::filesystem::path recordFile;   // --vfs-record: each content file found, once, as it is first found
         std::vector<std::filesystem::path> keyFiles; // --pak-key: keys for encrypted packages (besides the embedded one)
-        // The user overlay (§2.1): a content path under `overlayPrefix` is looked for in `overlayFolder` first, over
-        // every mount -- what the game saved (WritablePath(Saved, ...)) over what shipped. Empty = none.
-        std::string overlayPrefix;
-        std::filesystem::path overlayFolder;
+        // The user overlays (§2.1): a content path under a prefix is looked for in its folder first, over every mount --
+        // what the game saved (WritablePath(Saved, ...)) over what shipped: {"data/bot_memory/", <user>/bot_memory},
+        // {"data/ocean/", <user>/ocean} (docs/scalability_plan.md §7.4 item 3). Empty = none.
+        std::vector<std::pair<std::string, std::filesystem::path>> overlays;
     };
     // Before the first read. False (and why) when a package does not open; nothing is mounted then.
     bool Configure(const Config& config, std::string& error);

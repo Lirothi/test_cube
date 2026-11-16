@@ -1,3 +1,5 @@
+// A shipped build compiles none of this (DeveloperWindow.h: the class is a stub there).
+#if !TC_SHIPPING
 #include "app/game/PlayerStart.h"
 #include "app/ui/DeveloperWindow.h"
 #include "core/vfs/Vfs.h"
@@ -4019,6 +4021,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE r.Streaming.UsePerTextureBias (default on): over budget, textures lose their top mips one at a time up to "
                         "Global mip bias and get them back when the pool has room. Off: Global mip bias caps every texture directly.");
+                {
+                    // The material samplers' anisotropy (UE r.MaxAnisotropy), the next frame's: 1 = trilinear only.
+                    static const char* const kAniso[] = { "1x", "2x", "4x", "8x", "16x" };
+                    int choice = 0;
+                    for (int i = 0; i < 5; ++i) { if ((1u << i) == render::g_textureAnisotropy_game) { choice = i; } }
+                    GRAPHICS_CONTROL(StreamingAnisotropy, "textureAnisotropy",
+                        ImGui::Combo("Anisotropy", &choice, kAniso, 5) && ((render::g_textureAnisotropy_game = 1u << choice), true));
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("UE r.MaxAnisotropy: how sharp a texture stays seen at a slant (the ground ahead). Every "
+                            "material sampler, live. --set=textures.anisotropy:<1..16>");
+                }
                 GRAPHICS_CONTROL(StreamingBoost, "streamingBoost", ImGui::SliderFloat("Boost", &streaming::g_boost_game, 0.25f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Scales the screen size every texture is judged against: 2 = one mip sharper everywhere.");
@@ -4148,3 +4161,4 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 }
 #undef GRAPHICS_CONTROL
 #undef GRAPHICS_CONTROL_WIDTH
+#endif // !TC_SHIPPING

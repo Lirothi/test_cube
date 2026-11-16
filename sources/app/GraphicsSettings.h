@@ -178,6 +178,7 @@ enum class GraphicsControl
     StreamingHiddenScale,
     StreamingMipFade,
     StreamingPerTextureBias,
+    StreamingAnisotropy,          // the material samplers' anisotropy (render::g_textureAnisotropy)
     GiEnabled,                    // GI (the DDGI probe volume, SceneRenderSettings::gi*)
     GiSpacing,
     GiHysteresis,

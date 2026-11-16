@@ -210,11 +210,19 @@ void BuildDistributionPanel::Refresh()
     history_ = nlohmann::json::parse(ReadFileText(RepoPath(OutFolder()) / L"build_history.json"), nullptr, false);
     if (!history_.is_array()) { history_ = nlohmann::json::array(); }
     shaderListLines_ = 0;
+    shaderListLevels_.clear();
+    shaderListNamesLevels_ = false;
     {
         std::istringstream lines(ReadFileText(RepoPath("tools/dist/shader_list.txt")));
         for (std::string line; std::getline(lines, line);)
         {
             if (!line.empty() && line[0] != '#' && line != "\r") { ++shaderListLines_; }
+            if (line.rfind("# levels:", 0) == 0)
+            {
+                shaderListNamesLevels_ = true;
+                std::istringstream names(line.substr(9));
+                for (std::string name; names >> name;) { shaderListLevels_.push_back(name); }
+            }
         }
     }
     shaderListDate_.clear();
@@ -552,6 +560,24 @@ void BuildDistributionPanel::DrawContent()
     ImGui::Text("Shader permutations recorded: %llu (tools/dist/shader_list.txt, %s). A level the record runs did not see may "
                 "compile some at the player's -- Record updates the list.",
                 static_cast<unsigned long long>(shaderListLines_), shaderListDate_.c_str());
+    // The levels chosen here that the record runs never went over: their permutations may compile at the player's.
+    if (shaderListNamesLevels_ && profile_.contains("levels") && profile_["levels"].is_array())
+    {
+        std::string missing;
+        for (const nlohmann::json& level : profile_["levels"])
+        {
+            if (!level.is_string()) { continue; }
+            const std::string name = level.get<std::string>();
+            if (std::find(shaderListLevels_.begin(), shaderListLevels_.end(), name) == shaderListLevels_.end())
+            {
+                missing += (missing.empty() ? "" : ", ") + name;
+            }
+        }
+        if (!missing.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Not in the record runs: %s -- Record them before a release.", missing.c_str());
+        }
+    }
 }
 
 void BuildDistributionPanel::DrawOptions()

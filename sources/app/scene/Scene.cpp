@@ -3738,6 +3738,9 @@ void Scene::Render(Renderer* renderer) {
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
     ReconcileShadowLodCurve(renderer); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
     ReconcileSkyOcclusion(renderer);   // the sky-from-above map's size, or freeing it (GPU idle)
+    // The GI probe volumes a graphics level (or a knob) turned off give their memory back (GPU idle).
+    sceneRenderer_.ReleaseUnwantedGi(renderer, frameData_.settings.giEnabled && renderer->IsRaytracingSupported(),
+                                     frameData_.settings.giFarCascade);
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {

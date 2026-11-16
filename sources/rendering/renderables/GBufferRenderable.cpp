@@ -1,4 +1,5 @@
 #include "rendering/renderables/GBufferRenderable.h"
+#include "rendering/core/RasterSettings.h" // render::g_textureAnisotropy
 #include "core/logging/Log.h"
 
 #include "rendering/core/GBufferBindingGuard.h"
@@ -1174,7 +1175,7 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
     if (!passSrvs) { return; } // a shadow map is missing this frame: no glass, as for the panes
 
     // s0..s2 as the panes' (TransparentStaticMesh), s3 the G-buffer's material sampler with its DLSS bias.
-    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(render::g_textureAnisotropy); // textures.anisotropy
     aniso.MipLODBias = renderer->GetDlssMipBias();
     const auto samplerDescs = std::array{
         *SamplerManager::LinearClamp(),

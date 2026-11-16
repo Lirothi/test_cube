@@ -23,12 +23,14 @@
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "ocean/WaterMask.h"
+#include "physics/CollisionJson.h" // a vessel's draft, which a water mask bake is keyed with
 #include "third_party/json/json.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -689,6 +691,20 @@ namespace
             }
         }
 
+        // The draft of the vessel a geometry's mesh.json describes (its "vessel" block over the defaults); false = no vessel.
+        static bool VesselDraftOf(const std::string& geometry, float& draft)
+        {
+            const std::string manifest = geometry.substr(0, geometry.size() - std::strlen(".mesh.bin")) + ".mesh.json";
+            std::string text;
+            if (!vfs::ReadText(manifest, text)) { return false; }
+            const Json root = Json::parse(text, nullptr, false, /*ignore_comments=*/true);
+            if (!root.is_object() || !root.contains("vessel") || !root["vessel"].is_object()) { return false; }
+            physics::VesselSettings vessel;
+            physics::ReadVesselSettings(root["vessel"], vessel);
+            draft = vessel.draft;
+            return true;
+        }
+
         void RekeyWaterMasks()
         {
             std::vector<std::string> dropped;
@@ -707,6 +723,31 @@ namespace
                 {
                     const std::uint64_t hash = vfs::pak::ContentHash(mesh.data(), mesh.size());
                     std::vector<std::uint8_t> original = bake;
+                    // A bake keyed with another draft than the asset's vessel now has (a Mesh Editor save the editor did
+                    // not bake again): the game would refuse it and build its own at load. Built here with the draft the
+                    // asset says, the glass slots as stored (they are the materials', which the cook does not judge).
+                    ocean::WaterMaskBakeKey keyed;
+                    std::string keyWhy;
+                    float assetDraft = 0.0f;
+                    if (ocean::watermask::ReadBakeKey(original.data(), original.size(), keyed, keyWhy) && VesselDraftOf(geometry, assetDraft) &&
+                        std::abs(keyed.waterline - assetDraft) > 1.0e-6f)
+                    {
+                        const std::shared_ptr<const ocean::WaterMaskField> field =
+                            ocean::watermask::BuildField(geometry, keyed.glassSlots, assetDraft, keyed.draftOverLowest);
+                        if (field)
+                        {
+                            ocean::WaterMaskBakeKey packaged = keyed;
+                            packaged.waterline = assetDraft;
+                            packaged.geometryBytes = stat->size;
+                            packaged.geometryTime = static_cast<std::int64_t>(hash);
+                            record.bytes = std::make_shared<const std::vector<std::uint8_t>>(ocean::watermask::SerializeField(*field, packaged));
+                            entry["status"] = "rebuilt (the bake was made for another draft)";
+                            Warning("water mask " + path + " was made for the draft " + std::to_string(keyed.waterline) + ", the asset says " +
+                                    std::to_string(assetDraft) + ": rebuilt by the cook (open a level with it in the editor once to bake it again)");
+                            waterMasksReport_.push_back(std::move(entry));
+                            continue;
+                        }
+                    }
                     if (ocean::watermask::RekeyBakeForPackage(bake, stat->size, stat->version, hash, why))
                     {
                         record.bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(bake));

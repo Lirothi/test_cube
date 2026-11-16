@@ -460,6 +460,8 @@ namespace
         if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync_game = value != 0.0f; return true; }
+        // The material samplers' anisotropy (S3; UE r.MaxAnisotropy): 1, 2, 4, 8 or 16, the next frame's.
+        if (setting == "textures.anisotropy") { render::g_textureAnisotropy_game = render::ClampAnisotropy(static_cast<std::uint32_t>(std::max(value, 1.0f))); return true; }
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
         // The window (docs/scalability_plan.md S6): the menu's Display, live and transient -- a script switches the mode
         // (0 windowed, 1 borderless), the windowed client size, the monitor (its place in the list, 1 = the first), the
@@ -2164,6 +2166,7 @@ namespace
         if (name == "gtao.numAngles") { return u(scene.GtaoRef().numAngles); }
         if (name == "streaming.poolSizeMB") { return f(static_cast<float>(streaming::g_poolSizeMB_game)); }
         if (name == "streaming.mipBias") { return f(static_cast<float>(streaming::g_mipBias_game)); }
+        if (name == "textures.anisotropy") { return u(render::g_textureAnisotropy_game); }
         if (name == "spray.rateMax") { return f(vfx::g_sprayRateMax); }
         if (name == "spray.mistMax") { return f(vfx::g_sprayMistMax); }
         if (name == "cloud.viewSampleCountMin") { return u(scene.VolumetricCloudRef().viewSampleCountMin); }

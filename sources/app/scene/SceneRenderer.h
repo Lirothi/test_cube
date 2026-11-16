@@ -59,6 +59,10 @@ public:
         const std::vector<std::unique_ptr<RenderableObjectBase>>& objects,
         Skybox* skybox);
     void Reset();
+    // The GI probe volumes' memory when a knob turns them off (gi.enabled, gi.far; docs/scalability_plan.md §4.3, S3):
+    // freed here with the GPU drained -- the caller's idle point, Scene::Render's reconciles --, made again by
+    // EnsureFrameResources when wanted. ~51 MB a cascade. True when something was freed.
+    bool ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool farWanted);
 
     // I2: drop the cached RT acceleration structures + bindless geometry-info so the next RT frame
     // re-registers every mesh with its CURRENT material SRVs. Needed after a material's textures are

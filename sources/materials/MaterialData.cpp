@@ -1,4 +1,5 @@
 #include "materials/MaterialData.h"
+#include "rendering/core/RasterSettings.h" // render::g_textureAnisotropy
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h" // A3: material textures load streamable
 #include "rendering/descriptors/SamplerManager.h"
@@ -248,7 +249,7 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
     }
     // DLSS: bias material sampling toward sharper mips when rendering below display res (the
     // sampler cache keys by desc; the bias is quantized so mode changes reuse a few variants).
-    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(render::g_textureAnisotropy); // textures.anisotropy
     aniso.MipLODBias = r->GetDlssMipBias();
     ctx.samplerTable[samplerTableRegister] = r->GetSamplerManager()->Get(r, aniso);
 }

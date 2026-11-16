@@ -494,11 +494,15 @@ namespace vfs
         // The user overlay's file for a content path under its prefix (case-insensitive), or empty.
         std::wstring OverlayWide(const detail::Mounts& mounts, const Path& path)
         {
-            if (mounts.overlayPrefix.empty() || path.IsAbsolute()) { return {}; }
+            if (mounts.overlays.empty() || path.IsAbsolute()) { return {}; }
             const std::string folded = pak::FoldKey(path.Utf8());
-            const std::string prefix = pak::FoldKey(mounts.overlayPrefix);
-            if (folded.size() <= prefix.size() || folded.compare(0, prefix.size(), prefix) != 0) { return {}; }
-            return (mounts.overlayFolder / ToWide(path.Utf8().substr(prefix.size()))).wstring();
+            for (const detail::Mounts::Overlay& overlay : mounts.overlays)
+            {
+                const std::string prefix = pak::FoldKey(overlay.prefix);
+                if (folded.size() <= prefix.size() || folded.compare(0, prefix.size(), prefix) != 0) { continue; }
+                return (overlay.folder / ToWide(path.Utf8().substr(prefix.size()))).wstring();
+            }
+            return {};
         }
 
         // The order a path is looked for in: the loose files first (or last), the packages by priority.
@@ -899,9 +903,13 @@ namespace vfs
         detail::Mounts mounts;
         mounts.loose = config.mode != Config::Mode::Packages;
         mounts.looseFirst = true;
-        mounts.overlayPrefix = config.overlayPrefix;
-        mounts.overlayFolder = config.overlayFolder;
-        if (!mounts.overlayPrefix.empty() && mounts.overlayPrefix.back() != '/') { mounts.overlayPrefix.push_back('/'); }
+        for (const auto& [prefix, folder] : config.overlays)
+        {
+            if (prefix.empty()) { continue; }
+            detail::Mounts::Overlay overlay{ prefix, folder };
+            if (overlay.prefix.back() != '/') { overlay.prefix.push_back('/'); }
+            mounts.overlays.push_back(std::move(overlay));
+        }
         if (config.mode != Config::Mode::Loose)
         {
             const std::filesystem::path folder = config.packageDir.empty() ? ContentRoot() / L"content" : config.packageDir;

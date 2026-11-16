@@ -64,6 +64,8 @@ public:
     // Creates the atlases, the ray buffer, the probe state and the two PSOs once; idempotent.
     void Prepare(Renderer* renderer);
     bool Ready() const { return ready_ && !failed_; }
+    // Its resources exist (made by Prepare, not freed by Reset since).
+    bool Held() const { return ready_ || heap_ != nullptr; }
     void Reset(); // the caller has drained the GPU (level/device teardown)
 
     // Places the volume around `cameraPos` and picks this frame's probes. A new spacing starts a new

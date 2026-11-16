@@ -24,7 +24,9 @@ namespace render
 // image.brightnessEv; `--set image.brightnessEv`): stops added to the level's exposure compensation -- metered and manual,
 // so the night's anchor moves with it (exposure_solve_cs.hlsl). A runtime offset, never written into the level's
 // CameraExposureSettings, which the editor saves. 0 = the level's exposure as authored.
-KNOB(float, g_playerExposureEv, 0.0f);
+inline float g_playerExposureEv = 0.0f;
+inline float g_playerExposureEv_game = 0.0f;
+inline const bool g_playerExposureEv_knob = ::knob::Register(g_playerExposureEv_game, g_playerExposureEv, "render::g_playerExposureEv");
 
 // P16.5 -- a local light's luminous intensity, from the flux it is authored with.
 //
