@@ -361,7 +361,13 @@ void GameSettingsMenu::DrawDisplay()
     Row(menu_text::kWindowSize, menu_text::kWindowSizeHint);
     const bool borderless = now.mode == display::WindowMode::Borderless;
     char current[64];
-    if (borderless) { std::snprintf(current, sizeof(current), "%dx%d (%s)", now.width, now.height, menu_text::kWindowSizeBorderless); }
+    if (borderless && monitor >= 0)
+    {
+        // The monitor's own size, not the window's (a --window= borderless window of another size is a script's).
+        const RECT& r = monitors_[static_cast<std::size_t>(monitor)].rect;
+        std::snprintf(current, sizeof(current), "%dx%d (%s)", static_cast<int>(r.right - r.left), static_cast<int>(r.bottom - r.top),
+                      menu_text::kWindowSizeBorderless);
+    }
     else { std::snprintf(current, sizeof(current), "%dx%d", now.width, now.height); }
     ImGui::BeginDisabled(borderless || monitor < 0);
     if (ImGui::BeginCombo("##size", current))

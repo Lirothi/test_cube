@@ -883,8 +883,15 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   `display.backgroundFps` -- transient. Checked on a desktop of its own (a borderless window must not cover the owner's
   screen): borderless 3840x2160, windowed 1600x900, a saved borderless and a saved 1920x1080 at boot; the background limit
   started unfocused (`run_noactivate.py`-style, SW_SHOWNOACTIVATE): 92 frames in 6.3 s at a limit of 15 (`frame pacing: in
-  the background` in the log; the HUD's FPS shows the frame's work, not the pace). One monitor here: a second one, and
-  another DPI, are not checked.
+  the background` in the log; the HUD's FPS shows the frame's work, not the pace). THIS MACHINE HAS TWO MONITORS (the
+  owner, 2026-11-16 -- the first check took one for granted): \\.\DISPLAY1 "LG ULTRAGEAR+" primary at (0, 0) and
+  \\.\DISPLAY2 "LS27D70xE" to its left at (-3840, 0), both 3840x2160 at 144 dpi. Checked on a desktop of its own
+  (scratchpad-style `monitor_tests.py`: the window's rect sampled by EnumDesktopWindows): borderless moved live to the
+  second and back (`--sweep=display.monitor:2,1;display.mode:1,1`), windowed 1920x1080 centred on the second
+  (-2891, 512), a saved `\\.\DISPLAY2` makes the window there, a saved monitor that is gone gives the primary. A monitor
+  is named by its EDID (QueryDisplayConfig, `DisplayMode.cpp FriendlyNames`; the driver's string was "Generic PnP Monitor"
+  for both) and where it stands from the primary ("2: LS27D70xE, 3840x2160, left"). Another DPI is not checked: both are
+  150 %, and changing one is the owner's (a Windows setting).
 - **Image and controls** (S7): brightness `render::g_playerExposureEv` (a KNOB, -2..+2 EV, added to the level's metered and
   manual compensation in SceneRenderer_Post -- never into the level's CameraExposureSettings, which the editor saves; +1 EV:
   the frame's mean 112 -> 152), the field of view `g_cameraPlayerFovDeg` (horizontal at 16:9, Hor+: the vertical kept at

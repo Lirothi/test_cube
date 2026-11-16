@@ -32,7 +32,7 @@ namespace display
     struct MonitorInfo
     {
         std::string device;  // "\\.\DISPLAY1"
-        std::string name;    // what the monitor calls itself ("DELL U2720Q"), else the device
+        std::string name;    // what the monitor calls itself (its EDID, "LG ULTRAGEAR+"), else the driver's string, else the device
         RECT rect{};         // the whole monitor, desktop pixels
         RECT work{};         // without the taskbar
         UINT dpi = 96;

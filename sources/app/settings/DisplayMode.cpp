@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
+#include <map>
 #include <mutex>
 
 #include "app/settings/UserSettings.h"
@@ -58,6 +60,40 @@ namespace
     int Width(const RECT& r) { return r.right - r.left; }
     int Height(const RECT& r) { return r.bottom - r.top; }
 
+    // What each monitor calls itself (its EDID: "LG ULTRAGEAR+", "LS27D70xE"), by GDI device ("\\.\DISPLAY1"). The
+    // display device's own string is the driver's, "Generic PnP Monitor" for most -- two such monitors read the same.
+    std::map<std::wstring, std::wstring> FriendlyNames()
+    {
+        std::map<std::wstring, std::wstring> out;
+        UINT32 pathCount = 0, modeCount = 0;
+        if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) != ERROR_SUCCESS) { return out; }
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(), &modeCount, modes.data(), nullptr) != ERROR_SUCCESS)
+        {
+            return out;
+        }
+        for (UINT32 i = 0; i < pathCount; ++i)
+        {
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+            source.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+            source.header.size = sizeof(source);
+            source.header.adapterId = paths[i].sourceInfo.adapterId;
+            source.header.id = paths[i].sourceInfo.id;
+            DISPLAYCONFIG_TARGET_DEVICE_NAME target{};
+            target.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+            target.header.size = sizeof(target);
+            target.header.adapterId = paths[i].targetInfo.adapterId;
+            target.header.id = paths[i].targetInfo.id;
+            if (DisplayConfigGetDeviceInfo(&source.header) == ERROR_SUCCESS &&
+                DisplayConfigGetDeviceInfo(&target.header) == ERROR_SUCCESS && target.monitorFriendlyDeviceName[0])
+            {
+                out[source.viewGdiDeviceName] = target.monitorFriendlyDeviceName;
+            }
+        }
+        return out;
+    }
+
     // The window's frame around a client of w x h at this DPI.
     RECT FramedRect(int w, int h, DWORD style, UINT dpi)
     {
@@ -80,6 +116,12 @@ std::vector<MonitorInfo> Monitors()
 {
     std::vector<MonitorInfo> out;
     EnumDisplayMonitors(nullptr, nullptr, CollectMonitor, reinterpret_cast<LPARAM>(&out));
+    const std::map<std::wstring, std::wstring> names = FriendlyNames();
+    for (MonitorInfo& m : out)
+    {
+        const auto it = names.find(vfs::Widen(m.device));
+        if (it != names.end()) { m.name = vfs::Narrow(it->second); }
+    }
     // The primary first, then left to right: the order a person sees them in.
     std::sort(out.begin(), out.end(), [](const MonitorInfo& a, const MonitorInfo& b) {
         if (a.primary != b.primary) { return a.primary; }
@@ -103,9 +145,22 @@ std::string MonitorLabel(const std::vector<MonitorInfo>& monitors, int index)
 {
     if (index < 0 || index >= static_cast<int>(monitors.size())) { return "?"; }
     const MonitorInfo& m = monitors[static_cast<std::size_t>(index)];
+    // Where it stands from the primary: two monitors of one model differ by that alone.
+    const char* where = "primary";
+    if (!m.primary)
+    {
+        const auto primary = std::find_if(monitors.begin(), monitors.end(), [](const MonitorInfo& o) { return o.primary; });
+        if (primary != monitors.end())
+        {
+            const int dx = (m.rect.left + m.rect.right) - (primary->rect.left + primary->rect.right);
+            const int dy = (m.rect.top + m.rect.bottom) - (primary->rect.top + primary->rect.bottom);
+            where = std::abs(dx) >= std::abs(dy) ? (dx < 0 ? "left" : "right") : (dy < 0 ? "above" : "below");
+        }
+        else { where = ""; }
+    }
     char text[256];
-    std::snprintf(text, sizeof(text), "%d: %s, %dx%d%s", index + 1, m.name.c_str(), Width(m.rect), Height(m.rect),
-                  m.primary ? " (primary)" : "");
+    std::snprintf(text, sizeof(text), "%d: %s, %dx%d%s%s", index + 1, m.name.c_str(), Width(m.rect), Height(m.rect),
+                  where[0] ? ", " : "", where);
     return text;
 }
 
