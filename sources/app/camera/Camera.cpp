@@ -6,9 +6,10 @@
 #include <cmath>
 
 void Camera::AddLookInput(InputManager& input) {
-    // Scale already includes sensitivity/invert
-    lookOwedYaw_ += input.GetActionAxis("LookX");
-    lookOwedPitch_ += input.GetActionAxis("LookY");
+    // The axes' scale is the bindings' sensitivity and invert; the player's own multiply it (Camera.h).
+    const float sensitivity = std::clamp(g_cameraLookSensitivity, 0.01f, 100.0f);
+    lookOwedYaw_ += input.GetActionAxis("LookX") * sensitivity;
+    lookOwedPitch_ += input.GetActionAxis("LookY") * sensitivity * (g_cameraInvertY ? -1.0f : 1.0f);
 }
 
 void Camera::TakeOwedLook(float dt) {
@@ -104,7 +105,16 @@ void Camera::CalcMatrices(Renderer* r)
     view_.view = newView;
     view_.invView = mat4::Inverse(newView);
     const float aspect = float(r->GetWidth()) / float(r->GetHeight());
-    const float vfov = 2.f * atan(tan(view_.hfov * 0.5f) / aspect);
+    // The player's field of view is horizontal at 16:9 and keeps its vertical at any aspect (Hor+); the level's is
+    // horizontal at this aspect, as it always was.
+    float vfov = 2.f * atan(tan(view_.hfov * 0.5f) / aspect);
+    effectiveHfov_ = view_.hfov; // bit for bit what the level says, without the player's
+    if (playerFovDeg_ > 0.0f)
+    {
+        constexpr float kReferenceAspect = 16.0f / 9.0f;
+        vfov = 2.f * atan(tan(XMConvertToRadians(playerFovDeg_) * 0.5f) / kReferenceAspect);
+        effectiveHfov_ = 2.f * atan(tan(vfov * 0.5f) * aspect);
+    }
     mat4 baseProj = mat4::PerspectiveFovLHReverseZ(vfov, aspect, view_.zNear, view_.zFar);
 
     nonJitteredProj_ = baseProj;
@@ -152,6 +162,7 @@ bool Camera::TakePose(const Camera& game)
     roll_ = game.roll_;
     rotation_ = game.rotation_;
     view_.hfov = game.view_.hfov;
+    playerFovDeg_ = game.playerFovDeg_;
     view_.zNear = game.view_.zNear;
     view_.zFar = game.view_.zFar;
     renderLayerMask_ = game.renderLayerMask_;

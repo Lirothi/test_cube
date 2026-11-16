@@ -189,7 +189,8 @@ extern int g_bootScalability;
 // "--scalability-check": the graphics levels' gate in a running process (App.cpp).
 extern bool g_scalabilityCheck;
 extern int g_scalabilityCheckExit;
-// "--settings-menu[=graphics|display]": the player's settings screen open at boot on that tab, for a --shot (§8.5).
+// "--settings-menu[=display|graphics|image|controls|menu]": the player's settings screen open at boot on that tab, or the
+// Esc menu ("menu"), for a --shot (§8.5). A build without the editor.
 extern std::string g_bootSettingsMenu;
 
 class App {

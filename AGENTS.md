@@ -731,7 +731,8 @@ distribution: packages, our file system over packages and direct paths, encrypti
   none -> the free camera at its `freeCameraStart`, none -> the free camera at the origin, level (F8 still walks from there).
   An absolute path is read only inside the game's folder and the user's (`Vfs.cpp AbsoluteAllowed`: `--level=C:/x.json`
   is refused, logged once) -- the owner's "no loose files" (§11), enforced. Graphics settings: defaults from `config/graphics_defaults.json`
-  (`tools/dist/graphics_defaults.json`), the player's file holds only the differences; every build saves it atomically.
+  (`tools/dist/graphics_defaults.json`), the player's file holds only the differences (user_settings.json's graphics
+  section since 2026-11-16, "Graphics Scalability" below); every build saves it atomically.
   Before the window: `D3D12\D3D12Core.dll` present (the Agility SDK 1.619.6 runtime it exports `D3D12SDKVersion = 619` for:
   Windows 10 has no SM 6.6 in-box, and without the file no device is made even on Windows 11 26100), the GPU check (SM 6.6,
   binding tier 3, DXR 1.1 -- `gpu::CheckRequirements`, `--gpu-check` in dev), NVIDIA's signature on the delay-loaded
@@ -784,8 +785,8 @@ distribution: packages, our file system over packages and direct paths, encrypti
   only when the person asked.
 - **Measuring a distribution**: parity harness `parity_shots.py` with `PARITY_EXTRA="--vfs=packages --pak-dir=<dir>"`
   (scratchpad-style), Release on packages over the record arms (0 `not cooked` is the gate). Compare Shipping with dev
-  Release only at the SAME settings: dev reads the developer's own `graphics_settings.json`, Shipping the committed
-  defaults (vsync alone moved 20 % of the pixels through DLSS's jitter phase).
+  Release only at the SAME settings: dev reads the developer's own graphics section of `user_settings.json`, Shipping the
+  committed defaults (vsync alone moved 20 % of the pixels through DLSS's jitter phase).
 
 ## Graphics Scalability -- Groups, Levels, the Player's Settings
 
@@ -810,14 +811,24 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   ceilings are safe. And a ceiling on a count must cap its partner too: the cloud march takes at least
   `viewSampleCountMin` (wind_test 64) whatever the max says, so Low caps the min as well.
 - **Ultra = today** (`--scalability-check`: 0 knobs differ from the boot's values). Nothing saved and nothing asked = not
-  managed: no knob is touched (a dev build's picture stays the developer's graphics_settings.json). A group or the
+  managed: no knob is touched (a dev build's picture stays the developer's own graphics section). A group or the
   resolution set back to not managed (`-1`, the tab's Not managed, the menu's Cancel) puts its knobs back: a project knob to
   its value before scalability first wrote it, a level's knob to the level's value -- the gate checks every knob against the
   start. A Developer Controls autosave while groups are managed stores those knobs' pre-scalability values
   (GraphicsSettings.cpp CaptureScalabilityOriginals): a preset never becomes the developer's own file. (A `--set` / MCP
   value still does on the next UI edit, as before.)
-- **Layers**: compiled < graphics_settings.json (a packaged build: the package's defaults) < the level < scalability <
-  `--set` / MCP. A knob `--set`, MCP set_settings, `--sweep`, `--shadow-mode` or `--dlss` set is PINNED for the process
+- **Layers** (§3.3, all of them since 2026-11-16): compiled < the build's graphics DEFAULTS (`config/graphics_defaults.json`
+  in the packages -- what a dev build reads too with them mounted --, else a dev build's `tools/dist/graphics_defaults.json`,
+  its source) with the person's own graphics section over them < the level < scalability < MANUAL OVERRIDES < `--set` /
+  MCP. An override (Scalability.h `NoteManualValues`, user_settings.json "overrides", by `--set` name) is a project knob a
+  managed group sets that holds something else than the last apply left in it -- a Developer Controls edit, the menu's
+  Advanced: noted at the next save or apply, kept over any preset, unused while its group is not managed, listed in
+  Developer Controls > Scalability ("Set by hand over the levels", a button each) and the menu ("Changed by hand: N, Back to
+  the levels"). Never a pinned knob, and never after a level load (`OnContentReloaded` applies with `noteManual` false: the
+  load puts the project CSM back itself -- the first cut read that as csm.filterMode "set by hand", the gate caught it). A
+  RESET (every Developer Controls Reset) goes back to the levels: a managed knob the reset moved loses its override and takes
+  the level's value (`GraphicsSettingsManager::FinishReset`); the CSM tab's reset takes the build's defaults now, not the
+  compiled ones. A knob `--set`, MCP set_settings, `--sweep`, `--shadow-mode` or `--dlss` set is PINNED for the process
   (UE's SetByScalability is the weakest priority); `sg.unpin:1` forgets the pins. After a level load the ceilings are applied
   again (OnContentReloaded); after an editor environment edit the edited type's knobs are re-based on the document's values
   (an Inspector that unticks GTAO at Low writes the 0 the ceiling wrote: without that, Medium turned it back on) and the
@@ -829,11 +840,40 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   `sg.resolution` (-1 = not managed; TRANSIENT, never saved), `sg.reload:1` (the table again), `scalability.autodetect:1`,
   `scalability.gpuTimeScale:<x>`; MCP get_readouts block `scalability`; Developer Controls > Scalability (the levels, each
   knob's table value against its value now, the pins, the last apply; a choice there IS saved).
-- **The player's file** `user_settings.json` (vfs::WritablePath(Settings): the repo root in dev, gitignored;
-  `<user>\settings\` packaged), sections `scalability`, `display` (vsync, maxFps), `autodetect`. Written by the menu's Done,
-  the Developer Controls tab and a packaged build's first-start auto-detect -- never by `--set sg.*`, MCP or
-  `--scalability=auto` in dev. A dev test that saves one (the tab, the menu's Done) must DELETE it after: it is applied at
-  every later boot. `record_shaders.py`'s plain arms pass `--scalability=off` against one left behind.
+- **The person's file** `user_settings.json` (`settings/UserSettings.h`; vfs::WritablePath(Settings): the repo root in
+  dev, gitignored; `<user>\settings\` packaged; version 2), sections `graphics` (what differs from the defaults: every
+  knob Developer Controls persists, frame pacing, mouse smoothing -- WAS graphics_settings.json), `scalability`, `overrides`,
+  `autodetect`, `display` (the window), `image`, `controls`. Each writer replaces its own sections and keeps the rest (read,
+  changed, temp + rename). **graphics_settings.json is read ONCE** -- when there is no graphics section yet, its values less
+  the defaults are moved in (the round trip checked before it is written; a dev build's full snapshot and a packaged one's
+  differences alike; the owner's 2026-11-16 file: `{"frame": {"vsync": true}}`, the same frame within the processes' own
+  spread) -- and never written again; a git pull or an edit of it changes nothing after that. EVERY `graphics_settings.json
+  <key>` IN THIS FILE NOW MEANS THAT KEY IN user_settings.json's graphics SECTION. Written by the settings menu's Apply /
+  Back, Developer Controls (its autosave, the Scalability tab) and a packaged build's first-start auto-detect -- never by
+  `--set`, MCP or `--scalability=auto` in dev. **A dev test that writes it must BACK IT UP AND PUT IT BACK, never delete
+  it**: it holds the developer's own graphics now (deleted, the next boot moves the stale graphics_settings.json in again).
+  `record_shaders.py`'s plain arms pass `--scalability=off` against levels left behind.
+- **The window** (`settings/DisplayMode.*`, S6): windowed or borderless over the whole monitor (no exclusive fullscreen,
+  §10 item 10), which monitor (`EnumDisplayMonitors`, by device name; the primary when it is gone), the windowed client size
+  (standard sizes that fit the work area, 16:10 and wider, and the current), the frame-rate limit while another window has
+  the focus (a packaged build 30 by default, a dev build none: a script's editor in the background keeps its pace; not while
+  auto-detect measures -- an idle GPU clocks down). Read BEFORE the window is made (App::InitWindow; nothing saved = the
+  window as it always started, `--window=` stronger and never saved); changed live by the style and SetWindowPos at the
+  frame's safe point (afterFrame), whose WM_SIZE takes the old road -- the pending size is one atomic word now (the game
+  half pumps WM_SIZE, the render thread's BeginFrame takes it). WM_DPICHANGED: the UI rescales by the new DPI over the boot
+  monitor's (the panels keep their 1.5 there), a dragged window takes Windows' suggested rect. `--set display.mode:0|1`,
+  `display.width` / `display.height` (two in one frame build on each other), `display.monitor:<n>` (1 = the first),
+  `display.backgroundFps` -- transient. Checked on a desktop of its own (a borderless window must not cover the owner's
+  screen): borderless 3840x2160, windowed 1600x900, a saved borderless and a saved 1920x1080 at boot; the background limit
+  started unfocused (`run_noactivate.py`-style, SW_SHOWNOACTIVATE): 92 frames in 6.3 s at a limit of 15 (`frame pacing: in
+  the background` in the log; the HUD's FPS shows the frame's work, not the pace). One monitor here: a second one, and
+  another DPI, are not checked.
+- **Image and controls** (S7): brightness `render::g_playerExposureEv` (a KNOB, -2..+2 EV, added to the level's metered and
+  manual compensation in SceneRenderer_Post -- never into the level's CameraExposureSettings, which the editor saves; +1 EV:
+  the frame's mean 112 -> 152), the field of view `g_cameraPlayerFovDeg` (horizontal at 16:9, Hor+: the vertical kept at
+  any aspect; 0 = the level's, the projection bit for bit as before; the camera's `GetHFov()` is what the projection took),
+  mouse sensitivity and inverted look (`Camera::AddLookInput`, the one road). `--set image.brightnessEv / image.fovDeg /
+  controls.sensitivity / controls.invertY`.
 - **Auto-detect** (§5): the real frame -- High at Balanced, 60 frames and 5 s to settle (1 s for the next levels), the
   median of the GPU frame's OWN times over 3 s (the profiler's `OverlaySample::lastMs`; its `avgMs` is an EMA of 0.997 a
   frame, ~333 frames to settle, and measured a level as a blend with the one before -- Medium 3.55 instead of 3.2 ms, the
@@ -843,11 +883,18 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   changed, and saves it; `--scalability=auto` (saved only packaged), MCP `scalability.autodetect:1` and the menu's button
   (kept by Done, dropped by Cancel, which also stops a measurement) do not save. This machine (RTX 4090): Ultra (High 4.25,
   Ultra 4.56 ms); `gpuTimeScale:4`: Low (High 16.9, Medium 12.9, Low 9.9).
-- **The menu**: the Esc menu's Settings in a packaged build; `--settings-menu[=graphics|display]` opens it in any build
-  without the editor (Release too) for a `--shot` (Esc cancels it there too). Graphics: Auto-detect, Quality (Custom while
-  the groups differ), Render resolution, the groups with their hints ("*" = a change pauses: targets rebuilt or shadows
-  reconciled); Display: VSync, the frame-rate limit. Applied at once behind the menu; Done saves, Cancel / Esc put back
-  what was there (not-managed groups included); Done waits while auto-detect measures.
+- **The menu**: Esc in EVERY build without the editor (Release too since 2026-11-16; F1 stays Developer Controls; the
+  mouse is the menu's while it is up): Continue, Settings, the level as ONE drop-down with Load / Restart (owner: "a
+  drop-down, not a million buttons"; a dev build lists the tree's data/levels, a packaged one its packages'), Quit.
+  `--settings-menu[=display|graphics|image|controls|menu]` opens a tab (or the Esc menu) at boot for a `--shot`. Settings:
+  Display (mode, monitor, size, VSync, the limits; a change of the window asks "Keep these display settings?" and goes back
+  after 15 s), Graphics (auto-detect, Quality -- Custom while the groups differ --, render resolution, the groups with "*"
+  where a change pauses, what was changed by hand, Advanced: nine safe knobs set as overrides), Image, Controls (the game's
+  keys to read). Applied at once behind it; Apply and Cancel show while something differs from what was there, Back keeps
+  and closes, Esc puts everything back and closes; Apply waits while auto-detect measures. Its own look (`GameMenuStyle`):
+  a font of 20 px a 1080 line (27 at 1440, 40 at 2160) whatever the panels' 1.5, a dark backdrop, colours given as sRGB and
+  linearised (the UI draws into an sRGB target: taken as linear they came out washed grey-blue). Every word in
+  `ui/GameMenuStrings.h`.
 - **Cost** (wind_test's start view, 18:00, 1440p DLSS Balanced, the GPU frame, two runs each): today 3.99-4.07, Ultra
   4.03-4.09, High 3.81, Medium 3.25, Low 2.44-2.47 ms. A preset takes 6-40 % off; the render resolution, the player's own
   choice, is the larger lever. High's first cut (UE High's VSM bias 0, solid foliage in RT) cost MORE than Ultra here:
@@ -855,14 +902,14 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
 - **Gates**: `--scalability-selftest` (no window: the table parses and validates; the control arms -- a misspelt knob, a
   sticky key, a knob in two groups, a ceiling on a project knob, a level missing -- each refused; the ceilings through
   Apply: Low, Ultra gives the level's value back, a level edited to the ceiling's value keeps it, not managed puts a project
-  knob back); `--scalability-check` (the running game: every level of every group applied and read back, the level reloaded
+  knob back; the overrides: one noted, kept over another preset, taken away by a reset, unused while not managed, never a
+  pin); `--scalability-check` (the running game: every level of every group applied and read back, the level reloaded
   at Low and the ceilings holding, then not managed again and every knob against the start -- 320 reads on wind_test; a
   reload that never finishes FAILs after 3000 frames; exit = the failures).
   `tools/dist/record_shaders.py` records per preset (Low / Medium add SDSM's and the sky occlusion map's permutations).
-- Not done (plan §9): S3 (anisotropy, foliage density, freeing class-A resources on a lower level), S4's overrides layer
-  and the dev file's migration, S6 (window modes, monitor, DPI), S7's Image and Controls tabs and the menu's own style. The
-  cost table above was measured before the 11-14 review fixes (Low's 4 shadow partitions and 4x4 filter, the clouds' min,
-  three constant knobs dropped).
+- Not done (plan §9): S3 (anisotropy, foliage density, freeing class-A resources on a lower level). A knob's override is
+  shown in Developer Controls' Scalability tab, not beside the knob in its own tab. The cost table above was measured before
+  the 11-14 review fixes (Low's 4 shadow partitions and 4x4 filter, the clouds' min, three constant knobs dropped).
 
 ## Reproducing a Camera View From a Screenshot
 
@@ -1208,7 +1255,7 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
 UE's Play In Editor (2026-11-05, owner: "the physics should not simulate just in the editor"; `docs/play_mode_plan.md`, `sources/app/game`). In a build with the editor (Debug, Release_Editor) the world STANDS, panels open or closed, and nothing but a session changes that: `physics::Settings::simulate` is no knob any more, AppController says it every frame (`physics.simulate` answers `unknown setting`). A build without the editor (Release) always runs, and its camera is free until `--play` or F8: every shot and measurement of a Release build stands on that.
 
 - **No copy of the world.** All a session changes is render offsets (below, "The pose is a render offset") and the camera, which `PlaySession` puts back, so Stop leaves the document and the level as they were. Checked 2026-11-09 (owner: "put the yacht back where it was before it sailed off"; scratchpad-style `yacht_stop.py`): wind_test's yacht after 72 m at the helm, and after drifting without it, is at its authored (52.657, 0, 115.447) after Stop, a frame of it the same as before Play (`physics::World::SetSimulating(false)`: every Dynamic and kinematic body to `entry.rest`, its offset cleared). What a person sees jump is the HEIGHT: a vessel stands in the editor where it is placed, and wind_test's yacht is placed at y 0 where it floats ~0.38 lower (its draft): it hangs over the water before Play and after Stop, and drops into it in Play. The owner's yacht that "did not come back" had been KEPT: the HUD said "K keep" beside the helm's keys and read as an anchor for the session; Keep wrote its pose into the level, so Stop put it there. The HUD says "K write the poses to the level" now, Keep's status "Wrote the pose of N objects into the level (unsaved; Ctrl+Z after Stop undoes it)", the Play button's tooltip "Not an anchor". `K` (UE's Keep Simulation Changes, `keepSimulation`) is the one thing that writes: the selection's bodies if any of them moved, else every body that did, one undo entry.
-- **Keys** (`input/bindings.json`): Alt+P or Level Editor > Play (from the level's Player Start, from the camera without one), Play From Camera; in Play WASD and the mouse, Shift, C or Ctrl (held), Space; Esc or F2 stops (F2 and Developer Controls' checkbox open the editor, and opening it stops the session); F8 ejects and possesses (the body stands and lives, the camera flies, UE's Possess / Eject; `GenerateFont` moved to Ctrl+F8); Shift+F1 or losing the focus frees the mouse, a click takes it back. Release: F8 starts, Esc frees the mouse. The HUD's line under `Time:` says the mode and the keys.
+- **Keys** (`input/bindings.json`): Alt+P or Level Editor > Play (from the level's Player Start, from the camera without one), Play From Camera; in Play WASD and the mouse, Shift, C or Ctrl (held), Space; Esc or F2 stops (F2 and Developer Controls' checkbox open the editor, and opening it stops the session); F8 ejects and possesses (the body stands and lives, the camera flies, UE's Possess / Eject; `GenerateFont` moved to Ctrl+F8); Shift+F1 or losing the focus frees the mouse, a click takes it back. Release: F8 starts, Esc opens the game's menu (it frees the mouse), Shift+F1 frees the mouse. The HUD's line under `Time:` says the mode and the keys.
 - **Player Start**: level object `{"type": "playerStart", "position": [the FEET], "rotationDeg": [pitch, yaw, 0], ...}`, a document object with no renderable as `freeCameraStart` and the zones are. Create > Player Start or MCP `placePlayerStart {at, yawDeg}` (a second call moves the one there is); always on screen as a capsule of the player's size, an arrow from the eye and its icon (`art/editor/viewport_icons/player_start.svg`, `tools/build_editor_icons.py`). The numbers of `physics::PlayerSettings` are optional keys of this object, edited in the Inspector, in one table (`game::PlayerKeys`) with `--set player.<key>` and Developer Controls > Physics: walkSpeed 4, sprintSpeed 6.4, crouchSpeed 2, swimSpeed 2, acceleration 20.48, braking 20.48, friction 8, airControl 0.35, jumpSpeed 4.2, height 1.8, crouchHeight 1.1, radius 0.3, eyeHeight 1.65, crouchEyeHeight 0.95, stepHeight 0.4, maxSlopeDeg 50, swimDepth 1.3. A session starts from the values as they stand plus the level's keys, and gives them back at its end.
 - **The controller**: `PlayerController` (the keys and the mouse) over `physics::PlayerBody` (`PhysicsCharacter.cpp`: Jolt's `CharacterVirtual` and UE's `CalcVelocity` / `ApplyVelocityBraking`, CharacterMovementComponent.cpp:3863, :4377, in metres, on the frame's clock). Run-up, stop and turn are UE's; a jump press counts 0.1 s before landing and 0.1 s after an edge, once; in the air a share of the acceleration and no braking; a crouch cannot stand up under a ceiling (`SetShape` refuses, it asks every frame); a step up eases in for the eye only; on a moving floor it rides and takes off at the floor's speed; deeper than swimDepth it floats with the eye over the swell (`OceanReadback`, the height under the feet), and there is no diving: under water has no render of its own. Jolt leaves the velocity it is given alone (UE: "make velocity reflect actual move"), so what a wall stopped is taken out by hand -- only what was really stopped: a walkable slope also moves less along the ground than asked, and taking that out would crawl, worse the higher the frame rate. Under `physics.killY` it comes back at the start. Not there: a body others hit (no `mInnerBodyShape`: it pushes, a falling coconut passes through), pause, arms in the frame, head bob, footsteps.
 - **A panel that closes leaves its keyboard focus behind** (found by the live test): `WantCaptureKeyboard` stayed true after F2, `App::WndProc` gives every letter to whoever holds it, and the free camera never showed it because its right button clears the focus (ImGuiLayer). Play has no right button to hold: WASD never reached the player. AppController clears it whenever no window of ours is on screen. A key through a panel's focus reaches `ImGui::IsKeyPressed`, not InputManager: Alt+P and Esc read both.

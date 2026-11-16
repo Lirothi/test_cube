@@ -381,7 +381,8 @@ REQUIREMENTS
 
 WHERE THINGS ARE
   The game writes nothing beside the exe. Its files are in %LOCALAPPDATA%\\{user_folder}:
-    settings\\graphics_settings.json   what you changed from the defaults
+    settings\\user_settings.json       your settings: what you changed from the defaults, the quality levels,
+                                       the window, brightness, field of view, mouse (delete it for the defaults)
     logs\\                             the session logs (logs\\latest.txt names the newest)
     crashes\\                          crash reports (minidumps) -- send one with the log if the game stops
     cache\\                            shader and pipeline caches (safe to delete)

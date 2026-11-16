@@ -240,6 +240,12 @@
     <ClCompile Include="sources/app/settings/Scalability.cpp">
       <Filter>sources\app\settings</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/settings/UserSettings.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/DisplayMode.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/ui/GameSettingsMenu.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
@@ -982,6 +988,15 @@
     </ClInclude>
     <ClInclude Include="sources/app/settings/Scalability.h">
       <Filter>sources\app\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/settings/UserSettings.h">
+      <Filter>sources\app\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/settings/DisplayMode.h">
+      <Filter>sources\app\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/ui/GameMenuStrings.h">
+      <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/ui/GameSettingsMenu.h">
       <Filter>sources\app\ui</Filter>

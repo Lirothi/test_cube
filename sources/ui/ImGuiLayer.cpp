@@ -145,6 +145,10 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     ImGuiStyle& style = ImGui::GetStyle();
     style.FontScaleMain = kUiScale;
     style.ScaleAllSizes(kUiScale);
+    baseStyle_ = style;
+    bootDpi_ = std::max(GetDpiForWindow(hwnd), 1u);
+    dpiScale_ = 1.0f;
+    pendingDpi_ = 0;
 
     // ImGui's built-in font is ASCII-only, and a glyph it does not have is drawn as '?'.
     // That is what every Cyrillic character typed into the command bar and the model chat
@@ -258,6 +262,22 @@ void ImGuiLayer::BeginFrame()
     }
 
     drawDataReady_ = false; // a closed frame nobody recorded is dropped with it
+
+    if (pendingDpi_ != 0)
+    {
+        // Another monitor's DPI: the sizes and the font by its ratio to the boot monitor's (the base keeps 1.5 there).
+        const float scale = static_cast<float>(pendingDpi_) / static_cast<float>(bootDpi_);
+        pendingDpi_ = 0;
+        if (std::abs(scale - dpiScale_) > 1e-3f)
+        {
+            ImGuiStyle style = baseStyle_;
+            style.ScaleAllSizes(scale);
+            style.FontScaleDpi = scale;
+            ImGui::GetStyle() = style;
+            dpiScale_ = scale;
+            LOG_INFO(logging::LogCategory::App, "UI: the monitor's DPI is {} x the boot monitor's -- the UI scaled with it", scale);
+        }
+    }
 
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();

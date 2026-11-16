@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include "app/settings/UserSettings.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
@@ -421,16 +422,28 @@ bool Scalability::LoadTable()
 void Scalability::LoadUser()
 {
     if (!loaded_) { return; }
-    const std::filesystem::path file = vfs::WritablePath(vfs::Writable::Settings, kUserFile);
-    std::ifstream in(file, std::ios::binary); // vfs-ok: the user's settings file
-    if (!in) { return; }
-    const json root = json::parse(in, nullptr, false, /*ignore_comments=*/true);
-    if (!root.is_object())
+    const std::filesystem::path file = UserSettingsPath();
+    if (UserSettingsDamaged()) { return; } // a Warning in the log: not managed
+    const std::string text = settings::ReadUserSection("scalability");
+    const std::string overridesText = settings::ReadUserSection("overrides");
+    if (text.empty() && overridesText.empty()) { return; }
+    const json parsed = json::parse(text.empty() ? std::string("{}") : text, nullptr, false);
+    const json s = parsed.is_object() ? parsed : json::object();
+    const json o = json::parse(overridesText.empty() ? std::string("{}") : overridesText, nullptr, false);
+    overrides_.clear();
+    if (o.is_object())
     {
-        LOG_WARNING(logging::LogCategory::App, "scalability: {} is not valid JSON -- not managed", vfs::Narrow(file.wstring()));
-        return;
+        for (auto it = o.begin(); it != o.end(); ++it)
+        {
+            const ScalabilityKnob* knob = FindScalabilityKnob(it.key());
+            if (!knob || knob->content || !it.value().is_number())
+            {
+                LOG_WARNING(logging::LogCategory::App, "scalability: override {} ignored (not a project knob of the levels)", it.key());
+                continue;
+            }
+            overrides_[it.key()] = it.value().get<float>();
+        }
     }
-    const json s = root.value("scalability", json::object());
     if (s.contains("groups") && s["groups"].is_object())
     {
         for (auto it = s["groups"].begin(); it != s["groups"].end(); ++it)
@@ -446,9 +459,10 @@ void Scalability::LoadUser()
     {
         resolutionLevel_ = std::clamp(s["resolution"].get<int>(), -1, kScalabilityLevels - 1);
     }
-    LOG_INFO(logging::LogCategory::App, "scalability: {} -- preset {}, resolution {}", vfs::Narrow(file.wstring()),
+    LOG_INFO(logging::LogCategory::App, "scalability: {} -- preset {}, resolution {}, {} override(s) by hand", vfs::Narrow(file.wstring()),
              Preset() >= 0 ? table_.levelNames[static_cast<std::size_t>(Preset())] : Preset() == -1 ? "Custom" : "not managed",
-             resolutionLevel_ >= 0 ? table_.levelNames[static_cast<std::size_t>(resolutionLevel_)] : "not managed");
+             resolutionLevel_ >= 0 ? table_.levelNames[static_cast<std::size_t>(resolutionLevel_)] : "not managed",
+             overrides_.size());
 }
 
 bool Scalability::SaveUser(std::string& why) const
@@ -458,107 +472,106 @@ bool Scalability::SaveUser(std::string& why) const
         why = "the table did not load: the saved levels are kept as they are";
         return false;
     }
-    const std::filesystem::path file = vfs::WritablePath(vfs::Writable::Settings, kUserFile);
-    json root = json::object();
-    {
-        std::ifstream in(file, std::ios::binary); // vfs-ok: the user's settings file (its other sections kept)
-        if (in)
-        {
-            json old = json::parse(in, nullptr, false, true);
-            if (old.is_object()) { root = std::move(old); }
-        }
-    }
     json groups = json::object();
     for (std::size_t g = 0; g < table_.groups.size(); ++g)
     {
         if (groupLevels_[g] >= 0) { groups[table_.groups[g].key] = groupLevels_[g]; }
     }
-    root["version"] = 1;
-    root["scalability"] = { { "groups", groups }, { "resolution", resolutionLevel_ } };
-    std::error_code ec;
-    if (file.has_parent_path()) { std::filesystem::create_directories(file.parent_path(), ec); }
-    std::filesystem::path temp = file;
-    temp += L".tmp";
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc); // vfs-ok: the user's settings file
-        if (!out)
-        {
-            why = "cannot write " + vfs::Narrow(temp.wstring());
-            return false;
-        }
-        out << root.dump(2) << "\n";
-        if (!out.good())
-        {
-            why = "write failed";
-            return false;
-        }
-    }
-    std::filesystem::rename(temp, file, ec);
-    if (ec)
-    {
-        why = ec.message();
-        return false;
-    }
-    return true;
+    const json levels = { { "groups", groups }, { "resolution", resolutionLevel_ } };
+    json overrides = json::object();
+    for (const auto& [name, value] : overrides_) { overrides[name] = value; }
+    return settings::WriteUserSections({ { "scalability", levels.dump() },
+                                         { "overrides", overrides.empty() ? std::string() : overrides.dump() } }, why);
 }
 
-std::string Scalability::ReadUserSection(const std::string& key)
-{
-    std::ifstream in(vfs::WritablePath(vfs::Writable::Settings, kUserFile), std::ios::binary); // vfs-ok: the user's settings file
-    if (!in) { return {}; }
-    const json root = json::parse(in, nullptr, false, true);
-    if (!root.is_object() || !root.contains(key)) { return {}; }
-    return root[key].dump();
-}
+std::string Scalability::ReadUserSection(const std::string& key) { return settings::ReadUserSection(key); }
 
 bool Scalability::WriteUserSection(const std::string& key, const std::string& jsonText, std::string& why)
 {
-    const std::filesystem::path file = vfs::WritablePath(vfs::Writable::Settings, kUserFile);
-    json root = json::object();
+    return settings::WriteUserSection(key, jsonText, why);
+}
+
+bool Scalability::ManagedProjectKnob(const std::string& name) const
+{
+    const ScalabilityKnob* knob = FindScalabilityKnob(name);
+    if (!knob || knob->content) { return false; }
+    for (std::size_t g = 0; g < table_.groups.size(); ++g)
     {
-        std::ifstream in(file, std::ios::binary); // vfs-ok: the user's settings file (its other sections kept)
-        if (in)
+        if (groupLevels_[g] < 0) { continue; }
+        for (const auto& [n, op] : table_.groups[g].levels[static_cast<std::size_t>(groupLevels_[g])])
         {
-            json old = json::parse(in, nullptr, false, true);
-            if (old.is_object()) { root = std::move(old); }
+            if (n == name) { return true; }
         }
     }
-    const json value = json::parse(jsonText, nullptr, false);
-    if (value.is_discarded())
+    if (const ScalabilityCell* cell = ResolutionCell(resolutionLevel_))
     {
-        why = "not JSON";
-        return false;
-    }
-    root["version"] = 1;
-    root[key] = value;
-    std::error_code ec;
-    if (file.has_parent_path()) { std::filesystem::create_directories(file.parent_path(), ec); }
-    std::filesystem::path temp = file;
-    temp += L".tmp";
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc); // vfs-ok: the user's settings file
-        if (!out)
+        for (const auto& [n, op] : *cell)
         {
-            why = "cannot write " + vfs::Narrow(temp.wstring());
-            return false;
-        }
-        out << root.dump(2) << "\n";
-        out.flush();
-        if (!out.good())
-        {
-            why = "write failed";
-            out.close();
-            std::filesystem::remove(temp, ec);
-            return false; // the good file stays
+            if (n == name) { return true; }
         }
     }
-    std::filesystem::rename(temp, file, ec);
-    if (ec)
+    return false;
+}
+
+std::map<std::string, float> Scalability::ManagedValues() const
+{
+    std::map<std::string, float> out;
+    for (const auto& [name, value] : applied_)
     {
-        why = ec.message();
-        return false;
+        float current = 0.0f;
+        if (ManagedProjectKnob(name) && Read(name, current)) { out[name] = current; }
     }
-    return true;
+    return out;
+}
+
+bool Scalability::NoteManualValues()
+{
+    bool changed = false;
+    for (auto& [name, applied] : applied_)
+    {
+        if (pinned_.count(name) || !ManagedProjectKnob(name)) { continue; }
+        float current = 0.0f;
+        if (!Read(name, current) || current == applied) { continue; }
+        const auto it = overrides_.find(name);
+        if (it == overrides_.end() || it->second != current)
+        {
+            overrides_[name] = current;
+            changed = true;
+            LOG_INFO(logging::LogCategory::App, "scalability: {} set by hand to {} over its level ({}) -- an override",
+                     name, FormatValue(current), FormatValue(applied));
+        }
+        applied = current;
+    }
+    return changed;
+}
+
+void Scalability::AfterReset(const std::map<std::string, float>& before)
+{
+    for (const auto& [name, was] : before)
+    {
+        float current = 0.0f;
+        if (pinned_.count(name) || !Read(name, current) || current == was) { continue; }
+        // The reset put the build's default in: that is now the knob's own value, and the level's is written next.
+        original_[name] = current;
+        overrides_.erase(name);
+        applied_.erase(name);
+    }
+}
+
+std::map<std::string, float> Scalability::ActiveOverrides() const
+{
+    std::map<std::string, float> out;
+    for (const auto& [name, value] : overrides_)
+    {
+        if (ManagedProjectKnob(name)) { out[name] = value; }
+    }
+    return out;
+}
+
+void Scalability::ClearOverride(const std::string& name)
+{
+    if (name.empty()) { overrides_.clear(); }
+    else { overrides_.erase(name); }
 }
 
 int Scalability::GroupLevel(int group) const
@@ -682,9 +695,16 @@ bool Scalability::ApplyCell(const ScalabilityCell& cell, ScalabilityReport& repo
             LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::App, "scalability: {} cannot be read", name);
             continue;
         }
+        // A value set by hand over the level's (a project knob only: the level's own knobs are the level's).
+        if (const auto manual = overrides_.find(name); !content && manual != overrides_.end())
+        {
+            target = manual->second;
+            ++report.keysOverridden;
+        }
         if (known && current == target)
         {
             if (content) { lastWritten_[name] = target; }
+            else { applied_[name] = target; }
             continue;
         }
         if (!WriteKnob(name, target, current, known, report))
@@ -692,13 +712,12 @@ bool Scalability::ApplyCell(const ScalabilityCell& cell, ScalabilityReport& repo
             ok = false;
             continue;
         }
-        if (content)
-        {
-            // Every write into a level's knob, a set value too: what the knob holds after its own clamp, so the next
-            // apply does not read it as the level's new value.
-            float stored = target;
-            lastWritten_[name] = access_.read && access_.read(name, stored) ? stored : target;
-        }
+        // Every write, a set value too: what the knob holds after its own clamp, so the next apply does not read it as
+        // the level's new value, nor the next save as a change by hand.
+        float stored = target;
+        const float held = access_.read && access_.read(name, stored) ? stored : target;
+        if (content) { lastWritten_[name] = held; }
+        else { applied_[name] = held; }
     }
     return ok;
 }
@@ -721,6 +740,7 @@ void Scalability::RestoreCell(const ScalabilityCell& cell, ScalabilityReport& re
         if (pinned_.count(name)) { continue; }
         float back = 0.0f;
         bool restore = false;
+        applied_.erase(name);
         if (const auto it = original_.find(name); it != original_.end())
         {
             back = it->second;
@@ -757,7 +777,7 @@ void Scalability::ForgetContent(const std::vector<std::string>& prefixes)
     for (auto it = contentBase_.begin(); it != contentBase_.end();) { it = matches(it->first) ? contentBase_.erase(it) : std::next(it); }
 }
 
-ScalabilityReport Scalability::Apply(const std::string& reason, bool quiet)
+ScalabilityReport Scalability::Apply(const std::string& reason, bool quiet, bool noteManual)
 {
     ScalabilityReport report;
     report.reason = reason;
@@ -766,6 +786,9 @@ ScalabilityReport Scalability::Apply(const std::string& reason, bool quiet)
         lastReport_ = report;
         return report;
     }
+    // A knob changed by hand since the last apply (a Developer Controls edit not saved yet) is kept as an override, not
+    // overwritten by the level being applied now.
+    if (noteManual) { NoteManualValues(); }
     // Anything to do: a managed group, or one let go whose knobs are still scalability's.
     bool work = Managed();
     for (std::size_t g = 0; g < table_.groups.size() && !work; ++g)
@@ -811,10 +834,10 @@ ScalabilityReport Scalability::Apply(const std::string& reason, bool quiet)
     else
     {
         LOG_INFO(logging::LogCategory::App,
-                 "scalability: applied ({}) -- {}, resolution {}: {} knob(s) changed, {} pinned by --set/MCP, {} failed; "
-                 "{} target knob(s) -> {} recreation(s), idle reconciles {}; {:.2f} ms",
-                 reason, presetName, resolutionName, report.keysWritten, report.keysPinned, report.keysFailed,
-                 report.targetChanges, report.recreations, report.idleChanges, report.ms);
+                 "scalability: applied ({}) -- {}, resolution {}: {} knob(s) changed, {} pinned by --set/MCP, {} set by "
+                 "hand, {} failed; {} target knob(s) -> {} recreation(s), idle reconciles {}; {:.2f} ms",
+                 reason, presetName, resolutionName, report.keysWritten, report.keysPinned, report.keysOverridden,
+                 report.keysFailed, report.targetChanges, report.recreations, report.idleChanges, report.ms);
         for (const std::string& c : report.changed)
         {
             LOG_DEBUG(logging::LogCategory::App, "scalability:   {}", c);
@@ -828,7 +851,7 @@ ScalabilityReport Scalability::OnContentReloaded(const std::string& reason)
 {
     contentBase_.clear();
     lastWritten_.clear();
-    return Apply(reason);
+    return Apply(reason, /*quiet=*/false, /*noteManual=*/false);
 }
 
 std::string Scalability::StatusJson() const
@@ -845,9 +868,12 @@ std::string Scalability::StatusJson() const
         { "groups", groups },
         { "resolution", resolutionLevel_ },
         { "pinned", json(std::vector<std::string>(pinned_.begin(), pinned_.end())) },
+        { "overrides", json(overrides_) },
+        { "overridesInUse", json(ActiveOverrides()) },
         { "autodetect", { { "running", autodetectRunning_ }, { "status", autodetectStatus_ } } },
         { "lastApply", { { "reason", lastReport_.reason }, { "written", lastReport_.keysWritten },
-                         { "pinned", lastReport_.keysPinned }, { "failed", lastReport_.keysFailed },
+                         { "pinned", lastReport_.keysPinned }, { "overridden", lastReport_.keysOverridden },
+                         { "failed", lastReport_.keysFailed },
                          { "renderTargets", lastReport_.targetChanges }, { "recreations", lastReport_.recreations },
                          { "idleReconciles", lastReport_.idleChanges },
                          { "ms", lastReport_.ms }, { "changed", lastReport_.changed } } },
@@ -1000,6 +1026,43 @@ int RunScalabilitySelfTest()
         check(knobs["gi.rays"] == 64.0f && knobs["cloud.viewSampleCountMax"] == 128.0f,
               "Not managed puts back gi.rays 64 and the level's 128 (got " + FormatValue(knobs["gi.rays"]) + ", " +
               FormatValue(knobs["cloud.viewSampleCountMax"]) + ")");
+
+        // Manual overrides (§3.3, layer 5): a knob changed by hand over its level is noted at a save, kept over another
+        // preset, taken away by a reset, unused while its group is not managed; a --set (a pin) never becomes one.
+        knobs = { { "cloud.viewSampleCountMax", 128.0f }, { "gi.rays", 64.0f } };
+        Scalability o;
+        o.SetAccess({ [&](const std::string& n, float v) { knobs[n] = v; return true; },
+                      [&](const std::string& n, float& v) { const auto it = knobs.find(n); if (it == knobs.end()) { return false; } v = it->second; return true; },
+                      []() { return true; } });
+        o.SetTableForTest(t);
+        o.SetPreset(0);
+        o.Apply("self-test Low");
+        check(!o.NoteManualValues() && o.Overrides().empty(), "nothing changed by hand: no override");
+        knobs["gi.rays"] = 48.0f; // a Developer Controls edit while Low is chosen
+        const bool noted = o.NoteManualValues();
+        check(noted && o.Overrides().count("gi.rays") && o.Overrides().at("gi.rays") == 48.0f,
+              "a knob changed by hand over Low becomes an override (48)");
+        o.SetPreset(3);
+        o.Apply("self-test Ultra over the override");
+        check(knobs["gi.rays"] == 48.0f, "a preset keeps the override (got " + FormatValue(knobs["gi.rays"]) + ")");
+        const std::map<std::string, float> before = o.ManagedValues();
+        knobs["gi.rays"] = 64.0f; // a Reset puts the build's default in
+        o.AfterReset(before);
+        o.SetPreset(0);
+        o.Apply("self-test after the reset");
+        check(knobs["gi.rays"] == 32.0f && o.Overrides().empty(),
+              "a reset takes the override away and the level's 32 is written (got " + FormatValue(knobs["gi.rays"]) + ")");
+        o.SetOverride("gi.rays", 40.0f);
+        o.SetPreset(-1);
+        o.Apply("self-test not managed with an override");
+        check(knobs["gi.rays"] == 64.0f && o.ActiveOverrides().empty() && o.Overrides().size() == 1,
+              "a group not managed: the knob's own 64 back, the override kept and unused (got " + FormatValue(knobs["gi.rays"]) + ")");
+        o.ClearOverride("");
+        o.SetPreset(0);
+        o.Apply("self-test Low, pinned");
+        o.Pin("gi.rays");
+        knobs["gi.rays"] = 50.0f; // a --set
+        check(!o.NoteManualValues() && o.Overrides().empty(), "a pinned knob (--set) never becomes an override");
     }
     LOG_INFO(logging::LogCategory::App, "scalability self-test: {} ({} failed)", failed == 0 ? "PASS" : "FAIL", failed);
     return failed;

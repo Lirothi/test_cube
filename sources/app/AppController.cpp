@@ -25,6 +25,8 @@
 void AppController::InitializeGraphicsSettings(Renderer& renderer, Scene& scene)
 {
     graphicsSettings_.Initialize(renderer, scene, settings_);
+    // The settings menu's Apply keeps the frame pacing and the mouse smoothing where they live: the graphics section.
+    settingsMenu_.SetSaveGraphics([this, &renderer, &scene]() { return graphicsSettings_.SaveCurrent(renderer, scene, settings_); });
 }
 
 void AppController::ApplySceneGraphicsSettings(Scene& scene) const
@@ -116,7 +118,9 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     }
     if (!g_bootSettingsMenu.empty())
     {
-        settingsMenu_.OpenTab(g_bootSettingsMenu); // once: "--settings-menu[=<tab>]" for a headless capture
+        // once: "--settings-menu[=<tab>|menu]" for a headless capture
+        if (g_bootSettingsMenu == "menu") { gameMenuOpen_ = true; }
+        else { settingsMenu_.OpenTab(g_bootSettingsMenu); }
         g_bootSettingsMenu.clear();
     }
 #if WITH_EDITOR
@@ -266,7 +270,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     TickPlay(input, renderer, scene, levelManager, toggleLevelEditor);
 #else
     TickPlay(input, renderer, scene, levelManager, false);
-    DrawGameMenu(levelManager);
+    DrawGameMenu(levelManager, input);
 #endif
     // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
     if (playSession_.Playing())
@@ -294,6 +298,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             io.WantCaptureKeyboard = false;
         }
     }
+
+    // The player's field of view (the menu's Image; 0 = the level's), on the game camera: the render camera takes it with
+    // the pose at the hand-over.
+    scene.CameraRef().SetPlayerFovDeg(g_cameraPlayerFovDeg);
 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (playSession_.Playing())
@@ -398,15 +406,11 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     else
     {
         if (eject) { playSession_.TogglePossess(scene); }
-#if TC_PACKAGED
         if (freeMouse) { playSession_.ToggleFreeMouse(); }
-#else
-        if (escape || freeMouse) { playSession_.ToggleFreeMouse(); }
-#endif
     }
-#if TC_PACKAGED
-    // Esc is the game's menu here, on foot, at a helm or with the camera free; the mouse is the menu's while it is up and
-    // the game's again when Esc or Continue closes it.
+    // Esc is the game's menu in every build without the editor (docs/scalability_plan.md §6.1; Release too since
+    // 2026-11-16 -- F1 stays Developer Controls), on foot, at a helm or with the camera free; the mouse is the menu's while
+    // it is up and the game's again when Esc or Continue closes it.
     if (escape && settingsMenu_.IsOpen())
     {
         settingsMenu_.Cancel(); // Esc on the settings: back to the menu, nothing kept
@@ -420,31 +424,26 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     {
         playSession_.SetMouseFree(true);
     }
-#else
-    // A build without the packages' menu opens the settings only by --settings-menu: Esc cancels them, the mouse is theirs.
-    if (escape && settingsMenu_.IsOpen()) { settingsMenu_.Cancel(); }
-    else if (settingsMenu_.IsOpen() && playSession_.Playing()) { playSession_.SetMouseFree(true); }
-#endif
 #endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
-#if TC_PACKAGED
+#if !WITH_EDITOR
     if (!playSession_.Playing()) { hudPlayLine_ = L"FREE CAMERA: right mouse look, WASD, wheel speed   F8 walk from here   Esc menu"; }
 #endif
     hudRaceLine_ = playSession_.RaceHudLine(scene);
     hudBigText_ = playSession_.Playing() ? scene.RaceRef().BigText() : std::wstring{};
 }
 
-void AppController::DrawGameMenu(LevelManager& levelManager)
+void AppController::DrawGameMenu(LevelManager& levelManager, InputManager& input)
 {
-    // The settings screen covers the menu while it is open (in a dev build only --settings-menu opens it).
+    // The settings screen covers the menu while it is open.
     if (settingsMenu_.IsOpen())
     {
-        settingsMenu_.Draw();
+        settingsMenu_.Draw(input);
         return;
     }
-#if TC_PACKAGED
-    // The levels are the packages' (the cook puts in only the profile's): data/levels/*.json, read once.
     if (!gameMenuOpen_) { return; }
+    // The levels: a packaged build's are its packages' (the cook puts in only the profile's), a dev build's the tree's --
+    // data/levels/*.json, read once.
     if (gameMenuLevels_.empty())
     {
         vfs::List("data/levels", "*.json", [this](const vfs::ListEntry& entry)
@@ -453,44 +452,73 @@ void AppController::DrawGameMenu(LevelManager& levelManager)
         });
         std::sort(gameMenuLevels_.begin(), gameMenuLevels_.end());
     }
+    GameMenuStyle style;
+    style.Backdrop();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::Begin("Menu", nullptr,
-                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-    const ImVec2 button(320.0f, 0.0f);
-    if (ImGui::Button("Continue", button))
+    ImGui::Begin(menu_text::kMenuTitle, nullptr,
+                 ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+    const ImVec2 button(style.Em(18.0f), 0.0f);
+    style.Title(menu_text::kMenuTitle);
+    if (ImGui::Button(menu_text::kContinue, button))
     {
         gameMenuOpen_ = false;
         if (playSession_.Playing()) { playSession_.SetMouseFree(false); }
     }
-    if (ImGui::Button("Settings", button)) { settingsMenu_.Open(); }
-    ImGui::SeparatorText("Levels");
+    if (ImGui::Button(menu_text::kSettings, button)) { settingsMenu_.Open(); }
+    // The levels as ONE list (owner, 2026-11-16: "a drop-down, not a million buttons"): pick one, then Load; the open
+    // one is marked and its button says Restart.
+    ImGui::SeparatorText(menu_text::kLevels);
     std::string current(levelManager.GetActiveLevelSourcePath());
     std::replace(current.begin(), current.end(), '\\', '/');
-    for (const std::string& level : gameMenuLevels_)
-    {
+    const auto isOpen = [&current](const std::string& level) { return current == level || current.ends_with("/" + level); };
+    const auto nameOf = [&isOpen](const std::string& level) {
         const std::size_t slash = level.find_last_of('/');
         std::string name = level.substr(slash + 1, level.size() - slash - 1 - 5); // without the folder and ".json"
-        if (current == level || current.ends_with("/" + level)) { name += "  (here: start again)"; }
-        ImGui::PushID(level.c_str());
-        if (ImGui::Button(name.c_str(), button))
-        {
-            LOG_INFO(logging::LogCategory::App, "menu: level {}", level);
-            levelManager.RequestLevelPathChange(level);
-            gameMenuOpen_ = false;
-        }
-        ImGui::PopID();
+        if (isOpen(level)) { name += menu_text::kLevelHere; }
+        return name;
+    };
+    if (gameMenuLevels_.empty())
+    {
+        ImGui::TextDisabled("%s", menu_text::kNoLevels);
     }
-    if (gameMenuLevels_.empty()) { ImGui::TextDisabled("no levels in the packages"); }
+    else
+    {
+        if (gameMenuLevelChoice_ < 0 || gameMenuLevelChoice_ >= static_cast<int>(gameMenuLevels_.size()))
+        {
+            gameMenuLevelChoice_ = 0;
+            for (std::size_t i = 0; i < gameMenuLevels_.size(); ++i)
+            {
+                if (isOpen(gameMenuLevels_[i])) { gameMenuLevelChoice_ = static_cast<int>(i); }
+            }
+        }
+        const std::string& chosen = gameMenuLevels_[static_cast<std::size_t>(gameMenuLevelChoice_)];
+        ImGui::SetNextItemWidth(button.x);
+        if (ImGui::BeginCombo("##level", nameOf(chosen).c_str(), ImGuiComboFlags_HeightLarge))
+        {
+            for (std::size_t i = 0; i < gameMenuLevels_.size(); ++i)
+            {
+                const bool selected = static_cast<int>(i) == gameMenuLevelChoice_;
+                if (ImGui::Selectable(nameOf(gameMenuLevels_[i]).c_str(), selected)) { gameMenuLevelChoice_ = static_cast<int>(i); }
+                if (selected) { ImGui::SetItemDefaultFocus(); }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::Button(isOpen(chosen) ? menu_text::kRestartLevel : menu_text::kLoadLevel, button))
+        {
+            LOG_INFO(logging::LogCategory::App, "menu: level {}", chosen);
+            levelManager.RequestLevelPathChange(chosen);
+            gameMenuOpen_ = false;
+            gameMenuLevelChoice_ = -1; // the next opening starts at the level then open
+        }
+    }
     ImGui::Separator();
-    if (ImGui::Button("Quit", button))
+    if (ImGui::Button(menu_text::kQuit, button))
     {
         PostMessageW(static_cast<HWND>(viewport->PlatformHandleRaw), WM_CLOSE, 0, 0); // the window's own close: settings and log flushed as by its [x]
     }
     ImGui::End();
-#else
-    (void)levelManager;
-#endif
 }
 
 void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input)

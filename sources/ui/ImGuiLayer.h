@@ -63,6 +63,12 @@ public:
     void HandOver(ID3D12Device* device, UINT frameIndex, std::vector<ID3D12Resource*>& shown,
                   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keepAlive);
 
+    // WM_DPICHANGED (docs/scalability_plan.md §6.1, S6): the window moved to a monitor of another DPI. The UI keeps its
+    // size on the monitor it started on (the panels' 1.5) and scales by newDpi / that one's elsewhere; taken at the next
+    // BeginFrame, between two UI frames.
+    void RequestDpi(UINT dpi) { pendingDpi_ = dpi; }
+    float DpiScale() const { return dpiScale_; }
+
 private:
     struct PreviewSrvDescriptors
     {
@@ -113,4 +119,8 @@ private:
     void TakeDrawDataSnapshot();
     void FreeDrawDataSnapshot();
     bool pendingRightClickFocusClear_ = false;
+    ImGuiStyle baseStyle_{};  // the style as Init scaled it, for the boot monitor's DPI
+    UINT bootDpi_ = 96;
+    UINT pendingDpi_ = 0;
+    float dpiScale_ = 1.0f;
 };

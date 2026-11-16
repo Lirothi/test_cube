@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <iterator>
 
+#include "core/threading/Knob.h"
+
 // Photographic camera settings (docs/photographic_rendering_improvement_plan.md, section 6.1).
 //
 // This is the CAMERA, not a light. Sun intensity, sky intensity and camera exposure are three
@@ -17,6 +19,12 @@
 // pre-plan image.
 namespace render
 {
+
+// The PLAYER's brightness (docs/scalability_plan.md §6.2 item 3, the menu's Image > Brightness; user_settings.json
+// image.brightnessEv; `--set image.brightnessEv`): stops added to the level's exposure compensation -- metered and manual,
+// so the night's anchor moves with it (exposure_solve_cs.hlsl). A runtime offset, never written into the level's
+// CameraExposureSettings, which the editor saves. 0 = the level's exposure as authored.
+KNOB(float, g_playerExposureEv, 0.0f);
 
 // P16.5 -- a local light's luminous intensity, from the flux it is authored with.
 //

@@ -15,6 +15,16 @@ class Renderer;
 // 0 = every frame's mouse motion is applied at once.
 inline float g_cameraMouseSmoothingMs = 0.0f;
 inline constexpr float kCameraMouseSmoothingMaxMs = 500.0f;
+// The player's look (docs/scalability_plan.md §6.2 item 4; the menu's Controls, user_settings.json controls.*, `--set
+// controls.sensitivity|invertY`): the look's speed x this, over the bindings' own sensitivity (input/bindings.json), and
+// its vertical turned the other way. Camera::AddLookInput -- the one road every look takes. Game half only.
+inline float g_cameraLookSensitivity = 1.0f;
+inline bool g_cameraInvertY = false;
+// The player's field of view (§6.2 item 3, §10 item 15; the menu's Image > Field of view, user_settings.json image.fovDeg,
+// `--set image.fovDeg`): degrees HORIZONTAL AT 16:9, and the vertical that gives is kept -- a wider screen sees wider,
+// not less high (Hor+). 0 = the level's own (its hfovDeg, horizontal at any aspect, as before). The game half sets it on
+// its camera every frame (AppController); the render camera takes it with the pose.
+inline float g_cameraPlayerFovDeg = 0.0f;
 
 class Camera {
 public:
@@ -72,7 +82,11 @@ public:
     const mat4& GetRotationMatrix() const { return rotation_; }
 
     void SetHFov(float fov) { view_.hfov = fov; }
-    float GetHFov() const { return view_.hfov; }
+    // The field of view the projection uses: the level's (SetHFov), or the player's at this aspect (SetPlayerFovDeg),
+    // as of the last CalcMatrices.
+    float GetHFov() const { return effectiveHfov_ > 0.0f ? effectiveHfov_ : view_.hfov; }
+    // 0 = the level's; otherwise degrees horizontal at 16:9, Hor+ (g_cameraPlayerFovDeg).
+    void SetPlayerFovDeg(float deg) { playerFovDeg_ = deg; }
 
     void SetZNearFar(float znear, float zfar) { view_.zNear = znear; view_.zFar = zfar; }
     float GetZNear() const { return view_.zNear; }
@@ -162,6 +176,8 @@ private:
     float lookOwedYaw_ = 0.0f;
     float lookOwedPitch_ = 0.0f;
     uint32_t renderLayerMask_ = kRenderLayerAll;
+    float playerFovDeg_ = 0.0f;  // SetPlayerFovDeg
+    float effectiveHfov_ = 0.0f; // CalcMatrices: what the projection took (0 before the first)
     bool hasPrevViewProj_ = false;
     uint64_t historyRevision_ = 0u;
     uint64_t takenRevision_ = 0u; // TakePose: the game camera's revision last taken

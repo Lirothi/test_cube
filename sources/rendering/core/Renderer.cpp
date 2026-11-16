@@ -2136,15 +2136,14 @@ void Renderer::OnResize(UINT width, UINT height) {
     if (width == 0 || height == 0) {
         return;
     }
-    pendingResizeWidth_ = width;
-    pendingResizeHeight_ = height;
+    pendingResize_.store((static_cast<std::uint64_t>(width) << 32) | height, std::memory_order_release);
 }
 
 void Renderer::ApplyPendingResize() {
-    const UINT width = pendingResizeWidth_;
-    const UINT height = pendingResizeHeight_;
     // Consume first: a notification delivered by DXGI during the recreate belongs to NEXT frame.
-    pendingResizeWidth_ = pendingResizeHeight_ = 0;
+    const std::uint64_t pending = pendingResize_.exchange(0, std::memory_order_acq_rel);
+    const UINT width = static_cast<UINT>(pending >> 32);
+    const UINT height = static_cast<UINT>(pending & 0xFFFFFFFFu);
     if (width == 0 || height == 0 || (width == width_ && height == height_)) {
         return;
     }

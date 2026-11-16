@@ -152,6 +152,8 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include "app/scene/SkyOcclusionMap.h"      // skyVis.fallbackResolution / fallbackTexel: the map's own ranges
 #include "app/settings/Scalability.h"       // sg.* (docs/scalability_plan.md)
+#include "app/settings/DisplayMode.h"       // the window's mode, monitor and size (S6), display.* below
+#include "app/settings/UserSettings.h"      // image.* / controls.* (S7)
 #include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
 #include "vfx/ParticleTypes.h"              // particles.spawnScale
 #include <fstream>
@@ -459,6 +461,44 @@ namespace
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync_game = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
+        // The window (docs/scalability_plan.md S6): the menu's Display, live and transient -- a script switches the mode
+        // (0 windowed, 1 borderless), the windowed client size, the monitor (its place in the list, 1 = the first), the
+        // frame-rate limit in the background (0 none, -1 the build's). Taken at the frame's safe point; never saved.
+        if (setting == "display.mode" || setting == "display.width" || setting == "display.height" || setting == "display.monitor")
+        {
+            display::DisplaySettings d = display::PendingOrCurrent(display::MainWindow());
+            if (setting == "display.mode") { d.mode = value >= 0.5f ? display::WindowMode::Borderless : display::WindowMode::Windowed; }
+            else if (setting == "display.width") { d.width = std::clamp(static_cast<int>(value), 320, 16384); }
+            else if (setting == "display.height") { d.height = std::clamp(static_cast<int>(value), 200, 16384); }
+            else
+            {
+                const std::vector<display::MonitorInfo> monitors = display::Monitors();
+                const int index = static_cast<int>(value) - 1;
+                if (index < 0 || index >= static_cast<int>(monitors.size())) { return false; }
+                d.monitor = monitors[static_cast<std::size_t>(index)].device;
+            }
+            display::Request(d);
+            return true;
+        }
+        if (setting == "display.backgroundFps") { display::SetBackgroundFps(static_cast<int>(value)); return true; }
+        // The player's Image and Controls (S7), transient: brightness in EV, the field of view (0 = the level's), the
+        // look's sensitivity and its inverted vertical.
+        if (setting == "image.brightnessEv" || setting == "image.fovDeg")
+        {
+            settings::ImageSettings i = settings::CurrentImageSettings();
+            if (setting == "image.brightnessEv") { i.brightnessEv = value; }
+            else { i.fovDeg = value; }
+            settings::ApplyImageSettings(i);
+            return true;
+        }
+        if (setting == "controls.sensitivity" || setting == "controls.invertY")
+        {
+            settings::ControlsSettings c = settings::CurrentControlsSettings();
+            if (setting == "controls.sensitivity") { c.sensitivity = value; }
+            else { c.invertY = value != 0.0f; }
+            settings::ApplyControlsSettings(c);
+            return true;
+        }
         // A film, frame by frame (g_recordDt above): seconds of the world a captured frame advances; 0 = real time.
         if (setting == "frame.recordDt") { g_recordDt = std::clamp(value, 0.0f, 0.1f); return true; }
         // The world's clock, times this (g_timeScale above). The copies of the water's heights follow it.
@@ -2132,6 +2172,25 @@ namespace
         if (name == "dlss.mode") { return u(static_cast<std::uint32_t>(g_requestDlssMode >= 0 ? g_requestDlssMode : static_cast<int>(renderer.GetDlssMode()))); }
         if (name == "aa.renderScale") { return f(g_requestRenderScale >= 0.0f ? g_requestRenderScale : renderer.GetRenderResolutionScale()); }
         if (name == "aa.fxaa") { return b(rs.doFxaa); }
+        // The window and the player's settings (S6, S7): what they are now.
+        if (name.rfind("display.", 0) == 0)
+        {
+            const display::DisplaySettings d = display::Current(display::MainWindow());
+            if (name == "display.mode") { return u(d.mode == display::WindowMode::Borderless ? 1u : 0u); }
+            if (name == "display.width") { return u(static_cast<std::uint32_t>(d.width)); }
+            if (name == "display.height") { return u(static_cast<std::uint32_t>(d.height)); }
+            if (name == "display.backgroundFps") { return f(static_cast<float>(display::BackgroundFps())); }
+            if (name == "display.monitor")
+            {
+                const std::vector<display::MonitorInfo> monitors = display::Monitors();
+                return u(static_cast<std::uint32_t>(display::FindMonitor(monitors, d.monitor) + 1));
+            }
+            return false;
+        }
+        if (name == "image.brightnessEv") { return f(settings::CurrentImageSettings().brightnessEv); }
+        if (name == "image.fovDeg") { return f(settings::CurrentImageSettings().fovDeg); }
+        if (name == "controls.sensitivity") { return f(settings::CurrentControlsSettings().sensitivity); }
+        if (name == "controls.invertY") { return b(settings::CurrentControlsSettings().invertY); }
         return false;
     }
 
@@ -2560,6 +2619,20 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         }
         break;
     }
+    case WM_DPICHANGED:
+    {
+        // Another monitor's DPI (docs/scalability_plan.md §6.3, S6): the UI rescales at its next frame. A windowed window
+        // dragged across takes the size Windows suggests for it there; one display::Apply placed is where it was put.
+        if (app && app->systems_) { app->systems_->renderer.RequestImGuiDpi(HIWORD(wParam)); }
+        const bool popup = (GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_POPUP) != 0;
+        if (!display::Applying() && !popup && lParam)
+        {
+            const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+            SetWindowPos(hWnd, nullptr, suggested->left, suggested->top, suggested->right - suggested->left,
+                         suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return 0;
+    }
     case WM_SYSCHAR:
         return 0; // Alt+P is ours (Play): DefWindowProc looks for a menu with that letter, finds none, and beeps. Alt+F4 does not come through here
     case WM_ERASEBKGND:
@@ -2625,8 +2698,27 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     int posX = (screenRect.right - windowWidth) / 2;
     int posY = (screenRect.bottom - windowHeight) / 2;
     DWORD windowStyle = WS_OVERLAPPEDWINDOW;
+    // The person's window (user_settings.json "display", docs/scalability_plan.md §6.4: read BEFORE the window is made):
+    // windowed or borderless, on its monitor, at its size. Nothing saved = the window as it always started (below).
+    const display::DisplaySettings savedDisplay = display::Load();
+    display::SetBackgroundFps(savedDisplay.backgroundFps);
     // "--window=<w>x<h>": borderless, client = exactly w x h, at the primary monitor's origin (over
     // the taskbar -- which is the point: a 3840x2160 client on the 3840x2160 panel).
+    if (savedDisplay.saved && !(g_windowSize[0] > 0 && g_windowSize[1] > 0))
+    {
+        const std::vector<display::MonitorInfo> monitors = display::Monitors();
+        const display::Placement placement = display::PlacementFor(savedDisplay, monitors);
+        windowStyle = placement.style;
+        posX = placement.rect.left;
+        posY = placement.rect.top;
+        windowWidth = placement.rect.right - placement.rect.left;
+        windowHeight = placement.rect.bottom - placement.rect.top;
+        defWidth = placement.clientWidth;
+        defHeight = placement.clientHeight;
+        LOG_INFO(logging::LogCategory::App, "window: {} on {}, client {}x{} (user_settings.json display)",
+                 savedDisplay.mode == display::WindowMode::Borderless ? "borderless" : "windowed",
+                 display::MonitorLabel(monitors, display::FindMonitor(monitors, savedDisplay.monitor)), defWidth, defHeight);
+    }
     if (g_windowSize[0] > 0 && g_windowSize[1] > 0)
     {
         windowStyle = WS_POPUP;
@@ -2658,6 +2750,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
         hInstance, this
     );
     SetWindowLongPtr(hWnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+    display::SetMainWindow(hWnd_);
 
     LoadLoadingScreen();
     loadingScreenVisible_ = true;
@@ -3407,7 +3500,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #endif
                 scalability.Apply("boot");
             }
-            GameSettingsMenu::ApplySavedDisplay(); // the player's VSync and frame-rate limit over the build's
+            GameSettingsMenu::ApplySavedDisplay(); // a 2026-11-13 file's VSync and frame-rate limit (they are graphics now)
+            settings::ApplySavedImageAndControls(); // the player's brightness, field of view, look
             knob::Exchange(); // graphics_settings.json and the graphics levels set the game's knobs
         }
 #if WITH_EDITOR
@@ -3702,6 +3796,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (!renderer.IsDlssActive()) { renderer.SetRenderResolutionScale(g_requestRenderScale); }
                 g_requestRenderScale = -1.0f;
             }
+            // The window's mode, monitor or size (the menu's Display, --set display.*): its WM_SIZE asks the renderer for
+            // the new size, which the next frame's BeginFrame takes.
+            {
+                display::DisplaySettings request;
+                if (display::TakeRequest(request)) { display::Apply(hWnd_, request); }
+            }
 
 #if WITH_EDITOR
             // A screenshot Claude Code asked for over MCP. Same safe point as --shot below: the
@@ -3936,7 +4036,21 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 : 0.0;
             const int maxFps = render::ClampMaxFps(render::g_maxFps_game);
             const double capFrameSeconds = maxFps > 0 ? 1.0 / static_cast<double>(maxFps) : 0.0;
-            const double frameSeconds = std::max(busyFrameSeconds, capFrameSeconds);
+            // In the background (another window has the focus) the person's own limit there, Lyra's (§6.2 item 1; a
+            // packaged build 30 by default, a dev build none) -- not while auto-detect measures: an idle GPU clocks down
+            // and its frame reads slower than it is.
+            const int backgroundFps = display::BackgroundFps();
+            const bool background = backgroundFps > 0 && !systems_->input.WindowIsForeground() &&
+                                    !settings::TheScalability().AutodetectRunning();
+            const double backgroundFrameSeconds = background ? 1.0 / static_cast<double>(backgroundFps) : 0.0;
+            static bool s_wasBackground = false;
+            if (background != s_wasBackground)
+            {
+                s_wasBackground = background;
+                LOG_INFO(logging::LogCategory::Render, "frame pacing: {} the background ({} fps at most there)",
+                         background ? "in" : "out of", backgroundFps);
+            }
+            const double frameSeconds = std::max({ busyFrameSeconds, capFrameSeconds, backgroundFrameSeconds });
             if (frameSeconds > 0.0)
             {
                 WaitOutFrameBudget(frameStart, frameSeconds);

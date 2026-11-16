@@ -20,9 +20,10 @@
 // away; a knob the LEVEL sets (the clouds' samples, the fog's volume, GTAO, the bloom...) is never raised above what the
 // level asks for -- {"max": n} is a ceiling, "level" its own value.
 //
-// The layers, weakest first (§3.3): compiled values, the package's defaults, the level, scalability, `--set` / MCP. A knob
-// that `--set` or MCP wrote is PINNED for the process: scalability leaves it as it was told (UE's SetByScalability, the
-// weakest priority there is).
+// The layers, weakest first (§3.3): compiled values, the build's graphics defaults (config/graphics_defaults.json; a dev
+// build's tools/dist/graphics_defaults.json) with the person's own graphics section of user_settings.json, the level,
+// scalability, manual overrides over a group's level, `--set` / MCP. A knob that `--set` or MCP wrote is PINNED for the
+// process: scalability leaves it as it was told (UE's SetByScalability, the weakest priority there is).
 namespace settings
 {
     constexpr int kScalabilityLevels = 4;
@@ -95,6 +96,7 @@ namespace settings
     {
         int keysWritten = 0;     // knobs whose value changed
         int keysPinned = 0;      // left alone: --set / MCP wrote them
+        int keysOverridden = 0;  // set to a value changed by hand (overrides) instead of the level's
         int keysFailed = 0;      // the writer did not know the name (a bug: the gate catches it)
         int targetChanges = 0;   // R knobs that moved: the render targets are recreated
         int recreations = 0;     // how many times they were (one batch: at most 1, the fog's grid at the next frame aside)
@@ -118,13 +120,38 @@ namespace settings
         const ScalabilityTable& Table() const { return table_; }
         const std::vector<std::string>& TableErrors() const { return tableErrors_; }
 
-        // The player's choice (user_settings.json "scalability"). Nothing saved = not managed: no knob is touched and the
-        // picture is today's (the developer's own graphics_settings.json in dev). A choice is saved by SaveUser.
+        // The player's choice (user_settings.json "scalability") and the values set by hand over it ("overrides").
+        // Nothing saved = not managed: no knob is touched and the picture is the build's defaults with the person's own
+        // graphics section (a dev build: the developer's). A choice is saved by SaveUser, with the overrides.
         void LoadUser();
         bool SaveUser(std::string& why) const;
-        // Another section of user_settings.json as JSON text ("" = none), and its replacement (the others kept).
+        // Another section of user_settings.json as JSON text ("" = none), and its replacement (the others kept) --
+        // UserSettings.h's, kept here for the callers that had them.
         static std::string ReadUserSection(const std::string& key);
         static bool WriteUserSection(const std::string& key, const std::string& jsonText, std::string& why);
+
+        // MANUAL OVERRIDES (§3.3, layer 5): a project knob a managed group sets, changed by hand (Developer Controls, a
+        // menu's Advanced) -- stronger than the group's level, weaker than --set / MCP, saved with the levels by --set
+        // name. A preset chosen over them keeps them; the menu and the Developer Controls tab show them and take them
+        // back. A group not managed leaves its overrides unused (its knobs are plain ones then).
+        //
+        // Before a save: a managed project knob that holds other than what the last apply made it hold was changed by
+        // hand -- it becomes an override (a pinned knob, --set's, never does). True when the overrides changed.
+        bool NoteManualValues();
+        // After a Reset put knobs back to the build's defaults: a managed knob the reset moved loses its override, and
+        // the default becomes its own value (what "Not managed" gives back); the next Apply writes the level's value.
+        // `before`: each managed knob's value before the reset (ManagedValues()).
+        void AfterReset(const std::map<std::string, float>& before);
+        std::map<std::string, float> ManagedValues() const;
+        // The overrides in use: the knob's group is managed.
+        std::map<std::string, float> ActiveOverrides() const;
+        const std::map<std::string, float>& Overrides() const { return overrides_; }
+        // Take one (or every one, "") back to the group's level; Apply writes it.
+        void ClearOverride(const std::string& name);
+        // A value set over the group's level (the menu's Advanced; Cancel's restore). Apply writes it.
+        void SetOverride(const std::string& name, float value) { overrides_[name] = value; }
+        // The project knob a managed group sets at its level (no content knob, no pin): the cell's knobs.
+        bool ManagedProjectKnob(const std::string& name) const;
 
         // -1 = the group is not managed (scalability leaves its knobs alone).
         int GroupLevel(int group) const;
@@ -142,7 +169,9 @@ namespace settings
         // A group or the resolution at -1 has its knobs put back to what they were before scalability managed them (a
         // project knob's own value, a level's knob the level's value). `quiet`: a throttled Debug line, and only when a
         // knob moved (an Inspector drag re-applies every frame).
-        ScalabilityReport Apply(const std::string& reason, bool quiet = false);
+        // `noteManual`: a knob changed since the last apply is first kept as an override (NoteManualValues) -- not after a
+        // level load, which puts project knobs back itself (the CSM's project config): that is no change by hand.
+        ScalabilityReport Apply(const std::string& reason, bool quiet = false, bool noteManual = true);
         // An editor environment edit re-applied these knobs from the document (by name prefix): their current values are
         // the level's own, whatever scalability last wrote (an Inspector that sets a knob to the ceiling's value).
         void ForgetContent(const std::vector<std::string>& prefixes);
@@ -219,6 +248,11 @@ namespace settings
         std::map<std::string, float> lastWritten_;
         // A project knob's value before scalability first wrote it: "Not managed" puts it back.
         std::map<std::string, float> original_;
+        // A project knob's value as the last apply left it (the level's target or an override): anything else at a save
+        // was changed by hand (NoteManualValues).
+        std::map<std::string, float> applied_;
+        // Values set by hand over a managed group's level (user_settings.json "overrides").
+        std::map<std::string, float> overrides_;
         ScalabilityReport lastReport_;
         bool autodetectRequested_ = false;
         bool autodetectRunning_ = false;

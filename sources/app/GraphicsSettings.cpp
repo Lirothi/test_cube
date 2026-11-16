@@ -1,5 +1,6 @@
 #include "app/GraphicsSettings.h"
 #include "app/settings/Scalability.h" // the managed knobs are saved with their own values (CaptureScalabilityOriginals)
+#include "app/settings/UserSettings.h" // user_settings.json's graphics section
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 
@@ -508,9 +509,10 @@ namespace
     }
 
     // The knobs the graphics levels manage are saved with the values they had before (docs/scalability_plan.md §3.3):
-    // graphics_settings.json is the developer's, and an autosave while Low is chosen must not make Low the developer's
-    // own. Every persisted knob of settings::ScalabilityKnobs(); the rest (ocean.sunShadowRays, the spray's ceilings...)
-    // is not in this file.
+    // the graphics section is the person's own, and an autosave while Low is chosen must not make Low their own; a value
+    // changed by hand over the level is an override, saved with the levels (Scalability::NoteManualValues). Every
+    // persisted knob of settings::ScalabilityKnobs(); the rest (ocean.sunShadowRays, the spray's ceilings...) is not in
+    // this section.
     void CaptureScalabilityOriginals(GraphicsSettingsSnapshot& s)
     {
         const settings::Scalability& sc = settings::TheScalability();
@@ -561,8 +563,10 @@ namespace
         put("aa.fxaa", s.fxaa);
     }
 
+    // `managedAsOwn`: a knob the graphics levels manage is captured with its own value (what is saved), not what the
+    // level made it -- a single control's Reset takes the live values instead, so it moves that control alone.
     GraphicsSettingsSnapshot Capture(const Renderer& renderer, const Scene& scene,
-                                     const SceneRenderSettings& settings)
+                                     const SceneRenderSettings& settings, bool managedAsOwn = true)
     {
         GraphicsSettingsSnapshot s{};
         s.asyncCompute = !render::g_noAsyncCompute_game;
@@ -733,7 +737,7 @@ namespace
         s.tessySdsm = tessy::g_sdsm_game;
         s.tessyLod = tessy::g_lod_game;
         s.tessyLodPixelError = tessy::g_lodPixelError_game;
-        CaptureScalabilityOriginals(s);
+        if (managedAsOwn) { CaptureScalabilityOriginals(s); }
         Sanitize(s);
         return s;
     }
@@ -1462,40 +1466,61 @@ namespace
         return s;
     }
 
-    // The user's settings file, not content: a real OS path from the VFS (dev builds: the repo root, as before).
-    std::filesystem::path SettingsFile()
+    // The settings file this used to be (docs/scalability_plan.md §6.4): read ONCE, when user_settings.json has no graphics
+    // section yet, to move it there, and never written again. A dev build's is the repo root's full snapshot, a packaged
+    // build's <user>\settings\graphics_settings.json its differences from the defaults.
+    std::filesystem::path LegacySettingsFile()
     {
-        return vfs::WritablePath(vfs::Writable::Settings, GraphicsSettingsManager::kPath);
+        return vfs::WritablePath(vfs::Writable::Settings, GraphicsSettingsManager::kLegacyPath);
     }
 
-    // The defaults a file's values are taken against (docs/distribution_build_plan.md §6). A shipped build: the curated
-    // config/graphics_defaults.json its packages carry (tools/dist/graphics_defaults.json), so a patch that fixes a default
-    // reaches every player who did not change that knob. Dev builds: the compiled defaults.
+    json ParseDefaults(const char* path)
+    {
+        std::string text;
+        if (!vfs::ReadText(path, text)) { return json(); }
+        const json parsed = json::parse(text, nullptr, false, /*ignore_comments=*/true);
+        if (!parsed.is_object()) { return json(); }
+        try
+        {
+            return ToJson(FromJson(parsed));
+        }
+        catch (const std::exception&)
+        {
+            return json();
+        }
+    }
+
+    // The defaults the person's values are taken against (docs/distribution_build_plan.md §6, docs/scalability_plan.md
+    // §3.3 layer 2) -- in EVERY build since 2026-11-16: the curated config/graphics_defaults.json the packages carry (also
+    // what a dev build reads with the packages mounted), else a dev build's tools/dist/graphics_defaults.json, the same
+    // file's source; the compiled values only when neither is there. A patch that fixes a default reaches everyone who
+    // did not change that knob, and a developer's file no longer freezes all ~190 knobs.
     json DefaultsJson()
     {
-#if TC_PACKAGED
-        std::string text;
-        if (vfs::ReadText("config/graphics_defaults.json", text))
+        static const char* used = nullptr;
+        const char* const candidates[] = { "config/graphics_defaults.json",
+#if !TC_PACKAGED
+                                           "tools/dist/graphics_defaults.json",
+#endif
+        };
+        for (const char* path : candidates)
         {
-            const json parsed = json::parse(text, nullptr, false, /*ignore_comments=*/true);
-            if (parsed.is_object())
+            json j = ParseDefaults(path);
+            if (j.is_object())
             {
-                try
+                if (used != path)
                 {
-                    return ToJson(FromJson(parsed));
+                    used = path;
+                    LOG_INFO(logging::LogCategory::App, "graphics settings: the defaults are {}", path);
                 }
-                catch (const std::exception&)
-                {
-                }
+                return j;
             }
         }
-        LOG_WARNING(logging::LogCategory::App, "graphics settings: no usable config/graphics_defaults.json -- the compiled defaults");
-#endif
+        LOG_WARNING_ONCE(logging::LogCategory::App, "graphics settings: no usable graphics defaults file -- the compiled defaults");
         return ToJson(GraphicsSettingsSnapshot{});
     }
 
-    // What Reset goes back to: the defaults this build reads -- a packaged build's config/graphics_defaults.json (Reset
-    // used the compiled defaults, which a packaged build does not ship with), a dev build's compiled ones.
+    // What Reset goes back to: the defaults this build reads (above), never the compiled ones a build does not ship with.
     GraphicsSettingsSnapshot DefaultSnapshot() { return FromJson(DefaultsJson()); }
 
     // `full` less what equals `base`, through objects key by key (an array or a value is one): what a shipped build keeps
@@ -1523,9 +1548,10 @@ namespace
         return out;
     }
 
-    bool LoadSnapshot(GraphicsSettingsSnapshot& out, std::string& error)
+    // The legacy file as a whole snapshot: a dev build's is a full one, a packaged build's only the differences.
+    bool LoadLegacySnapshot(GraphicsSettingsSnapshot& out, std::string& error)
     {
-        std::ifstream file(SettingsFile(), std::ios::binary); // vfs-ok: the user's settings file
+        std::ifstream file(LegacySettingsFile(), std::ios::binary); // vfs-ok: the user's old settings file, read once to move it
         if (!file)
         {
             error = "file not found";
@@ -1538,7 +1564,6 @@ namespace
             return false;
         }
 #if TC_PACKAGED
-        // The player's file holds only what differs from the defaults.
         json merged = DefaultsJson();
         merged.merge_patch(root);
         root = std::move(merged);
@@ -1555,42 +1580,70 @@ namespace
         return true;
     }
 
-    // Written whole to <file>.tmp and renamed over the file: a crash or a full disk mid-write leaves the old settings, not
-    // half a JSON (§6). A shipped build writes only what differs from the defaults.
-    bool SaveSnapshot(const GraphicsSettingsSnapshot& snapshot, std::string& error)
+    // The person's graphics: the defaults with user_settings.json's graphics section over them. The first time there is no
+    // section, graphics_settings.json is moved into it (what it says less what the defaults say) -- the picture is the
+    // same -- and is never written again. `found`: a section or a legacy file was there.
+    bool LoadSnapshot(GraphicsSettingsSnapshot& out, bool& found, std::string& error)
     {
-        json content = ToJson(snapshot);
-#if TC_PACKAGED
-        content = Difference(DefaultsJson(), content);
-#endif
-        const std::filesystem::path target = SettingsFile();
-        std::error_code ec;
-        if (target.has_parent_path()) { std::filesystem::create_directories(target.parent_path(), ec); }
-        std::filesystem::path temp = target;
-        temp += L".tmp";
+        found = false;
+        const std::string text = settings::ReadUserSection("graphics");
+        if (!text.empty())
         {
-            std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-            if (!file)
+            found = true;
+            const json diff = json::parse(text, nullptr, false);
+            if (!diff.is_object())
             {
-                error = "cannot open file for writing";
+                error = "the graphics section of " + std::string(GraphicsSettingsManager::kPath) + " is not an object";
                 return false;
             }
-            file << content.dump(2) << '\n';
-            file.flush();
-            if (!file.good())
+            json merged = DefaultsJson();
+            merged.merge_patch(diff);
+            try
             {
-                error = "write failed";
+                out = FromJson(merged);
+            }
+            catch (const std::exception& e)
+            {
+                error = e.what();
                 return false;
             }
+            return true;
         }
-        std::filesystem::rename(temp, target, ec);
-        if (ec)
+        std::error_code ec;
+        if (!std::filesystem::exists(LegacySettingsFile(), ec)) { return false; } // vfs-ok: the user's old settings file
+        found = true;
+        if (!LoadLegacySnapshot(out, error)) { return false; }
+        const json diff = Difference(DefaultsJson(), ToJson(out));
+        // The section must give back exactly what the old file said: the defaults with it over them, read as a snapshot.
+        json back = DefaultsJson();
+        back.merge_patch(diff);
+        if (ToJson(FromJson(back)) != ToJson(out))
         {
-            error = "cannot replace the file: " + ec.message();
-            std::filesystem::remove(temp, ec);
-            return false;
+            LOG_WARNING(logging::LogCategory::App, "graphics settings: moving {} would change a value -- left where it is",
+                        vfs::Narrow(LegacySettingsFile().wstring()));
+            return true;
+        }
+        std::string why;
+        if (settings::WriteUserSection("graphics", diff.dump(), why))
+        {
+            LOG_INFO(logging::LogCategory::App, "graphics settings: {} moved into {} ({} section(s) differ from the defaults); "
+                     "the old file is no longer read or written", vfs::Narrow(LegacySettingsFile().wstring()),
+                     vfs::Narrow(settings::UserSettingsPath().wstring()), diff.size());
+        }
+        else
+        {
+            LOG_WARNING(logging::LogCategory::App, "graphics settings: {} could not be moved into {}: {} -- read from it this time",
+                        vfs::Narrow(LegacySettingsFile().wstring()), vfs::Narrow(settings::UserSettingsPath().wstring()), why);
         }
         return true;
+    }
+
+    // What differs from the defaults, into user_settings.json's graphics section (its other sections kept; written whole
+    // to a temp file and renamed over: a crash or a full disk mid-write leaves the old settings, not half a JSON).
+    bool SaveSnapshot(const GraphicsSettingsSnapshot& snapshot, std::string& error)
+    {
+        const json content = Difference(DefaultsJson(), ToJson(snapshot));
+        return settings::WriteUserSection("graphics", content.dump(), error);
     }
 }
 
@@ -1600,45 +1653,27 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
     initialized_ = true;
     GraphicsSettingsSnapshot loaded{};
     std::string error;
-    if (LoadSnapshot(loaded, error))
+    bool found = false;
+    if (LoadSnapshot(loaded, found, error))
     {
         ApplyAll(loaded, renderer, scene, settings);
         status_ = std::string("Loaded ") + kPath;
     }
+    else if (!found)
+    {
+        // Nothing saved yet: the defaults, and nothing written until something is changed.
+        loaded = FromJson(DefaultsJson());
+        ApplyAll(loaded, renderer, scene, settings);
+        status_ = "Defaults (nothing changed yet)";
+    }
     else
     {
-        std::error_code existsError;
-        const bool exists = std::filesystem::exists(SettingsFile(), existsError); // vfs-ok: the user's settings file
-        if (!exists && !existsError)
-        {
-#if TC_PACKAGED
-            // No file yet: the defaults, and nothing written until the player changes something.
-            loaded = FromJson(DefaultsJson());
-            ApplyAll(loaded, renderer, scene, settings);
-            status_ = "Defaults (config/graphics_defaults.json)";
-#else
-            ApplyAll(loaded, renderer, scene, settings);
-            if (SaveSnapshot(Capture(renderer, scene, settings), error))
-            {
-                status_ = std::string("Created ") + kPath;
-            }
-            else
-            {
-                status_ = std::string("Could not create ") + kPath + ": " + error;
-            }
-#endif
-        }
-        else
-        {
-#if TC_PACKAGED
-            // A damaged file: a Warning and the defaults (§6); the next save writes a good one.
-            LOG_WARNING(logging::LogCategory::App, "graphics settings: {} could not be read ({}) -- the defaults",
-                        vfs::Narrow(SettingsFile().wstring()), error);
-            loaded = FromJson(DefaultsJson());
-            ApplyAll(loaded, renderer, scene, settings);
-#endif
-            status_ = std::string("Could not load ") + kPath + ": " + error;
-        }
+        // A damaged section or file: a Warning and the defaults (§6); the next save writes a good one.
+        LOG_WARNING(logging::LogCategory::App, "graphics settings: {} could not be read ({}) -- the defaults",
+                    vfs::Narrow(settings::UserSettingsPath().wstring()), error);
+        loaded = FromJson(DefaultsJson());
+        ApplyAll(loaded, renderer, scene, settings);
+        status_ = std::string("Could not load ") + kPath + ": " + error;
     }
     projectCsm_ = scene.CascadeConfig();
     savePending_ = false;
@@ -1684,6 +1719,14 @@ bool GraphicsSettingsManager::SaveCurrent(Renderer& renderer, const Scene& scene
                                           const SceneRenderSettings& settings)
 {
     std::string error;
+    // A knob a managed graphics level sets, changed here by hand: an override over the level (Scalability.h), saved with
+    // the levels -- the graphics section keeps the knob's own value (CaptureScalabilityOriginals).
+    settings::Scalability& levels = settings::TheScalability();
+    if (levels.NoteManualValues() && !levels.SaveUser(error))
+    {
+        status_ = std::string("Could not save the overrides: ") + error;
+        return false;
+    }
     if (!SaveSnapshot(Capture(renderer, scene, settings), error))
     {
         status_ = std::string("Could not save ") + kPath + ": " + error;
@@ -1695,14 +1738,31 @@ bool GraphicsSettingsManager::SaveCurrent(Renderer& renderer, const Scene& scene
     return true;
 }
 
+bool GraphicsSettingsManager::FinishReset(const std::map<std::string, float>& managedBefore, Renderer& renderer, const Scene& scene,
+                                          const SceneRenderSettings& settings)
+{
+    // Reset goes back to the graphics levels (§3.3), not past them: a knob a managed level sets loses its override and
+    // takes the level's value again; the rest has the build's defaults.
+    settings::Scalability& levels = settings::TheScalability();
+    levels.AfterReset(managedBefore);
+    levels.Apply("reset");
+    std::string why;
+    if (levels.Managed() && !levels.SaveUser(why))
+    {
+        LOG_WARNING(logging::LogCategory::App, "graphics settings: the overrides were not saved after the reset: {}", why);
+    }
+    return SaveCurrent(renderer, scene, settings);
+}
+
 bool GraphicsSettingsManager::Reload(Renderer& renderer, Scene& scene,
                                      SceneRenderSettings& settings)
 {
     GraphicsSettingsSnapshot loaded{};
     std::string error;
-    if (!LoadSnapshot(loaded, error))
+    bool found = false;
+    if (!LoadSnapshot(loaded, found, error))
     {
-        status_ = std::string("Could not reload ") + kPath + ": " + error;
+        status_ = std::string("Could not reload ") + kPath + ": " + (found ? error : std::string("nothing saved"));
         return false;
     }
     ApplyAll(loaded, renderer, scene, settings);
@@ -1715,15 +1775,17 @@ bool GraphicsSettingsManager::Reload(Renderer& renderer, Scene& scene,
 bool GraphicsSettingsManager::ResetAll(Renderer& renderer, Scene& scene,
                                        SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
     ApplyAll(defaults, renderer, scene, settings);
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& renderer,
                                            Scene& scene, SceneRenderSettings& settings)
 {
-    GraphicsSettingsSnapshot current = Capture(renderer, scene, settings);
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
+    GraphicsSettingsSnapshot current = Capture(renderer, scene, settings, /*managedAsOwn=*/false);
     const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
 
     switch (control)
@@ -1992,75 +2054,85 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     {
         ApplyVsm(current);
     }
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetUpscale(Renderer& renderer, const Scene& scene,
                                            SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyUpscale(DefaultSnapshot(), renderer, settings);
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetVisibility(Renderer& renderer, const Scene& scene,
                                               const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyVisibility(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetReflections(Renderer& renderer, const Scene& scene,
                                                SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyReflections(DefaultSnapshot(), renderer, settings);
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetFog(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyFog(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetLod(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyLod(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetStreaming(Renderer& renderer, const Scene& scene,
                                              const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyStreaming(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyGi(DefaultSnapshot(), settings);
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetCsm(Renderer& renderer, Scene& scene,
                                        const SceneRenderSettings& settings)
 {
-    scene.CascadeConfig() = CascadeShadowConfig{};
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
+    scene.CascadeConfig() = DefaultSnapshot().csm;
     projectCsm_ = scene.CascadeConfig();
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetContactShadows(Renderer& renderer, const Scene& scene,
                                                    const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyContact(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetVsm(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
+    const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
     ApplyVsm(DefaultSnapshot());
-    return SaveCurrent(renderer, scene, settings);
+    return FinishReset(managedBefore, renderer, scene, settings);
 }

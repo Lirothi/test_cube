@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <string>
 
 #include "app/scene/SceneRenderConfig.h"
@@ -212,10 +213,16 @@ enum class GraphicsControl
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
 // exposure and colour grading) stay in the level. The CSM fit has no level-serialization path, so
 // it is a project default here and is re-applied whenever a level is loaded.
+//
+// Where (docs/scalability_plan.md §3.3, §6.4; since 2026-11-16): user_settings.json's "graphics" section holds only what
+// differs from the build's defaults (config/graphics_defaults.json in the packages, a dev build's
+// tools/dist/graphics_defaults.json); a Reset goes back to the graphics levels and the defaults. The old
+// graphics_settings.json (a dev build's full snapshot in the repo root) is read once to move it there and never written.
 class GraphicsSettingsManager
 {
 public:
-    static constexpr const char* kPath = "graphics_settings.json";
+    static constexpr const char* kPath = "user_settings.json";
+    static constexpr const char* kLegacyPath = "graphics_settings.json";
 
     void Initialize(Renderer& renderer, Scene& scene, SceneRenderSettings& settings);
     void ApplySceneSettings(Scene& scene) const;
@@ -246,6 +253,10 @@ public:
     const std::string& Status() const { return status_; }
 
 private:
+    // After a Reset applied the defaults: the graphics levels take their knobs back, then the save.
+    bool FinishReset(const std::map<std::string, float>& managedBefore, Renderer& renderer, const Scene& scene,
+                     const SceneRenderSettings& settings);
+
     bool initialized_ = false;
     bool savePending_ = false;
     float saveDelaySeconds_ = 0.0f;

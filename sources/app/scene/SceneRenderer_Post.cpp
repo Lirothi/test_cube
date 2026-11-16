@@ -277,8 +277,9 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         }
 
         // 3) Solve + adapt.
-        constants.compensationEv = settings.compensationEv;
-        constants.manualCompensationEv = settings.manualCompensationEv; // P16.13
+        // The player's brightness (render::g_playerExposureEv) on top of the level's, in both modes.
+        constants.compensationEv = settings.compensationEv + render::g_playerExposureEv;
+        constants.manualCompensationEv = settings.manualCompensationEv + render::g_playerExposureEv; // P16.13
         constants.minEv100 = settings.minEv100;
         constants.maxEv100 = settings.maxEv100;
         constants.lowPercentile = settings.lowPercentile;

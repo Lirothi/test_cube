@@ -288,7 +288,8 @@ void DeveloperWindow::DrawScalabilityTab()
     settings::Scalability& s = settings::TheScalability();
     ImGui::TextWrapped("Graphics levels (docs/scalability_plan.md): each group's knobs at Low / Medium / High / Ultra, from %s. "
                        "Ultra is today's picture; a knob the level sets is never raised above the level's own value. A choice "
-                       "here is applied at once and saved in %s; 'Not managed' leaves the knobs as the settings file has them.",
+                       "here is applied at once and saved in %s; 'Not managed' leaves the knobs as the graphics settings have "
+                       "them. A knob changed in another tab while its group is managed is kept over the level (set by hand).",
                        settings::Scalability::kTablePath, settings::Scalability::kUserFile);
     if (ImGui::SmallButton("Reload table"))
     {
@@ -374,6 +375,8 @@ void DeveloperWindow::DrawScalabilityTab()
                 const bool read = s.Read(name, current);
                 const bool hasTarget = s.Target(name, op, target);
                 const bool pinned = s.Pins().count(name) != 0;
+                const auto manual = s.Overrides().find(name);
+                if (manual != s.Overrides().end() && level >= 0) { target = manual->second; }
                 const bool differs = read && hasTarget && std::abs(current - target) > 1e-4f * std::max(1.0f, std::abs(target));
                 const char* opText = op.kind == settings::ScalabilityOp::Kind::Max ? "max " : op.kind == settings::ScalabilityOp::Kind::Min ? "min " :
                                      op.kind == settings::ScalabilityOp::Kind::Level ? "level" : "";
@@ -385,7 +388,8 @@ void DeveloperWindow::DrawScalabilityTab()
                 else
                 {
                     std::snprintf(line, sizeof(line), "%-34s table: %s%-8g  now %g%s", name.c_str(), opText, static_cast<double>(op.value),
-                                  static_cast<double>(current), pinned ? "  (pinned by --set/MCP)" : "");
+                                  static_cast<double>(current), pinned ? "  (pinned by --set/MCP)"
+                                  : manual != s.Overrides().end() ? "  (set by hand)" : "");
                 }
                 if (differs && level >= 0) { ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", line); }
                 else { ImGui::TextUnformatted(line); }
@@ -402,9 +406,33 @@ void DeveloperWindow::DrawScalabilityTab()
         ImGui::TextWrapped("Pinned by --set / MCP (left alone): %s", pins.c_str());
         if (ImGui::SmallButton("Unpin")) { s.ClearPins(); changed = true; }
     }
+    // Values changed by hand over a managed group's level (an edit in another tab while a level is chosen): they stay over
+    // any preset until taken back here, by the Reset of their tab, or by the menu's "Back to the levels".
+    if (!s.Overrides().empty())
+    {
+        const std::map<std::string, float> inUse = s.ActiveOverrides();
+        ImGui::SeparatorText("Set by hand over the levels");
+        std::string clear;
+        for (const auto& [name, value] : s.Overrides())
+        {
+            ImGui::PushID(name.c_str());
+            if (ImGui::SmallButton("Back to the level")) { clear = name; }
+            ImGui::SameLine();
+            if (inUse.count(name)) { ImGui::Text("%-34s %g", name.c_str(), static_cast<double>(value)); }
+            else { ImGui::TextDisabled("%-34s %g  (its group is not managed: unused)", name.c_str(), static_cast<double>(value)); }
+            ImGui::PopID();
+        }
+        if (ImGui::SmallButton("All back to the levels")) { clear = "*"; }
+        if (!clear.empty())
+        {
+            s.ClearOverride(clear == "*" ? std::string() : clear);
+            changed = true;
+        }
+    }
     const settings::ScalabilityReport& r = s.LastReport();
-    ImGui::TextWrapped("Last apply (%s): %d knob(s) changed, %d pinned, %d failed; render targets %d, idle reconciles %d; %.2f ms",
-                       r.reason.c_str(), r.keysWritten, r.keysPinned, r.keysFailed, r.targetChanges, r.idleChanges, r.ms);
+    ImGui::TextWrapped("Last apply (%s): %d knob(s) changed, %d pinned, %d set by hand, %d failed; render targets %d, idle "
+                       "reconciles %d; %.2f ms", r.reason.c_str(), r.keysWritten, r.keysPinned, r.keysOverridden, r.keysFailed,
+                       r.targetChanges, r.idleChanges, r.ms);
     if (changed)
     {
         s.Apply("Developer Controls");
@@ -685,7 +713,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         }
 
         ImGui::SeparatorText("Project graphics settings");
-        ImGui::TextUnformatted(GraphicsSettingsManager::kPath);
+        ImGui::TextUnformatted("user_settings.json: graphics");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("What differs from the build's defaults (tools/dist/graphics_defaults.json in the tree,\n"
+                              "config/graphics_defaults.json in the packages). graphics_settings.json is read once to move\n"
+                              "it here and never written. A Reset goes back to the graphics levels and the defaults.");
+        }
         ImGui::SameLine();
         if (ImGui::SmallButton("Save now"))
         {
@@ -2788,9 +2822,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::Button("Reset CSM config to defaults"))
                     graphicsSettings.ResetCsm(renderer, scene, settings);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Back to the compile-time defaults in SceneRenderConfig.h \xE2\x80\x94 the\n"
+                    ImGui::SetTooltip("Back to the build's defaults (tools/dist/graphics_defaults.json) \xE2\x80\x94 the\n"
                                       "baseline every plan step is measured against. The reset is saved to\n"
-                                      "graphics_settings.json and applied to subsequently loaded levels.");
+                                      "user_settings.json and applied to subsequently loaded levels.");
 
                 ImGui::SeparatorText("Filtering");
                 int csmFilter = static_cast<int>(csmCfg.filterMode);

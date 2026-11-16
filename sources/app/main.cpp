@@ -1213,7 +1213,7 @@ int WINAPI WinMain(
                 LOG_WARNING(logging::LogCategory::App, "--scalability={}: low, medium, high, ultra, auto or off", level);
             }
         }
-        // "--settings-menu[=graphics|display]": the player's settings open at boot (see App.h).
+        // "--settings-menu[=display|graphics|image|controls|menu]": the player's settings open at boot (see App.h).
         if (std::strstr(lpCmdLine, "--settings-menu")) {
             const std::string tab = ExtractArgValue(lpCmdLine, "--settings-menu=");
             g_bootSettingsMenu = tab.empty() || tab.rfind("--", 0) == 0 ? "graphics" : tab;

@@ -324,6 +324,8 @@ public:
     void MarkImGuiTextureShaderReadable(ID3D12Resource* resource);
     void ShutdownImGui();
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    // WM_DPICHANGED: the UI rescaled at the next UI frame (ImGuiLayer::RequestDpi).
+    void RequestImGuiDpi(UINT dpi) { imguiLayer_.RequestDpi(dpi); }
     bool ImGuiWantsMouse() const;
     bool ImGuiWantsKeyboard() const;
     bool ImGuiWantsTextInput() const;
@@ -1038,8 +1040,9 @@ private:
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
-    UINT  pendingResizeWidth_ = 0;
-    UINT  pendingResizeHeight_ = 0;
+    // The size WM_SIZE asked for, width in the high 32 bits: written by the window's thread (the game half pumps the
+    // messages), taken by BeginFrame on the render thread -- one atomic word, so the two halves of a size never mix.
+    std::atomic<std::uint64_t> pendingResize_{ 0 };
     float renderResolutionScale_ = 1.0f;
     UINT  renderWidth_ = width_;
     UINT  renderHeight_ = height_;

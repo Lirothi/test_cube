@@ -54,7 +54,7 @@ private:
     // The play session's keys and requests (docs/play_mode_plan.md), and what it says to the world this frame.
     void TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed);
     // Shipping's Esc menu (it has no Developer Controls): go on, the levels the packages hold, quit. A build with them draws nothing.
-    void DrawGameMenu(LevelManager& levelManager);
+    void DrawGameMenu(LevelManager& levelManager, InputManager& input);
 
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;
@@ -73,8 +73,9 @@ private:
     std::vector<HudLine> hudLines_; // G6: the build task's output, published at the hand-over
     PlaySession playSession_;
     bool editorOpenBeforePlay_ = false;
-    bool gameMenuOpen_ = false;              // Shipping's Esc menu
+    bool gameMenuOpen_ = false;              // the game's Esc menu (every build without the editor)
     std::vector<std::string> gameMenuLevels_; // listed the first time it opens: data/levels/*.json in the packages
+    int gameMenuLevelChoice_ = -1;            // the menu's level list: the one picked, -1 = the level that is open
     GameSettingsMenu settingsMenu_;           // the menu's "Settings" (docs/scalability_plan.md §6); --settings-menu in any build
     std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
     std::wstring hudRaceLine_;
