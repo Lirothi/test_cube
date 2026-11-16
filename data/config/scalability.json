@@ -1,0 +1,153 @@
+{
+  "_comment": "Graphics levels (docs/scalability_plan.md). Keys are --set names (App.cpp ApplySweepValue; the allowed ones: sources/app/settings/Scalability.cpp kKnobs). A value is a number (set), \"level\" (the level's own value), or {\"max\": n} / {\"min\": n} (a ceiling / a floor over the level's own value -- only for knobs the level sets). Every level of a group names the same keys; a knob that would be the same at every level is left out (it would only override the settings file). Ultra = today's picture: the package defaults (tools/dist/graphics_defaults.json) and the level's own values.",
+  "version": 1,
+  "levels": ["Low", "Medium", "High", "Ultra"],
+  "defaultLevel": "Ultra",
+  "resolution": {
+    "label": "Render resolution",
+    "hint": "How many pixels are rendered before the upscaler. With DLSS: its mode (Performance, Balanced, Quality, DLAA = native). Without: the render scale, with FXAA. Everything heavy scales with it.",
+    "levelLabels": ["Performance", "Balanced", "Quality", "DLAA"],
+    "dlss": {
+      "Low": { "dlss.mode": 1 },
+      "Medium": { "dlss.mode": 2 },
+      "High": { "dlss.mode": 3 },
+      "Ultra": { "dlss.mode": 6 }
+    },
+    "native": {
+      "Low": { "aa.renderScale": 0.5, "aa.fxaa": 1 },
+      "Medium": { "aa.renderScale": 0.67, "aa.fxaa": 1 },
+      "High": { "aa.renderScale": 0.77, "aa.fxaa": 1 },
+      "Ultra": { "aa.renderScale": 1.0, "aa.fxaa": 1 }
+    }
+  },
+  "groups": [
+    {
+      "key": "viewDistance",
+      "label": "View distance",
+      "hint": "How far meshes keep their detail: the LOD switch distances, the cluster geometry's cut, the terrain chunks.",
+      "levelLabels": ["Near", "Medium", "Far", "Epic"],
+      "levels": {
+        "Low": { "lod.pixelError": 16, "tessy.lodPixelError": 8, "lod.chunkFactor": 2.8 },
+        "Medium": { "lod.pixelError": 12, "tessy.lodPixelError": 4, "lod.chunkFactor": 2.4 },
+        "High": { "lod.pixelError": 10, "tessy.lodPixelError": 3, "lod.chunkFactor": 2.2 },
+        "Ultra": { "lod.pixelError": 8, "tessy.lodPixelError": 2, "lod.chunkFactor": 2.0 }
+      }
+    },
+    {
+      "key": "shadows",
+      "label": "Shadows",
+      "hint": "The sun's and the lamps' shadows. Low and Medium use the cascades (SDSM) instead of the virtual shadow map, with smaller maps for the lamps; Low has no contact shadows.",
+      "levels": {
+        "Low": { "shadow.mode": 2, "csm.atlasRes": 2048, "csm.filterMode": 1, "sdsm.partitions": 4, "sdsm.cacheFrames": 8,
+                 "vsm.smrtRayCount": 6, "shadow.localMaxRes": 512, "contact.enabled": 0, "ocean.sunShadowRays": 0,
+                 "shadow.localWindRange": 15 },
+        "Medium": { "shadow.mode": 2, "csm.atlasRes": 4096, "csm.filterMode": 1, "sdsm.partitions": 4, "sdsm.cacheFrames": 4,
+                    "vsm.smrtRayCount": 6, "shadow.localMaxRes": 1024, "contact.enabled": 1, "ocean.sunShadowRays": 0,
+                    "shadow.localWindRange": 20 },
+        "High": { "shadow.mode": 1, "csm.atlasRes": 4096, "csm.filterMode": 0, "sdsm.partitions": 4, "sdsm.cacheFrames": 4,
+                  "vsm.smrtRayCount": 4, "shadow.localMaxRes": 2048, "contact.enabled": 1, "ocean.sunShadowRays": 1,
+                  "shadow.localWindRange": 30 },
+        "Ultra": { "shadow.mode": 1, "csm.atlasRes": 4096, "csm.filterMode": 0, "sdsm.partitions": 4, "sdsm.cacheFrames": 4,
+                   "vsm.smrtRayCount": 6, "shadow.localMaxRes": 2048, "contact.enabled": 1, "ocean.sunShadowRays": 1,
+                   "shadow.localWindRange": 30 }
+      }
+    },
+    {
+      "key": "gi",
+      "label": "Global illumination",
+      "hint": "The bounce of light (ray-traced probes) and how much sky a surface sees (ray-traced sky visibility). Low turns both off: a cheaper sky occlusion from above, no bounce -- rooms and the shade under trees change most.",
+      "levels": {
+        "Low": { "gi.enabled": 0, "gi.far": 0, "gi.rays": 64, "gi.divisor": 4, "gi.farDivisor": 4, "gi.rayDistance": 200,
+                 "skyVis.enabled": 0, "skyVis.rays": 8, "skyVis.filterRadius": 4 },
+        "Medium": { "gi.enabled": 1, "gi.far": 0, "gi.rays": 32, "gi.divisor": 8, "gi.farDivisor": 8, "gi.rayDistance": 60,
+                    "skyVis.enabled": 1, "skyVis.rays": 4, "skyVis.filterRadius": 3 },
+        "High": { "gi.enabled": 1, "gi.far": 1, "gi.rays": 64, "gi.divisor": 4, "gi.farDivisor": 8, "gi.rayDistance": 200,
+                  "skyVis.enabled": 1, "skyVis.rays": 6, "skyVis.filterRadius": 4 },
+        "Ultra": { "gi.enabled": 1, "gi.far": 1, "gi.rays": 64, "gi.divisor": 4, "gi.farDivisor": 4, "gi.rayDistance": 200,
+                   "skyVis.enabled": 1, "skyVis.rays": 8, "skyVis.filterRadius": 4 }
+      }
+    },
+    {
+      "key": "reflections",
+      "label": "Reflections",
+      "hint": "High and Ultra trace reflections with rays; Low and Medium use screen-space reflections, which cannot show what is off screen.",
+      "levels": {
+        "Low": { "render.reflectionSource": 2, "ssr.ueQuality": 1, "reflections.resolution": 0.25 },
+        "Medium": { "render.reflectionSource": 2, "ssr.ueQuality": 2, "reflections.resolution": 0.5 },
+        "High": { "render.reflectionSource": 3, "ssr.ueQuality": 3, "reflections.resolution": 0.5 },
+        "Ultra": { "render.reflectionSource": 3, "ssr.ueQuality": 3, "reflections.resolution": 0.5 }
+      }
+    },
+    {
+      "key": "water",
+      "label": "Water",
+      "hint": "The water's reflection resolution and detail, and how often a boat's wake steps. The waves themselves (what boats float on) do not change.",
+      "levels": {
+        "Low": { "reflections.oceanResolution": 0.5, "ssr.waterNormalCascades": 2, "ocean.wakeHz": 20 },
+        "Medium": { "reflections.oceanResolution": 0.5, "ssr.waterNormalCascades": 2, "ocean.wakeHz": 30 },
+        "High": { "reflections.oceanResolution": 0.75, "ssr.waterNormalCascades": 3, "ocean.wakeHz": 30 },
+        "Ultra": { "reflections.oceanResolution": 1.0, "ssr.waterNormalCascades": 3, "ocean.wakeHz": 30 }
+      }
+    },
+    {
+      "key": "volumetrics",
+      "label": "Fog and clouds",
+      "hint": "The volumetric fog's grid and samples, and the clouds' samples. Never above what the level asks for; Low has no volumetric fog.",
+      "levels": {
+        "Low": { "fog.gridPixels": 32, "fog.gridZ": 32, "fog.volumetric": { "max": 0 }, "fog.samplesPerCell": { "max": 1 },
+                 "skyVis.fogRays": 0, "cloud.viewSampleCountMax": { "max": 48 }, "cloud.viewSampleCountMin": { "max": 32 },
+                 "cloud.shadowMapSampleCount": { "max": 4 }, "cloud.msOctaves": { "max": 1 }, "cloud.captureTexels": 1.0 },
+        "Medium": { "fog.gridPixels": 16, "fog.gridZ": 64, "fog.volumetric": "level", "fog.samplesPerCell": { "max": 1 },
+                    "skyVis.fogRays": 1, "cloud.viewSampleCountMax": { "max": 64 }, "cloud.viewSampleCountMin": { "max": 48 },
+                    "cloud.shadowMapSampleCount": { "max": 4 }, "cloud.msOctaves": "level", "cloud.captureTexels": 0.75 },
+        "High": { "fog.gridPixels": 16, "fog.gridZ": 64, "fog.volumetric": "level", "fog.samplesPerCell": { "max": 2 },
+                  "skyVis.fogRays": 1, "cloud.viewSampleCountMax": { "max": 96 }, "cloud.viewSampleCountMin": "level",
+                  "cloud.shadowMapSampleCount": { "max": 6 }, "cloud.msOctaves": "level", "cloud.captureTexels": 0.5 },
+        "Ultra": { "fog.gridPixels": 16, "fog.gridZ": 64, "fog.volumetric": "level", "fog.samplesPerCell": "level",
+                   "skyVis.fogRays": 2, "cloud.viewSampleCountMax": "level", "cloud.viewSampleCountMin": "level",
+                   "cloud.shadowMapSampleCount": "level", "cloud.msOctaves": "level", "cloud.captureTexels": 0.5 }
+      }
+    },
+    {
+      "key": "postProcess",
+      "label": "Post-processing",
+      "hint": "Bloom, lens ghosts, light shafts and ambient occlusion. Never above what the level asks for.",
+      "levels": {
+        "Low": { "bloom.method": { "max": 0 }, "bloom.convPercent": { "max": 19 }, "bloom.ghostIntensity": { "max": 0 },
+                 "lightShafts.enabled": { "max": 0 }, "gtao.enabled": { "max": 0 }, "gtao.numSteps": { "max": 6 },
+                 "gtao.numAngles": { "max": 2 } },
+        "Medium": { "bloom.method": "level", "bloom.convPercent": { "max": 19 }, "bloom.ghostIntensity": { "max": 0 },
+                    "lightShafts.enabled": "level", "gtao.enabled": "level", "gtao.numSteps": { "max": 6 },
+                    "gtao.numAngles": { "max": 2 } },
+        "High": { "bloom.method": "level", "bloom.convPercent": { "max": 25 }, "bloom.ghostIntensity": "level",
+                  "lightShafts.enabled": "level", "gtao.enabled": "level", "gtao.numSteps": { "max": 12 },
+                  "gtao.numAngles": { "max": 2 } },
+        "Ultra": { "bloom.method": "level", "bloom.convPercent": "level", "bloom.ghostIntensity": "level",
+                   "lightShafts.enabled": "level", "gtao.enabled": "level", "gtao.numSteps": "level",
+                   "gtao.numAngles": "level" }
+      }
+    },
+    {
+      "key": "textures",
+      "label": "Textures",
+      "hint": "The texture streaming pool and a mip bias: lower levels keep less texture memory and blur distant textures sooner.",
+      "levels": {
+        "Low": { "streaming.poolSizeMB": 384, "streaming.mipBias": 1 },
+        "Medium": { "streaming.poolSizeMB": 640, "streaming.mipBias": 0 },
+        "High": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0 },
+        "Ultra": { "streaming.poolSizeMB": 1024, "streaming.mipBias": 0 }
+      }
+    },
+    {
+      "key": "effects",
+      "label": "Effects",
+      "hint": "Particles: how many are born, the boats' spray and its mist, the soft edge where particles meet the water.",
+      "levels": {
+        "Low": { "spray.rateMax": 0.35, "spray.mistMax": 0, "particles.spawnScale": 0.25, "particles.softWater": 0 },
+        "Medium": { "spray.rateMax": 0.5, "spray.mistMax": 4, "particles.spawnScale": 0.5, "particles.softWater": 1 },
+        "High": { "spray.rateMax": 1, "spray.mistMax": 4, "particles.spawnScale": 1.0, "particles.softWater": 1 },
+        "Ultra": { "spray.rateMax": 1, "spray.mistMax": 4, "particles.spawnScale": 1.0, "particles.softWater": 1 }
+      }
+    }
+  ]
+}

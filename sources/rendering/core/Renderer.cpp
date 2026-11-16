@@ -739,6 +739,8 @@ void Renderer::BeginFrame() {
     // touches the GPU -- a ring recreate at GPU idle. Here and not in the app loop, because every
     // loop passes through BeginFrame (the scene-stress harness has its own loop and a knob applied
     // in App::Run never reached it: the GBV run with gridPixels 8 silently validated 16).
+    // The three in one batch: a graphics level that moves the fog's cell and its slices recreates the ring once.
+    BeginTargetBatch();
     if (fogGridPixels_ != render::g_fogGridPixels)
     {
         SetFogGridPixels(render::g_fogGridPixels);
@@ -751,6 +753,7 @@ void Renderer::BeginFrame() {
     {
         SetCloudTraceMode(render::g_cloudTraceMode);
     }
+    EndTargetBatch();
 
     // A device removal can surface anywhere — a failed Present, a fence wait that never completes,
     // a TDR that kills the queue between frames — and until now it surfaced as a bare throw with
@@ -3070,11 +3073,27 @@ void Renderer::RecreateDeferredTargets()
     {
         return;
     }
+    if (targetBatchDepth_ > 0)
+    {
+        targetBatchPending_ = true; // EndTargetBatch recreates once
+        return;
+    }
 
     WaitForPreviousFrame();
     DestroyDeferredTargets();
     CreateDeferredTargets(width_, height_);
     RefreshCurrentFrameCaches();
+    ++targetRecreations_;
+}
+
+void Renderer::EndTargetBatch()
+{
+    if (targetBatchDepth_ > 0) { --targetBatchDepth_; }
+    if (targetBatchDepth_ == 0 && targetBatchPending_)
+    {
+        targetBatchPending_ = false;
+        RecreateDeferredTargets();
+    }
 }
 
 void Renderer::SetReflectionTextureScale(Math::float2 scale)

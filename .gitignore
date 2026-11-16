@@ -6,6 +6,8 @@
 # User-specific files
 imgui.ini
 editor_state.json
+user_settings.json
+user_settings.json.tmp
 editor_sessions/
 editor_cache/
 shader_cache/

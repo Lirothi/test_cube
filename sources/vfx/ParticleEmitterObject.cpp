@@ -329,7 +329,7 @@ void ParticleEmitterObject::SyncSceneState(SceneObjectSyncReason reason)
         return;
     }
     dt_ = std::min(dt, 0.1f); // clamp hitch spikes so particles don't teleport
-    spawnAccum_ = std::min(spawnAccum_ + desc_.spawnRate * dt_,
+    spawnAccum_ = std::min(spawnAccum_ + desc_.spawnRate * vfx::g_spawnScale * dt_,
         static_cast<float>(desc_.maxParticles)); // cap bursts after long stalls
     logAccum_ += dt;
 }

@@ -12,9 +12,11 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
+#include "app/settings/Scalability.h"
 #include "app/scene/Scene.h"
 #include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanSimulation.h"
@@ -171,6 +173,26 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     // ocean simulation, the skybox's textures): the render thread's frame in flight finishes first.
     threading::WaitRenderForGame("EnvironmentRuntime::Apply");
     const nlohmann::json& p = env.properties;
+    // The level's own clouds, fog, bloom, GTAO, sun were re-applied from the document -- each struct whole, so their
+    // knobs now hold the level's values, whatever the graphics levels wrote before (an Inspector that unticks GTAO at Low
+    // writes the 0 the ceiling wrote: without forgetting, Medium would turn it back on). Then the ceilings over the new
+    // values (docs/scalability_plan.md §4.2), whichever way this function leaves.
+    struct ScalabilityAfter
+    {
+        std::vector<std::string> knobs;
+        ~ScalabilityAfter()
+        {
+            if (knobs.empty()) { return; }
+            settings::TheScalability().ForgetContent(knobs);
+            settings::TheScalability().Apply("environment edit", /*quiet=*/true);
+        }
+    } scalabilityAfter{ env.type == "gtao" ? std::vector<std::string>{ "gtao." }
+                        : env.type == "heightFog" ? std::vector<std::string>{ "fog." }
+                        : env.type == "bloom" ? std::vector<std::string>{ "bloom." }
+                        : env.type == "postProcess" ? std::vector<std::string>{ "gtao.", "fog.", "bloom." }
+                        : env.type == "volumetricCloud" ? std::vector<std::string>{ "cloud." }
+                        : env.type == "timeOfDay" || env.type == "directionalLight" ? std::vector<std::string>{ "lightShafts." }
+                        : std::vector<std::string>{} };
 
     if (env.type == "pointLight")
     {

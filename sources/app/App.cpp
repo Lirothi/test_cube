@@ -34,6 +34,7 @@
 #include <wincodec.h>
 #include <timeapi.h> // timeBeginPeriod: the frame cap's sleep granularity (see App::Run)
 #include <wrl/client.h>
+#include <dxgi1_4.h> // the auto-detect's GPU identity (EnumAdapterByLuid)
 #include "vfx/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
 #include "vfx/ParticleTypes.h" // --set=particles.airFromFog
 
@@ -85,6 +86,17 @@ int g_bootDlssMode = -1;
 // "--set=dlss.mode:<sl::DLSSMode>" / MCP set_settings: switch the upscaler in a RUNNING process, at the frame's safe
 // point (the dev window's combo path). 0 = off (native), 2 = Balanced, 6 = DLAA. -1 = nothing asked.
 int g_requestDlssMode = -1;
+// "--set=aa.renderScale:<0.25..1>": the render scale without DLSS (the resolution group's native road), at the same safe
+// point as dlss.mode. < 0 = nothing asked.
+float g_requestRenderScale = -1.0f;
+// "--scalability=low|medium|high|ultra|off" (main.cpp): the preset at boot over what the player saved. -2 = not given,
+// -1 = off (no group managed).
+int g_bootScalability = -2;
+// "--scalability-check": the gate of docs/scalability_plan.md §8.1 in a running process -- every level of every group
+// applied and every knob read back, the ceilings over the level's own values, Ultra against the boot's values.
+bool g_scalabilityCheck = false;
+int g_scalabilityCheckExit = 0; // its failed reads: main's exit code
+std::string g_bootSettingsMenu;
 // Borderless client size; see App.h. Set by main.cpp from "--window=<w>x<h>". 0 = default window.
 int g_windowSize[2] = { 0, 0 };
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
@@ -139,6 +151,9 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include "app/scene/SkyOcclusionMap.h"      // skyVis.fallbackResolution / fallbackTexel: the map's own ranges
+#include "app/settings/Scalability.h"       // sg.* (docs/scalability_plan.md)
+#include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
+#include "vfx/ParticleTypes.h"              // particles.spawnScale
 #include <fstream>
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // --set=tessy.*
@@ -552,6 +567,40 @@ namespace
             return true;
         }
         if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
+        // Without DLSS (the resolution group's native road): the render scale at the frame's safe point, FXAA at once.
+        if (setting == "aa.renderScale") { g_requestRenderScale = std::clamp(value, 0.25f, 1.0f); return true; }
+        if (setting == "aa.fxaa") { renderSettings.doFxaa = value != 0.0f; return true; }
+        if (setting == "particles.spawnScale") { vfx::g_spawnScale = std::clamp(value, 0.0f, 4.0f); return true; }
+        // The boats' spray, capped at runtime over the ocean's own rate and mist (the Effects group): never written into
+        // the ocean's config, which the editor saves into the level.
+        if (setting == "spray.rateMax") { vfx::g_sprayRateMax = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "spray.mistMax") { vfx::g_sprayMistMax = std::clamp(value, 0.0f, 4.0f); return true; }
+        // Auto-detect's control (docs/scalability_plan.md §8.4) and a run of it now.
+        if (setting == "scalability.gpuTimeScale") { settings::TheScalability().autodetectGpuScale = std::clamp(value, 0.1f, 64.0f); return true; }
+        if (setting == "scalability.autodetect") { if (value != 0.0f) { settings::TheScalability().RequestAutodetect(false); } return true; } // a script's: never saved
+        // The graphics levels (docs/scalability_plan.md): sg.<group>:<0..3> one group, sg.all a preset, sg.resolution the
+        // render resolution's level; -1 leaves it alone again. sg.unpin forgets what --set / MCP pinned, sg.reload reads
+        // the table again. Applied at once and TRANSIENT, as every --set: the player's choice is saved by the settings
+        // menu and the Developer Controls tab (Scalability::SaveUser), never by a script.
+        if (setting.rfind("sg.", 0) == 0)
+        {
+            settings::Scalability& s = settings::TheScalability();
+            const std::string group = setting.substr(3);
+            const int level = static_cast<int>(std::lround(value));
+            if (group == "reload")
+            {
+                s.LoadTable();
+                s.LoadUser();
+            }
+            else if (group == "unpin") { s.ClearPins(); }
+            else if (!s.Loaded()) { return false; }
+            else if (group == "all") { s.SetPreset(level); }
+            else if (group == "resolution") { s.SetResolutionLevel(level); }
+            else if (const int g = s.GroupIndex(group); g >= 0) { s.SetGroupLevel(g, level); }
+            else { return false; }
+            s.Apply(setting);
+            return true;
+        }
         if (setting == "dlss.preset") { g_dlssPresetOverride.store(std::clamp(static_cast<int>(value), -1, 15)); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
         // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
@@ -2013,6 +2062,453 @@ namespace
         }
         return false;
     }
+
+    // The reading half of the name table, for the knobs the scalability table may name (settings::ScalabilityKnobs):
+    // what a ceiling starts from, what the gate reads back, what the Developer Controls tab shows. A knob written at the
+    // frame's safe point (dlss.mode, aa.renderScale) reads as asked until then.
+    bool ReadSweepValue(Scene& scene, const SceneRenderSettings& rs, const std::string& name, float& out)
+    {
+        const auto b = [&](bool v) { out = v ? 1.0f : 0.0f; return true; };
+        const auto f = [&](float v) { out = v; return true; };
+        const auto u = [&](std::uint64_t v) { out = static_cast<float>(v); return true; };
+        Renderer& renderer = Systems::GetRenderer();
+        if (name == "lod.pixelError") { return f(render::g_lodPixelError_game); }
+        if (name == "tessy.lodPixelError") { return f(tessy::g_lodPixelError_game); }
+        if (name == "lod.chunkFactor") { return f(render::g_chunkLodDistFactor_game); }
+        if (name == "shadow.mode") { return u(static_cast<std::uint32_t>(render::g_shadowMode_game)); }
+        if (name == "csm.atlasRes") { return u(render::g_csmAtlasRes_game); }
+        if (name == "csm.filterMode") { return u(scene.CascadeConfig().filterMode); }
+        if (name == "sdsm.partitions") { return u(render::sdsm::g_partitions_game); }
+        if (name == "sdsm.cacheFrames") { return u(render::sdsm::g_cacheFrames_game); }
+        if (name == "vsm.resolutionLodBiasDirectional") { return f(vsm::g_resolutionLodBiasDirectional_game); }
+        if (name == "vsm.smrtRayCount") { return u(vsm::g_smrtRayCount_game); }
+        if (name == "vsm.smrtSamplesPerRay") { return u(vsm::g_smrtSamplesPerRay_game); }
+        if (name == "vsm.localSmrtRayCount") { return u(vsm::g_localSmrtRayCount_game); }
+        if (name == "shadow.localMaxRes") { return u(render::g_localShadowMaxRes_game); }
+        if (name == "contact.enabled") { return b(render::contact::g_enabled_game); }
+        if (name == "contact.steps") { return u(render::contact::g_steps_game); }
+        if (name == "ocean.sunShadowRays") { return f(static_cast<float>(ocean::g_sunShadowRays_game)); }
+        if (name == "vsm.windRange") { return f(vsm::g_windRange_game); }
+        if (name == "shadow.localWindRange") { return f(render::g_localShadowWindRange_game); }
+        if (name == "gi.enabled") { return b(rs.giEnabled); }
+        if (name == "gi.far") { return b(rs.giFarCascade); }
+        if (name == "gi.rays") { return u(rs.giRays); }
+        if (name == "gi.divisor") { return u(rs.giUpdateDivisor); }
+        if (name == "gi.farDivisor") { return u(rs.giFarDivisor); }
+        if (name == "gi.rayDistance") { return f(rs.giRayDistance); }
+        if (name == "skyVis.enabled") { return b(rs.skyVisEnabled); }
+        if (name == "skyVis.rays") { return u(rs.skyVisRays); }
+        if (name == "skyVis.filterRadius") { return u(rs.skyVisFilterRadius); }
+        if (name == "render.reflectionSource") { return u(static_cast<std::uint32_t>(rs.reflectionSource)); }
+        if (name == "ssr.ueQuality") { return u(static_cast<std::uint32_t>(rs.ssrUe.preset)); }
+        if (name == "reflections.resolution") { return f(renderer.GetReflectionTextureScale().x); }
+        if (name == "rt.alphaMode") { return u(rs.rtAlphaMode); }
+        if (name == "reflections.oceanResolution") { return f(renderer.GetOceanReflectionTextureScale().x); }
+        if (name == "ssr.waterNormalCascades") { return u(rs.waterReflectionNormalCascades); }
+        if (name == "ocean.wakeHz") { return f(ocean::g_wakeStepHz_game); }
+        if (name == "fog.gridPixels") { return u(render::g_fogGridPixels_game); }
+        if (name == "fog.gridZ") { return u(render::g_fogGridZ_game); }
+        if (name == "fog.volumetric") { return b(scene.HeightFogRef().volumetric); }
+        if (name == "fog.samplesPerCell") { return f(static_cast<float>(scene.HeightFogRef().samplesPerCell)); }
+        if (name == "skyVis.fogRays") { return u(rs.skyVisFogRays); }
+        if (name == "cloud.viewSampleCountMax") { return u(scene.VolumetricCloudRef().viewSampleCountMax); }
+        if (name == "cloud.shadowMapSampleCount") { return u(scene.VolumetricCloudRef().shadowMapSampleCount); }
+        if (name == "cloud.msOctaves") { return u(scene.VolumetricCloudRef().msOctaves); }
+        if (name == "cloud.captureTexels") { return f(render::g_cloudCaptureTexels_game); }
+        if (name == "bloom.method") { return u(scene.BloomRef().method); }
+        if (name == "bloom.convPercent") { return f(scene.BloomRef().convPercent); }
+        if (name == "bloom.ghostIntensity") { return f(scene.BloomRef().convGhostIntensity); }
+        if (name == "lightShafts.enabled") { return b(scene.SunLightRef().GetLightShaftsEnabled()); }
+        if (name == "gtao.enabled") { return b(scene.GtaoRef().enabled); }
+        if (name == "gtao.numSteps") { return u(scene.GtaoRef().numSteps); }
+        if (name == "gtao.numAngles") { return u(scene.GtaoRef().numAngles); }
+        if (name == "streaming.poolSizeMB") { return f(static_cast<float>(streaming::g_poolSizeMB_game)); }
+        if (name == "streaming.mipBias") { return f(static_cast<float>(streaming::g_mipBias_game)); }
+        if (name == "spray.rateMax") { return f(vfx::g_sprayRateMax); }
+        if (name == "spray.mistMax") { return f(vfx::g_sprayMistMax); }
+        if (name == "cloud.viewSampleCountMin") { return u(scene.VolumetricCloudRef().viewSampleCountMin); }
+        if (name == "particles.spawnScale") { return f(vfx::g_spawnScale); }
+        if (name == "particles.softWater") { return b(g_particleSoftWater_game); }
+        if (name == "dlss.mode") { return u(static_cast<std::uint32_t>(g_requestDlssMode >= 0 ? g_requestDlssMode : static_cast<int>(renderer.GetDlssMode()))); }
+        if (name == "aa.renderScale") { return f(g_requestRenderScale >= 0.0f ? g_requestRenderScale : renderer.GetRenderResolutionScale()); }
+        if (name == "aa.fxaa") { return b(rs.doFxaa); }
+        return false;
+    }
+
+    // Levels the loop has finished loading (loadPendingLevel), so the scalability check knows when a reload is in.
+    int g_levelLoadsCompleted = 0;
+
+    // The adapter as the auto-detect remembers it: its name and the user-mode driver's version (a new GPU or driver
+    // measures again), and its own memory.
+    std::string GpuIdentity(ID3D12Device* device, std::uint64_t& vramBytes)
+    {
+        DXGI_ADAPTER_DESC1 desc{};
+        LARGE_INTEGER umd{};
+        Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (device && SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+            SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) &&
+            SUCCEEDED(adapter->GetDesc1(&desc)) &&
+            FAILED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd)))
+        {
+            umd.QuadPart = 0;
+        }
+        vramBytes = static_cast<std::uint64_t>(desc.DedicatedVideoMemory);
+        char driver[48];
+        std::snprintf(driver, sizeof(driver), "%u.%u.%u.%u", HIWORD(umd.HighPart), LOWORD(umd.HighPart),
+                      HIWORD(umd.LowPart), LOWORD(umd.LowPart));
+        return vfs::Narrow(desc.Description) + " / " + driver;
+    }
+
+    // Auto-detect (docs/scalability_plan.md §5): the real frame, not a synthetic benchmark. High at a Balanced render
+    // resolution, 60 frames and 5 s to settle (1 s for the next levels), then the median of the GPU frame's own times over
+    // 3 s (the profiler's GPU.Frame, last frame -- not its average); within 0.6 of the budget (60 fps less 30 %: 11.7 ms)
+    // Ultra is tried, over it Medium, then Low, then the resolution goes to Performance. Under 6 GB of video memory the
+    // textures stay at Medium at most, under 4 GB Low. A frame over 1 s stops it at Medium (UE's TDR guard). The result is
+    // applied; saved (with the GPU it was measured on) only for a packaged build's own first start.
+    struct ScalabilityAutodetect
+    {
+        bool running = false;
+        int level = 2;          // the level being measured
+        int resolution = 1;
+        int frame = 0;
+        int measurements = 0;   // the first one settles longer: the boot's streaming and the GI's warm-up
+        double settleUntil = 0.0;
+        double measureUntil = 0.0;
+        std::vector<double> samples;
+        std::array<double, settings::kScalabilityLevels> measured{ -1.0, -1.0, -1.0, -1.0 };
+    };
+
+    void StepScalabilityAutodetect(ScalabilityAutodetect& a, Renderer& renderer, double now)
+    {
+        settings::Scalability& s = settings::TheScalability();
+        constexpr double kBudgetMs = 1000.0 / 60.0 * 0.7;
+        const auto measureLevel = [&](int level, int resolution)
+        {
+            a.level = level;
+            a.resolution = resolution;
+            s.SetPreset(level);
+            s.SetResolutionLevel(resolution);
+            s.Apply("auto-detect: measuring " + s.Table().levelNames[static_cast<std::size_t>(level)]);
+            a.frame = 0;
+            a.settleUntil = 0.0;
+            a.samples.clear();
+            s.SetAutodetectStatus("measuring " + s.Table().levelNames[static_cast<std::size_t>(level)] + "...");
+        };
+        const auto finish = [&](int preset, int resolution, const std::string& why)
+        {
+            s.SetPreset(preset);
+            s.SetResolutionLevel(resolution);
+            std::uint64_t vram = 0;
+            const std::string gpu = GpuIdentity(renderer.GetDevice(), vram);
+            const double gb = static_cast<double>(vram) / (1024.0 * 1024.0 * 1024.0);
+            const int textures = s.GroupIndex("textures");
+            if (textures >= 0 && gb > 0.0 && gb < 6.0)
+            {
+                s.SetGroupLevel(textures, std::min(s.GroupLevel(textures), gb < 4.0 ? 0 : 1));
+            }
+            s.Apply("auto-detect: " + why);
+            std::string error;
+            if (s.AutodetectSaves() && !s.SaveUser(error)) { LOG_WARNING(logging::LogCategory::App, "auto-detect: not saved: {}", error); }
+            nlohmann::json record = { { "gpu", gpu }, { "vramGB", std::round(gb * 10.0) / 10.0 }, { "preset", preset },
+                                      { "resolution", resolution }, { "why", why }, { "gpuTimeScale", s.autodetectGpuScale } };
+            nlohmann::json ms = nlohmann::json::object();
+            for (int l = 0; l < settings::kScalabilityLevels; ++l)
+            {
+                if (a.measured[static_cast<std::size_t>(l)] >= 0.0)
+                {
+                    ms[s.Table().levelNames[static_cast<std::size_t>(l)]] = std::round(a.measured[static_cast<std::size_t>(l)] * 1000.0) / 1000.0;
+                }
+            }
+            record["gpuFrameMs"] = ms;
+            if (s.AutodetectSaves() && !settings::Scalability::WriteUserSection("autodetect", record.dump(), error))
+            {
+                LOG_WARNING(logging::LogCategory::App, "auto-detect: the record was not saved: {}", error);
+            }
+            const std::string name = s.Table().levelNames[static_cast<std::size_t>(preset)];
+            s.SetAutodetectStatus("recommended: " + name + " (" + why + ")");
+            LOG_INFO(logging::LogCategory::App, "auto-detect: {} at resolution {} -- {}; {} ({:.1f} GB)", name,
+                     s.Table().levelNames[static_cast<std::size_t>(resolution)], why, gpu, gb);
+            s.SetAutodetectRunning(false);
+            a.running = false;
+        };
+        if (a.running && s.TakeAutodetectAbort())
+        {
+            // The menu's Cancel put the levels back itself; nothing more is applied or saved.
+            a.running = false;
+            s.SetAutodetectRunning(false);
+            s.SetAutodetectStatus("auto-detect cancelled");
+            LOG_INFO(logging::LogCategory::App, "auto-detect: cancelled");
+            return;
+        }
+        if (!a.running)
+        {
+            if (!s.TakeAutodetectRequest() || !s.Loaded()) { return; }
+            a = ScalabilityAutodetect{};
+            a.running = true;
+            s.SetAutodetectRunning(true);
+            LOG_INFO(logging::LogCategory::App, "auto-detect: measuring the frame (budget {:.1f} ms, time scale x{:.2f})", kBudgetMs,
+                     s.autodetectGpuScale);
+            measureLevel(2, 1);
+            return;
+        }
+        ++a.frame;
+        if (a.frame < 60) { return; }
+        // The first measurement after a boot waits for the streaming, the GI's probes and the shader caches to settle; a
+        // switch of level costs a few frames.
+        if (a.settleUntil == 0.0)
+        {
+            a.settleUntil = now + (a.measurements == 0 ? 5.0 : 1.0);
+            a.measureUntil = a.settleUntil + 3.0;
+            ++a.measurements;
+            return;
+        }
+        if (now < a.settleUntil) { return; }
+        // The last GPU frame's own time, not the overlay's average (an EMA of 0.997 a frame: ~333 frames to settle, so
+        // a level measured right after another would read a blend of the two -- the reviews, 2026-11-14).
+        double gpuMs = -1.0;
+        for (const Profiler::OverlaySample& r : Profiler::Get().OverlaySnapshot())
+        {
+            if (r.gpu && r.name == "GPU.Frame") { gpuMs = r.lastMs; break; }
+        }
+        if (gpuMs > 1000.0)
+        {
+            finish(1, 1, "a frame over 1 s: Medium");
+            return;
+        }
+        if (gpuMs > 0.0) { a.samples.push_back(gpuMs * static_cast<double>(s.autodetectGpuScale)); }
+        if (now < a.measureUntil) { return; }
+        if (a.samples.empty())
+        {
+            finish(2, 1, "no GPU timings: High");
+            return;
+        }
+        std::sort(a.samples.begin(), a.samples.end());
+        const double ms = a.samples[a.samples.size() / 2];
+        a.measured[static_cast<std::size_t>(a.level)] = ms;
+        LOG_INFO(logging::LogCategory::App, "auto-detect: {} -- GPU frame {:.2f} ms (median of {})",
+                 s.Table().levelNames[static_cast<std::size_t>(a.level)], ms, a.samples.size());
+        char why[96];
+        if (a.level == 2)
+        {
+            if (ms <= 0.6 * kBudgetMs) { measureLevel(3, 1); return; }
+            if (ms > kBudgetMs) { measureLevel(1, 1); return; }
+            std::snprintf(why, sizeof(why), "High %.1f ms within the budget", ms);
+            finish(2, 1, why);
+        }
+        else if (a.level == 3)
+        {
+            std::snprintf(why, sizeof(why), "Ultra %.1f ms %s the budget", ms, ms <= kBudgetMs ? "within" : "over");
+            finish(ms <= kBudgetMs ? 3 : 2, 1, why);
+        }
+        else if (a.level == 1)
+        {
+            if (ms > kBudgetMs) { measureLevel(0, 1); return; }
+            std::snprintf(why, sizeof(why), "Medium %.1f ms within the budget", ms);
+            finish(1, 1, why);
+        }
+        else
+        {
+            std::snprintf(why, sizeof(why), "Low %.1f ms%s", ms, ms > kBudgetMs ? ", the render resolution down" : "");
+            finish(0, ms > kBudgetMs ? 0 : 1, why);
+        }
+    }
+
+    // "--scalability-check" (docs/scalability_plan.md §8.1, §8.2): in the running game, from an unmanaged start with the
+    // level's own values, every level (Low .. Ultra, the render resolution with it) is applied and every knob of every
+    // group read back against what the table asks -- a ceiling against the level's own value; then the level is loaded
+    // again at Low and the ceilings must hold over the reloaded values; then the start is restored. One line per
+    // mismatch and the verdict `scalability check: PASS|FAIL` in the session log. Returns true when it is done.
+    struct ScalabilityCheck
+    {
+        int frame = 0;
+        int phase = 0;
+        int waitUntil = 0;
+        int loadsAtReload = 0;
+        int waitedForLoad = 0;
+        int failed = 0;
+        int checked = 0;
+        std::vector<int> savedGroups;
+        int savedResolution = -1;
+        std::map<std::string, float> own; // the level's own value of every content knob, and every knob's start value
+    };
+
+    void ScalabilityCheckCell(ScalabilityCheck& c, Scene& scene, const SceneRenderSettings& rs, const settings::ScalabilityCell& cell,
+                              const std::string& where)
+    {
+        const settings::Scalability& s = settings::TheScalability();
+        for (const auto& [name, op] : cell)
+        {
+            if (s.Pins().count(name)) { continue; }
+            float expected = op.value;
+            const auto own = c.own.find(name);
+            const float base = own != c.own.end() ? own->second : 0.0f;
+            switch (op.kind)
+            {
+            case settings::ScalabilityOp::Kind::Level: expected = base; break;
+            case settings::ScalabilityOp::Kind::Max: expected = std::min(base, op.value); break;
+            case settings::ScalabilityOp::Kind::Min: expected = std::max(base, op.value); break;
+            default: break;
+            }
+            float actual = 0.0f;
+            ++c.checked;
+            if (!ReadSweepValue(scene, rs, name, actual))
+            {
+                ++c.failed;
+                LOG_ERROR(logging::LogCategory::App, "scalability check: {} {}: cannot be read", where, name);
+            }
+            else if (std::abs(actual - expected) > 1e-3f * std::max(1.0f, std::abs(expected)))
+            {
+                ++c.failed;
+                LOG_ERROR(logging::LogCategory::App, "scalability check: {} {}: reads {} where the table asks {}{}", where, name,
+                          actual, expected, op.kind == settings::ScalabilityOp::Kind::Set ? "" : " (over the level's own value)");
+            }
+        }
+    }
+
+    bool StepScalabilityCheck(ScalabilityCheck& c, Scene& scene, SceneRenderSettings& rs, Renderer& renderer, LevelManager& levels)
+    {
+        settings::Scalability& s = settings::TheScalability();
+        ++c.frame;
+        if (c.frame < c.waitUntil) { return false; }
+        const auto verify = [&](int level, const std::string& where)
+        {
+            for (const settings::ScalabilityGroup& g : s.Table().groups)
+            {
+                ScalabilityCheckCell(c, scene, rs, g.levels[static_cast<std::size_t>(level)], where + " sg." + g.key);
+            }
+            const auto& resolution = renderer.IsDlssAvailable() ? s.Table().resolutionDlss : s.Table().resolutionNative;
+            ScalabilityCheckCell(c, scene, rs, resolution[static_cast<std::size_t>(level)], where + " sg.resolution");
+        };
+        const auto applyLevel = [&](int level, const std::string& reason)
+        {
+            s.SetPreset(level);
+            s.SetResolutionLevel(level);
+            s.Apply(reason);
+            c.waitUntil = c.frame + 8; // dlss.mode and aa.renderScale land at the next frame's safe point
+        };
+        if (c.phase == 0)
+        {
+            if (c.frame < 60) { return false; } // the level settles first
+            if (!s.Loaded())
+            {
+                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the table did not load");
+                g_scalabilityCheckExit = 1;
+                return true;
+            }
+            for (std::size_t g = 0; g < s.Table().groups.size(); ++g) { c.savedGroups.push_back(s.GroupLevel(static_cast<int>(g))); }
+            c.savedResolution = s.ResolutionLevel();
+            // An unmanaged start: what the level asks for, before any ceiling. A boot that applied the player's saved
+            // choice capped the level's values; loading the level again gives them back.
+            s.SetPreset(-1);
+            s.SetResolutionLevel(-1);
+            c.loadsAtReload = g_levelLoadsCompleted;
+            levels.RequestLevelPathChange(std::string(levels.GetActiveLevelSourcePath()));
+            c.phase = 1;
+            return false;
+        }
+        if (c.phase == 1)
+        {
+            if (g_levelLoadsCompleted == c.loadsAtReload)
+            {
+                if (++c.waitedForLoad < 3000) { return false; } // a failed or refused reload: a FAIL, not a run that never ends
+                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the level reload did not finish in 3000 frames");
+                g_scalabilityCheckExit = std::max(c.failed, 1);
+                return true;
+            }
+            c.waitedForLoad = 0;
+            if (c.waitUntil == 0) { c.waitUntil = c.frame + 30; return false; }
+            int differ = 0;
+            for (const settings::ScalabilityKnob& k : settings::ScalabilityKnobs())
+            {
+                float v = 0.0f;
+                if (ReadSweepValue(scene, rs, k.name, v)) { c.own[k.name] = v; }
+            }
+            // Ultra = today (§1 item 2): the Ultra column against the values the build starts with.
+            for (const settings::ScalabilityGroup& g : s.Table().groups)
+            {
+                for (const auto& [name, op] : g.levels[settings::kScalabilityLevels - 1])
+                {
+                    if (op.kind != settings::ScalabilityOp::Kind::Set) { continue; }
+                    const float today = c.own[name];
+                    if (std::abs(today - op.value) > 1e-3f * std::max(1.0f, std::abs(op.value)))
+                    {
+                        ++differ;
+                        LOG_INFO(logging::LogCategory::App, "scalability check: Ultra differs from today: sg.{} {} today {} Ultra {}",
+                                 g.key, name, today, op.value);
+                    }
+                }
+            }
+            LOG_INFO(logging::LogCategory::App, "scalability check: Ultra against today's values: {} knob(s) differ", differ);
+            applyLevel(0, "check Low");
+            c.phase = 2;
+            return false;
+        }
+        if (c.phase >= 2 && c.phase <= 5)
+        {
+            const int level = c.phase - 2;
+            verify(level, s.Table().levelNames[static_cast<std::size_t>(level)]);
+            if (level < settings::kScalabilityLevels - 1)
+            {
+                applyLevel(level + 1, "check " + s.Table().levelNames[static_cast<std::size_t>(level + 1)]);
+                ++c.phase;
+                return false;
+            }
+            // The level loaded again at Low: the ceilings must hold over its reloaded values.
+            applyLevel(0, "check Low before a reload");
+            c.loadsAtReload = g_levelLoadsCompleted;
+            c.phase = 6;
+            return false;
+        }
+        if (c.phase == 6)
+        {
+            c.loadsAtReload = g_levelLoadsCompleted;
+            levels.RequestLevelPathChange(std::string(levels.GetActiveLevelSourcePath()));
+            c.phase = 7;
+            return false;
+        }
+        if (c.phase == 7)
+        {
+            if (g_levelLoadsCompleted == c.loadsAtReload)
+            {
+                if (++c.waitedForLoad < 3000) { return false; } // a failed or refused reload: a FAIL, not a run that never ends
+                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the level reload did not finish in 3000 frames");
+                g_scalabilityCheckExit = std::max(c.failed, 1);
+                return true;
+            }
+            c.waitedForLoad = 0;
+            c.waitUntil = c.frame + 30;
+            c.phase = 8;
+            return false;
+        }
+        if (c.phase == 8)
+        {
+            verify(0, "Low after a level reload");
+            // "Not managed" puts every knob back (the menu's Cancel, the tab's Not managed): to the start's values.
+            s.SetPreset(-1);
+            s.SetResolutionLevel(-1);
+            s.Apply("check: not managed again");
+            for (const auto& [name, start] : c.own)
+            {
+                float now = 0.0f;
+                ++c.checked;
+                if (!ReadSweepValue(scene, rs, name, now) || std::abs(now - start) > 1e-3f * std::max(1.0f, std::abs(start)))
+                {
+                    ++c.failed;
+                    LOG_ERROR(logging::LogCategory::App, "scalability check: not managed again: {} reads {} where it started at {}",
+                              name, now, start);
+                }
+            }
+            for (std::size_t g = 0; g < c.savedGroups.size(); ++g) { s.SetGroupLevel(static_cast<int>(g), c.savedGroups[g]); }
+            s.SetResolutionLevel(c.savedResolution);
+            s.Apply("check done: the start restored");
+            g_scalabilityCheckExit = c.failed;
+            LOG_INFO(logging::LogCategory::App, "scalability check: {} -- {} reads, {} failed", c.failed == 0 ? "PASS" : "FAIL",
+                     c.checked, c.failed);
+            return true;
+        }
+        return true;
+    }
 }
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -2407,6 +2903,7 @@ namespace
             if (known)
             {
                 LOG_INFO(logging::LogCategory::Editor, "MCP set_settings {} = {}", name, value);
+                settings::TheScalability().Pin(name); // what MCP set, the graphics levels leave alone (§3.3)
             }
             return known;
         }
@@ -2471,6 +2968,8 @@ namespace
             }
             std::string out(text, static_cast<size_t>(n)); // without the closing brace
             out += LocalShadowsJson(scene_.GetLightManager(), scene_.GetLocalShadowCache());
+            // The graphics levels (docs/scalability_plan.md §4.5): the groups' levels, the pins, the last apply.
+            out += ",\"scalability\":" + settings::TheScalability().StatusJson();
             // The file system the content comes through (docs/distribution_build_plan.md §2): counts since the start.
             {
                 const vfs::Counters vc = vfs::GetCounters();
@@ -2709,6 +3208,7 @@ void App::ApplyFixedSettings(Scene& scene)
         if (known)
         {
             LOG_INFO(logging::LogCategory::App, "--set {} = {}", kv.first, kv.second);
+            settings::TheScalability().Pin(kv.first); // stronger than the graphics levels for the whole run (§3.3)
         }
         else
         {
@@ -2836,7 +3336,79 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         {
             MEM_SCOPE(MemTag::Renderer);
             appController_.InitializeGraphicsSettings(renderer, scene);
-            knob::Exchange(); // graphics_settings.json set the game's knobs
+            // The graphics levels (docs/scalability_plan.md) over the settings file and the level: the player's saved
+            // choice, or --scalability's. Nothing saved and nothing asked = nothing managed: today's picture.
+            settings::Scalability& scalability = settings::TheScalability();
+            SceneRenderSettings& renderSettings = appController_.SettingsRef();
+            scalability.SetAccess({
+                [&scene, &renderSettings](const std::string& name, float value) { return ApplySweepValue(scene, renderSettings, name, value); },
+                [&scene, &renderSettings](const std::string& name, float& value) { return ReadSweepValue(scene, renderSettings, name, value); },
+                [&renderer]() { return renderer.IsDlssAvailable(); },
+                // One batch for the target knobs: the reflections' scales here, the DLSS mode and the render scale taken
+                // from their requests inside it (not at the next frame's safe point, which would recreate again).
+                [&renderer]()
+                {
+                    threading::WaitRenderForGame("scalability apply");
+                    renderer.BeginTargetBatch();
+                },
+                [&renderer]() -> int
+                {
+                    const int before = renderer.TargetRecreations();
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
+                    if (g_requestDlssMode >= 0)
+                    {
+                        renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_requestDlssMode));
+                        g_requestDlssMode = -1;
+                    }
+                    if (g_requestRenderScale >= 0.0f)
+                    {
+                        if (!renderer.IsDlssActive()) { renderer.SetRenderResolutionScale(g_requestRenderScale); }
+                        g_requestRenderScale = -1.0f;
+                    }
+                    renderer.EndTargetBatch();
+                    return renderer.TargetRecreations() - before;
+                } });
+            if (scalability.LoadTable())
+            {
+                scalability.LoadUser();
+                // The boot's own switches are stronger than the levels, as --set is: a --shadow-mode=vsm GBV run must not
+                // be turned into SDSM by a saved Low, nor --dlss= undone by the first level load.
+                if (render::g_shadowModeFromCli_game) { scalability.Pin("shadow.mode"); }
+                if (g_bootDlssMode >= 0) { scalability.Pin("dlss.mode"); }
+                if (g_bootScalability >= -1)
+                {
+                    scalability.SetPreset(g_bootScalability);
+                    if (g_bootScalability == -1) { scalability.SetResolutionLevel(-1); } // off: nothing managed at all
+                    LOG_INFO(logging::LogCategory::App, "--scalability: {}", g_bootScalability >= 0
+                        ? scalability.Table().levelNames[static_cast<std::size_t>(g_bootScalability)] : std::string("off"));
+                }
+                else if (g_bootScalability == -3)
+                {
+                    scalability.RequestAutodetect(build::Packaged()); // --scalability=auto: a dev build's file stays as it is
+                }
+#if TC_PACKAGED
+                else
+                {
+                    // A packaged build's first start, or another GPU since the last measurement: auto-detect (§5). A
+                    // driver update alone keeps the player's levels (it would replace a choice made by hand). A developer
+                    // build measures only when asked.
+                    std::uint64_t vram = 0;
+                    const std::string gpu = GpuIdentity(renderer.GetDevice(), vram);
+                    const auto adapterOnly = [](const std::string& identity) { return identity.substr(0, identity.find(" / ")); };
+                    const nlohmann::json record = nlohmann::json::parse(settings::Scalability::ReadUserSection("autodetect"), nullptr, false);
+                    const std::string measuredOn = record.is_object() && record.contains("gpu") && record["gpu"].is_string()
+                                                 ? record["gpu"].get<std::string>() : std::string();
+                    if (measuredOn.empty() || adapterOnly(measuredOn) != adapterOnly(gpu))
+                    {
+                        LOG_INFO(logging::LogCategory::App, "auto-detect: {} -- {}", measuredOn.empty() ? "the first start" : "measured on " + measuredOn, gpu);
+                        scalability.RequestAutodetect(true);
+                    }
+                }
+#endif
+                scalability.Apply("boot");
+            }
+            GameSettingsMenu::ApplySavedDisplay(); // the player's VSync and frame-rate limit over the build's
+            knob::Exchange(); // graphics_settings.json and the graphics levels set the game's knobs
         }
 #if WITH_EDITOR
         // The editor MCP's set_settings / get_readouts reach the app through this; it outlives every
@@ -3044,6 +3616,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                             levelBatch.SubmitAndWait(&renderer);
                         }
                         appController_.ApplySceneGraphicsSettings(scene);
+                        // The level set its own clouds, fog, bloom, GTAO...: the graphics levels' ceilings again.
+                        settings::TheScalability().OnContentReloaded("level load");
+                        ++g_levelLoadsCompleted;
                     }
                 }
 #if WITH_EDITOR
@@ -3096,12 +3671,36 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
             }
 
+            // Auto-detect (§5): one step a frame while it runs, nothing otherwise.
+            {
+                static ScalabilityAutodetect autodetect;
+                StepScalabilityAutodetect(autodetect, renderer, GetTimeSeconds());
+            }
+            // "--scalability-check": one step a frame; its verdict ends the run.
+            if (g_scalabilityCheck)
+            {
+                static ScalabilityCheck check;
+                if (StepScalabilityCheck(check, scene, appController_.SettingsRef(), renderer, levelManager))
+                {
+                    g_scalabilityCheck = false;
+                    isRunning_ = false;
+                }
+            }
+
             // dlss.mode asked for by --set / set_settings: here, where the frame has been presented.
             if (g_requestDlssMode >= 0)
             {
                 threading::RoleScope renderRole(threading::ThreadRole::Render); // the renderer's targets
                 renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_requestDlssMode));
                 g_requestDlssMode = -1;
+            }
+            // aa.renderScale (the resolution group without DLSS): the same safe point. Under an active DLSS the
+            // upscaler owns the scale, as the dev window's AA tab has it.
+            if (g_requestRenderScale >= 0.0f)
+            {
+                threading::RoleScope renderRole(threading::ThreadRole::Render);
+                if (!renderer.IsDlssActive()) { renderer.SetRenderResolutionScale(g_requestRenderScale); }
+                g_requestRenderScale = -1.0f;
             }
 
 #if WITH_EDITOR
@@ -3141,6 +3740,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     const float value = g_sweepValues[static_cast<size_t>(shotIndex)];
                     const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
                                                       g_sweepSetting, value);
+                    settings::TheScalability().Pin(g_sweepSetting);
                     if (!known)
                     {
                         // Once per process: the sweep name never changes between shots.
@@ -3150,6 +3750,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     {
                         if (shotIndex >= static_cast<int>(extraValues.size())) { continue; }
                         const float extraValue = extraValues[static_cast<size_t>(shotIndex)];
+                        settings::TheScalability().Pin(extraSetting);
                         if (!ApplySweepValue(scene, appController_.SettingsRef(), extraSetting, extraValue))
                         {
                             LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::App, "--sweep {}: unknown setting", extraSetting);

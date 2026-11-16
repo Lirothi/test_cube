@@ -1,6 +1,9 @@
 #include "app/GraphicsSettings.h"
+#include "app/settings/Scalability.h" // the managed knobs are saved with their own values (CaptureScalabilityOriginals)
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
+
+#include <type_traits>
 
 #include <algorithm>
 #include <cmath>
@@ -494,6 +497,70 @@ namespace
         s.csm.csmReceiverBias = std::clamp(finite(s.csm.csmReceiverBias, 0.9f), 0.0f, 1.0f);
     }
 
+    // A float from the scalability table into a snapshot field of any type (an enum by its number, a bool by non-zero).
+    template <class T>
+    void PutKnob(T& field, float v)
+    {
+        if constexpr (std::is_enum_v<T>) { field = static_cast<T>(static_cast<std::underlying_type_t<T>>(std::lround(v))); }
+        else if constexpr (std::is_same_v<T, bool>) { field = v != 0.0f; }
+        else if constexpr (std::is_integral_v<T>) { field = static_cast<T>(std::lround(v)); }
+        else { field = static_cast<T>(v); }
+    }
+
+    // The knobs the graphics levels manage are saved with the values they had before (docs/scalability_plan.md §3.3):
+    // graphics_settings.json is the developer's, and an autosave while Low is chosen must not make Low the developer's
+    // own. Every persisted knob of settings::ScalabilityKnobs(); the rest (ocean.sunShadowRays, the spray's ceilings...)
+    // is not in this file.
+    void CaptureScalabilityOriginals(GraphicsSettingsSnapshot& s)
+    {
+        const settings::Scalability& sc = settings::TheScalability();
+        float v = 0.0f;
+        const auto put = [&](const char* name, auto& field) { if (sc.OriginalValue(name, v)) { PutKnob(field, v); } };
+        put("lod.pixelError", s.lodPixelError);
+        put("tessy.lodPixelError", s.tessyLodPixelError);
+        put("lod.chunkFactor", s.chunkLodFactor);
+        if (!render::g_shadowModeFromCli_game) { put("shadow.mode", s.shadowMode); }
+        put("csm.atlasRes", s.csmAtlasRes);
+        put("csm.filterMode", s.csm.filterMode);
+        put("sdsm.partitions", s.sdsmPartitions);
+        put("sdsm.cacheFrames", s.sdsmCacheFrames);
+        put("vsm.resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
+        put("vsm.smrtRayCount", s.smrtRayCount);
+        put("vsm.smrtSamplesPerRay", s.smrtSamplesPerRay);
+        put("vsm.localSmrtRayCount", s.localSmrtRayCount);
+        put("contact.enabled", s.contactEnabled);
+        put("contact.steps", s.contactSteps);
+        put("vsm.windRange", s.vsmWindRange);
+        put("shadow.localWindRange", s.localShadowWindRange);
+        put("gi.enabled", s.giEnabled);
+        put("gi.far", s.giFar);
+        put("gi.rays", s.giRays);
+        put("gi.divisor", s.giDivisor);
+        put("gi.farDivisor", s.giFarDivisor);
+        put("gi.rayDistance", s.giRayDistance);
+        put("skyVis.enabled", s.skyVisEnabled);
+        put("skyVis.rays", s.skyVisRays);
+        put("skyVis.filterRadius", s.skyVisFilterRadius);
+        put("skyVis.fogRays", s.skyVisFogRays);
+        put("render.reflectionSource", s.reflectionSource);
+        if (sc.OriginalValue("ssr.ueQuality", v))
+        {
+            ApplyUeSsrQualityPreset(s.ssrUe, static_cast<UeSsrQualityPreset>(static_cast<std::uint32_t>(std::lround(v))));
+        }
+        put("reflections.resolution", s.reflectionResolution);
+        put("rt.alphaMode", s.rtAlphaMode);
+        put("reflections.oceanResolution", s.oceanReflectionResolution);
+        put("ssr.waterNormalCascades", s.waterReflectionNormalCascades);
+        put("fog.gridPixels", s.fogGridPixels);
+        put("fog.gridZ", s.fogGridZ);
+        put("cloud.captureTexels", s.cloudCaptureTexels);
+        put("streaming.poolSizeMB", s.streamingPoolSizeMB);
+        put("streaming.mipBias", s.streamingMipBias);
+        put("dlss.mode", s.dlssMode);
+        put("aa.renderScale", s.renderScale);
+        put("aa.fxaa", s.fxaa);
+    }
+
     GraphicsSettingsSnapshot Capture(const Renderer& renderer, const Scene& scene,
                                      const SceneRenderSettings& settings)
     {
@@ -666,6 +733,7 @@ namespace
         s.tessySdsm = tessy::g_sdsm_game;
         s.tessyLod = tessy::g_lod_game;
         s.tessyLodPixelError = tessy::g_lodPixelError_game;
+        CaptureScalabilityOriginals(s);
         Sanitize(s);
         return s;
     }

@@ -11,6 +11,7 @@
 #include "app/GpuRequirements.h"
 #include "app/Shipping.h"
 #include "app/dist/Cook.h"
+#include "app/settings/Scalability.h" // --scalability-selftest
 #include "core/diagnostics/CrashHandler.h"
 #include "rendering/core/StreamlineSignature.h"
 
@@ -599,6 +600,12 @@ int WINAPI WinMain(
     // failed checks. No renderer.
     if (lpCmdLine && std::strstr(lpCmdLine, "--tod-selftest") != nullptr) {
         return astro::RunSelfTest();
+    }
+
+    // "--scalability-selftest" (docs/scalability_plan.md §8.1): the graphics levels' table and its control arms, no
+    // window. Verdict in the session log; exit code = failed checks.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--scalability-selftest") != nullptr) {
+        return settings::RunScalabilitySelfTest();
     }
 
     // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
@@ -1194,6 +1201,26 @@ int WINAPI WinMain(
             const char* end = value;
             while (*end && *end != ' ' && *end != '\t') { ++end; }
             g_bootDevTab.assign(value, end);
+        }
+        // "--scalability=low|medium|high|ultra|off": the graphics preset at boot, over what the player saved
+        // (docs/scalability_plan.md §4.5). Kept by Shipping's switch filter.
+        if (const std::string level = ExtractArgValue(lpCmdLine, "--scalability="); !level.empty()) {
+            std::string l = level;
+            for (char& c : l) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+            g_bootScalability = l == "low" ? 0 : l == "medium" ? 1 : l == "high" ? 2 : l == "ultra" ? 3 : l == "off" ? -1 :
+                                l == "auto" ? -3 : -2;
+            if (g_bootScalability == -2) {
+                LOG_WARNING(logging::LogCategory::App, "--scalability={}: low, medium, high, ultra, auto or off", level);
+            }
+        }
+        // "--settings-menu[=graphics|display]": the player's settings open at boot (see App.h).
+        if (std::strstr(lpCmdLine, "--settings-menu")) {
+            const std::string tab = ExtractArgValue(lpCmdLine, "--settings-menu=");
+            g_bootSettingsMenu = tab.empty() || tab.rfind("--", 0) == 0 ? "graphics" : tab;
+        }
+        // "--scalability-check": the graphics levels' gate in this process (see App.cpp g_scalabilityCheck).
+        if (std::strstr(lpCmdLine, "--scalability-check")) {
+            g_scalabilityCheck = true;
         }
         // "--mcp-port=<n>": serve the editor's MCP on that port (a script's editor beside the owner's, see App.h).
         if (const char* flag = std::strstr(lpCmdLine, "--mcp-port=")) {
@@ -1861,5 +1888,7 @@ int WINAPI WinMain(
     memtrace::Stop(); // App::Run stops it after the main loop; this catches a run that ended another way
     // A --mem-readout's failing series, else an --rt-audit's moved fields; 0 otherwise.
     const int memExit = memgate::ExitCode();
-    return memExit != 0 ? memExit : rtaudit::ExitCode();
+    if (memExit != 0) { return memExit; }
+    if (g_scalabilityCheckExit != 0) { return g_scalabilityCheckExit; } // --scalability-check's failed reads
+    return rtaudit::ExitCode();
 }

@@ -21,6 +21,8 @@ namespace
     constexpr const char* kAllowed[] = {
         "--window", "--level", "--log-level", "--user-dir",
         "--shot", "--shot-delay", "--cam-pos", "--cam-rot", "--wind-freeze", "--time", "--play", "--crash-selftest",
+        "--scalability", // the graphics preset (docs/scalability_plan.md §4.5): low, medium, high, ultra, off
+        "--settings-menu", // the settings screen open at boot, for the gates' --shot (§8.5)
     };
 }
 

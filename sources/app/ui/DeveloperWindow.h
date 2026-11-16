@@ -57,12 +57,14 @@ public:
 private:
     enum class Tab
     {
-        Frame, AntiAliasing, Visibility, Reflections, Gi, Fog, Sky,
+        Scalability, Frame, AntiAliasing, Visibility, Reflections, Gi, Fog, Sky,
         Debug, Lod, Csm, Contact, Vsm, Tessy, Physics, Streaming, Memory, Bindings
     };
     struct TabEntry { Tab tab; const char* label; };
     // The navigation list, in its order: Draw's and OpenTab's one table.
-    static const TabEntry kTabs[17];
+    static const TabEntry kTabs[18];
+    // The graphics levels (docs/scalability_plan.md §4.5): the levels of the groups, the knobs each sets, the last apply.
+    void DrawScalabilityTab();
     Tab activeTab_ = Tab::Frame;
 
     void RefreshLevelList();

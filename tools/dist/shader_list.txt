@@ -180,6 +180,14 @@ shaders/rt_sky_visibility_cs.hlsl|CSFilterHistory|cs|
 shaders/rt_sky_visibility_cs.hlsl|CSTrace|cs|
 shaders/rt_trace_cs.hlsl|CSMain|cs|
 shaders/rt_wind_deform_cs.hlsl|CSMain|cs|
+shaders/sdsm_analyze_cs.hlsl|CarryFrustums|cs|
+shaders/sdsm_analyze_cs.hlsl|ClearBounds|cs|
+shaders/sdsm_analyze_cs.hlsl|Finalize|cs|
+shaders/sdsm_analyze_cs.hlsl|LogPartitions|cs|
+shaders/sdsm_analyze_cs.hlsl|ReduceBounds|cs|
+shaders/sdsm_analyze_cs.hlsl|ReduceZBounds|cs|
+shaders/sdsm_evsm_blur_cs.hlsl|CSMain|cs|
+shaders/sdsm_evsm_cs.hlsl|CSMain|cs|
 shaders/shadow_args_compact_cs.hlsl|CSMain|cs|
 shaders/shadow_cull_clear_cs.hlsl|CSMain|cs|
 shaders/shadow_cull_cs.hlsl|CSMain|cs|
@@ -231,6 +239,9 @@ shaders/sky_lut_transmittance_cs.hlsl|CSMain|cs|
 shaders/sky_lut_view_cs.hlsl|CSMain|cs|
 shaders/sky_moon_cs.hlsl|CSMain|cs|
 shaders/sky_night_cs.hlsl|CSMain|cs|
+shaders/sky_occlusion_cs.hlsl|CSReduceFar|cs|SKYOCC_PASS=1
+shaders/sky_occlusion_cs.hlsl|CSReduce|cs|SKYOCC_PASS=0
+shaders/sky_occlusion_cs.hlsl|CSTrace|cs|SKYOCC_PASS=2
 shaders/skybox.hlsl|PSMain|ps|
 shaders/skybox.hlsl|VSMain|vs|
 shaders/spotlight_cs.hlsl|CSMain|cs|

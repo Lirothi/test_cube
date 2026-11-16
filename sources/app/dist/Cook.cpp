@@ -185,7 +185,7 @@ namespace
         {
             if (StartsWith(path, prefix)) { return true; }
         }
-        return path == "graphics_settings.json" || path == "imgui.ini" || path == "editor_state.json";
+        return path == "graphics_settings.json" || path == "imgui.ini" || path == "editor_state.json" || path == "user_settings.json";
     }
 
     struct Profile

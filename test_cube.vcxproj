@@ -356,6 +356,8 @@
     </ClCompile>
     <ClCompile Include="sources/app/GpuRequirements.cpp" />
     <ClCompile Include="sources/app/Shipping.cpp" />
+    <ClCompile Include="sources/app/settings/Scalability.cpp" />
+    <ClCompile Include="sources/app/ui/GameSettingsMenu.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/editor/EditorController.cpp" />
     <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp" />
@@ -643,6 +645,8 @@
     <ClInclude Include="sources/app/BuildVersion.h" />
     <ClInclude Include="sources/app/GpuRequirements.h" />
     <ClInclude Include="sources/app/Shipping.h" />
+    <ClInclude Include="sources/app/settings/Scalability.h" />
+    <ClInclude Include="sources/app/ui/GameSettingsMenu.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorSelection.h" />

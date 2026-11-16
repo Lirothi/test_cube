@@ -787,6 +787,83 @@ distribution: packages, our file system over packages and direct paths, encrypti
   Release only at the SAME settings: dev reads the developer's own `graphics_settings.json`, Shipping the committed
   defaults (vsync alone moved 20 % of the pixels through DLSS's jitter phase).
 
+## Graphics Scalability -- Groups, Levels, the Player's Settings
+
+2026-11-13 (owner: "scalability as UE has it -- categories with their levels, and above them low / medium / high / ultra;
+a graphics menu for the release"; then "do the plan"; docs/scalability_plan.md). `sources/app/settings/Scalability.*`, the
+table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.*`.
+
+- **The table is data**: 9 groups (viewDistance, shadows, gi, reflections, water, volumetrics, postProcess, textures,
+  effects) x Low / Medium / High / Ultra; a cell maps `--set` names (ApplySweepValue -- one name table) to a number, to
+  "level" (the level's own value) or to {"max": n} / {"min": n} (a ceiling / floor over it -- only on a knob the LEVEL sets).
+  `Scalability.cpp kKnobs` lists the knobs a table may name, whether the level sets each, and its cost class (L next frame,
+  R render targets, I an idle-GPU reconcile). The render resolution (`sg.resolution`: the DLSS mode Performance / Balanced /
+  Quality / DLAA, or without DLSS `aa.renderScale` 0.5 / 0.67 / 0.77 / 1 + `aa.fxaa`) is a choice of its own: a preset does
+  not move it. The validator (at load and in the gate; a field of the wrong type is an error, not a crash): a known knob,
+  the SAME keys at every level of a group (no sticky key), a key in one group, a ceiling only on a level's knob. A knob
+  that would be the same at every level stays out of the table (it would only override the settings file). A new knob: its
+  `--set` name, its reader in App.cpp `ReadSweepValue`, its row in kKnobs.
+- **NEVER WRITE A CAP INTO A STRUCT THE EDITOR SAVES** (review, 2026-11-14): the boats' spray was capped through the ocean's
+  `OceanRenderConfig`, which `LevelDocumentSerializer` writes into the level -- a Ctrl+S at Low would have saved wind_test's
+  spray as 0.35 / 0. It is a runtime ceiling now (`spray.rateMax` / `spray.mistMax`, `vfx::g_sprayRateMax`, Scene::Sync
+  takes the smaller). The clouds, fog, GTAO, bloom and the sun are saved from the document, not from the scene: their
+  ceilings are safe. And a ceiling on a count must cap its partner too: the cloud march takes at least
+  `viewSampleCountMin` (wind_test 64) whatever the max says, so Low caps the min as well.
+- **Ultra = today** (`--scalability-check`: 0 knobs differ from the boot's values). Nothing saved and nothing asked = not
+  managed: no knob is touched (a dev build's picture stays the developer's graphics_settings.json). A group or the
+  resolution set back to not managed (`-1`, the tab's Not managed, the menu's Cancel) puts its knobs back: a project knob to
+  its value before scalability first wrote it, a level's knob to the level's value -- the gate checks every knob against the
+  start. A Developer Controls autosave while groups are managed stores those knobs' pre-scalability values
+  (GraphicsSettings.cpp CaptureScalabilityOriginals): a preset never becomes the developer's own file. (A `--set` / MCP
+  value still does on the next UI edit, as before.)
+- **Layers**: compiled < graphics_settings.json (a packaged build: the package's defaults) < the level < scalability <
+  `--set` / MCP. A knob `--set`, MCP set_settings, `--sweep`, `--shadow-mode` or `--dlss` set is PINNED for the process
+  (UE's SetByScalability is the weakest priority); `sg.unpin:1` forgets the pins. After a level load the ceilings are applied
+  again (OnContentReloaded); after an editor environment edit the edited type's knobs are re-based on the document's values
+  (an Inspector that unticks GTAO at Low writes the 0 the ceiling wrote: without that, Medium turned it back on) and the
+  ceilings re-applied quietly (EnvironmentRuntime::Apply).
+- **One target recreation per apply** (`Renderer::BeginTargetBatch` / `EndTargetBatch`: the reflection scales, the DLSS
+  mode and the render scale in one batch; the fog grid's two knobs in one at BeginFrame): Ultra -> Low stalled 162 ms with
+  every target knob recreating on its own, now 94 ms with 1 recreation; any other apply ~75 ms.
+- **Switches**: `--scalability=low|medium|high|ultra|auto|off` (Shipping keeps it), `--set sg.<group>:0..3` / `sg.all` /
+  `sg.resolution` (-1 = not managed; TRANSIENT, never saved), `sg.reload:1` (the table again), `scalability.autodetect:1`,
+  `scalability.gpuTimeScale:<x>`; MCP get_readouts block `scalability`; Developer Controls > Scalability (the levels, each
+  knob's table value against its value now, the pins, the last apply; a choice there IS saved).
+- **The player's file** `user_settings.json` (vfs::WritablePath(Settings): the repo root in dev, gitignored;
+  `<user>\settings\` packaged), sections `scalability`, `display` (vsync, maxFps), `autodetect`. Written by the menu's Done,
+  the Developer Controls tab and a packaged build's first-start auto-detect -- never by `--set sg.*`, MCP or
+  `--scalability=auto` in dev. A dev test that saves one (the tab, the menu's Done) must DELETE it after: it is applied at
+  every later boot. `record_shaders.py`'s plain arms pass `--scalability=off` against one left behind.
+- **Auto-detect** (§5): the real frame -- High at Balanced, 60 frames and 5 s to settle (1 s for the next levels), the
+  median of the GPU frame's OWN times over 3 s (the profiler's `OverlaySample::lastMs`; its `avgMs` is an EMA of 0.997 a
+  frame, ~333 frames to settle, and measured a level as a blend with the one before -- Medium 3.55 instead of 3.2 ms, the
+  reviews of 2026-11-14); within 0.6 of the budget (60 fps less 30 %, 11.7 ms) Ultra is tried, over it Medium, Low, then the
+  resolution down; under 6 / 4 GB of VRAM the textures stay at Medium / Low; one frame over 1 s stops it at Medium. A
+  packaged build runs it at its first start and when the GPU (its name -- a driver update keeps the player's levels)
+  changed, and saves it; `--scalability=auto` (saved only packaged), MCP `scalability.autodetect:1` and the menu's button
+  (kept by Done, dropped by Cancel, which also stops a measurement) do not save. This machine (RTX 4090): Ultra (High 4.25,
+  Ultra 4.56 ms); `gpuTimeScale:4`: Low (High 16.9, Medium 12.9, Low 9.9).
+- **The menu**: the Esc menu's Settings in a packaged build; `--settings-menu[=graphics|display]` opens it in any build
+  without the editor (Release too) for a `--shot` (Esc cancels it there too). Graphics: Auto-detect, Quality (Custom while
+  the groups differ), Render resolution, the groups with their hints ("*" = a change pauses: targets rebuilt or shadows
+  reconciled); Display: VSync, the frame-rate limit. Applied at once behind the menu; Done saves, Cancel / Esc put back
+  what was there (not-managed groups included); Done waits while auto-detect measures.
+- **Cost** (wind_test's start view, 18:00, 1440p DLSS Balanced, the GPU frame, two runs each): today 3.99-4.07, Ultra
+  4.03-4.09, High 3.81, Medium 3.25, Low 2.44-2.47 ms. A preset takes 6-40 % off; the render resolution, the player's own
+  choice, is the larger lever. High's first cut (UE High's VSM bias 0, solid foliage in RT) cost MORE than Ultra here:
+  measure a cell before believing it.
+- **Gates**: `--scalability-selftest` (no window: the table parses and validates; the control arms -- a misspelt knob, a
+  sticky key, a knob in two groups, a ceiling on a project knob, a level missing -- each refused; the ceilings through
+  Apply: Low, Ultra gives the level's value back, a level edited to the ceiling's value keeps it, not managed puts a project
+  knob back); `--scalability-check` (the running game: every level of every group applied and read back, the level reloaded
+  at Low and the ceilings holding, then not managed again and every knob against the start -- 320 reads on wind_test; a
+  reload that never finishes FAILs after 3000 frames; exit = the failures).
+  `tools/dist/record_shaders.py` records per preset (Low / Medium add SDSM's and the sky occlusion map's permutations).
+- Not done (plan §9): S3 (anisotropy, foliage density, freeing class-A resources on a lower level), S4's overrides layer
+  and the dev file's migration, S6 (window modes, monitor, DPI), S7's Image and Controls tabs and the menu's own style. The
+  cost table above was measured before the 11-14 review fixes (Low's 4 shadow partitions and 4x4 filter, the clouds' min,
+  three constant knobs dropped).
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:

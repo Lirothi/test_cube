@@ -820,6 +820,12 @@ public:
                          ID3D12Resource* countBuffer = nullptr, UINT64 countOffset = 0);
 
     void SetReflectionTextureScale(Math::float2 scale);
+    // A batch of setters that each recreate the deferred targets (the graphics levels' apply, docs/scalability_plan.md
+    // §4.2: a reflection scale, the ocean's, the DLSS mode, the render scale): between Begin and End a recreation is only
+    // noted, and End recreates once if any was. Nests.
+    void BeginTargetBatch() { ++targetBatchDepth_; }
+    void EndTargetBatch();
+    int TargetRecreations() const { return targetRecreations_; } // since the start: the gate counts one per apply
     // Volumetric fog: the froxel cell size in render pixels (8 / 16 / 32). A change recreates the
     // deferred ring (GPU idle), exactly as a reflection-scale or DLSS-mode change does.
     void SetFogGridPixels(UINT pixels);
@@ -1058,6 +1064,9 @@ private:
     UINT reflectionTextureWidth_ = 1;
     UINT reflectionTextureHeight_ = 1;
     Math::float2 oceanReflectionTextureScale_ = Math::float2(0.5f, 0.5f);
+    int targetBatchDepth_ = 0;          // BeginTargetBatch / EndTargetBatch
+    bool targetBatchPending_ = false;   // a recreation noted inside the batch
+    int targetRecreations_ = 0;
     UINT oceanReflectionTextureWidth_ = 1;
     UINT oceanReflectionTextureHeight_ = 1;
 

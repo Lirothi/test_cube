@@ -2,6 +2,7 @@
 
 #include "app/GraphicsSettings.h"
 #include "app/ui/DeveloperWindow.h"
+#include "app/ui/GameSettingsMenu.h"
 #include "app/game/PlaySession.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
@@ -74,6 +75,7 @@ private:
     bool editorOpenBeforePlay_ = false;
     bool gameMenuOpen_ = false;              // Shipping's Esc menu
     std::vector<std::string> gameMenuLevels_; // listed the first time it opens: data/levels/*.json in the packages
+    GameSettingsMenu settingsMenu_;           // the menu's "Settings" (docs/scalability_plan.md §6); --settings-menu in any build
     std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
     std::wstring hudRaceLine_;
     std::wstring hudBigText_; // the race's countdown, in the middle of the screen

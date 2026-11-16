@@ -482,6 +482,7 @@ void Profiler::EndFrame() {
                 }
                 row.avgMs = entry.stats.avgMs;
                 row.maxMs = entry.stats.maxMs;
+                row.lastMs = entry.stats.lastMs;
                 row.usages = entry.stats.lastCount;
             }
         };
@@ -791,7 +792,7 @@ std::vector<Profiler::OverlaySample> Profiler::OverlaySnapshot() const {
     out.reserve(overlayRows_.size() + gpuOverlayRows_.size());
     auto addRows = [&](const auto& rows, bool gpu) {
         for (const auto& row : rows) {
-            out.push_back({ WideToUtf8(row.name), row.avgMs, row.maxMs, row.usages, gpu });
+            out.push_back({ WideToUtf8(row.name), row.avgMs, row.maxMs, row.usages, gpu, row.lastMs });
         }
     };
     addRows(overlayRows_, false);

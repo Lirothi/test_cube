@@ -1,6 +1,7 @@
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "rendering/lighting/Astronomy.h" // T3: Scene::SetSunToward solves the time of day
+#include "vfx/ParticleTypes.h" // the spray's runtime ceilings (vfx::g_sprayRateMax / g_sprayMistMax)
 
 #include <memory>
 #include <algorithm>
@@ -2327,8 +2328,8 @@ void Scene::Sync(Renderer* renderer)
         {
             const OceanRenderConfig& cfg = sim->GetRenderConfig();
             spray.enabled = cfg.sprayEnabled;
-            spray.rate = cfg.sprayRate;
-            spray.mist = cfg.sprayMist;
+            spray.rate = std::min(cfg.sprayRate, vfx::g_sprayRateMax); // the Effects group's ceilings (docs/scalability_plan.md)
+            spray.mist = std::min(cfg.sprayMist, vfx::g_sprayMistMax);
             spray.out = cfg.sprayOut;
             spray.up = cfg.sprayUp;
             spray.forward = cfg.sprayForward;

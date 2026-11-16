@@ -20,6 +20,8 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SkyOcclusionMap.h" // the sky-from-above map's ranges and coverage
+#include "app/settings/Scalability.h"  // the Scalability tab
+#include "core/logging/Log.h"
 #include "core/profiling/ProfilerScopes.h"
 #if WITH_EDITOR
 #include "editor/EditorController.h"
@@ -249,8 +251,8 @@ void DeveloperWindow::RefreshLevelList()
     }
 }
 
-const DeveloperWindow::TabEntry DeveloperWindow::kTabs[17] = {
-    { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
+const DeveloperWindow::TabEntry DeveloperWindow::kTabs[18] = {
+    { Tab::Scalability, "Scalability" }, { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
     { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" }, { Tab::Gi, "GI" },
     { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
     { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
@@ -279,6 +281,136 @@ bool DeveloperWindow::OpenTab(const std::string& label)
 void DeveloperWindow::ToggleTextureInspector()
 {
     textureDebugViewer_.SetOpen(!textureDebugViewer_.IsOpen());
+}
+
+void DeveloperWindow::DrawScalabilityTab()
+{
+    settings::Scalability& s = settings::TheScalability();
+    ImGui::TextWrapped("Graphics levels (docs/scalability_plan.md): each group's knobs at Low / Medium / High / Ultra, from %s. "
+                       "Ultra is today's picture; a knob the level sets is never raised above the level's own value. A choice "
+                       "here is applied at once and saved in %s; 'Not managed' leaves the knobs as the settings file has them.",
+                       settings::Scalability::kTablePath, settings::Scalability::kUserFile);
+    if (ImGui::SmallButton("Reload table"))
+    {
+        s.LoadTable();
+        s.LoadUser();
+        s.Apply("Developer Controls: table reloaded");
+    }
+    if (!s.Loaded())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "The table did not load:");
+        for (const std::string& e : s.TableErrors()) { ImGui::BulletText("%s", e.c_str()); }
+        return;
+    }
+    const settings::ScalabilityTable& table = s.Table();
+    bool changed = false;
+    const auto levelCombo = [&](const char* label, int current, const std::array<std::string, settings::kScalabilityLevels>& names,
+                                const char* customName) -> int
+    {
+        const std::string preview = current >= 0 ? names[static_cast<std::size_t>(current)] : current == -1 && customName ? customName : "Not managed";
+        int chosen = current;
+        if (ImGui::BeginCombo(label, preview.c_str()))
+        {
+            if (ImGui::Selectable("Not managed", current < -1 || (current == -1 && !customName))) { chosen = customName ? -2 : -1; }
+            for (int i = 0; i < settings::kScalabilityLevels; ++i)
+            {
+                if (ImGui::Selectable(names[static_cast<std::size_t>(i)].c_str(), current == i)) { chosen = i; }
+            }
+            ImGui::EndCombo();
+        }
+        return chosen;
+    };
+    const int preset = s.Preset();
+    const int newPreset = levelCombo("Preset", preset, table.levelNames, "Custom");
+    if (newPreset != preset)
+    {
+        s.SetPreset(newPreset >= 0 ? newPreset : -1);
+        changed = true;
+    }
+    std::array<std::string, settings::kScalabilityLevels> resolutionNames = table.levelNames;
+    for (int i = 0; i < settings::kScalabilityLevels; ++i)
+    {
+        if (!table.resolutionLevelLabels[static_cast<std::size_t>(i)].empty())
+        {
+            resolutionNames[static_cast<std::size_t>(i)] = table.levelNames[static_cast<std::size_t>(i)] + " (" +
+                                                           table.resolutionLevelLabels[static_cast<std::size_t>(i)] + ")";
+        }
+    }
+    const int resolution = s.ResolutionLevel();
+    const int newResolution = levelCombo(table.resolutionLabel.c_str(), resolution, resolutionNames, nullptr);
+    if (newResolution != resolution)
+    {
+        s.SetResolutionLevel(newResolution);
+        changed = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s)", s.DlssAvailable() ? "DLSS" : "no DLSS: render scale + FXAA");
+    ImGui::Separator();
+    for (std::size_t g = 0; g < table.groups.size(); ++g)
+    {
+        const settings::ScalabilityGroup& group = table.groups[g];
+        std::array<std::string, settings::kScalabilityLevels> names = table.levelNames;
+        for (int i = 0; i < settings::kScalabilityLevels; ++i)
+        {
+            if (!group.levelLabels[static_cast<std::size_t>(i)].empty()) { names[static_cast<std::size_t>(i)] = group.levelLabels[static_cast<std::size_t>(i)]; }
+        }
+        const int level = s.GroupLevel(static_cast<int>(g));
+        ImGui::PushID(static_cast<int>(g));
+        const int newLevel = levelCombo(("sg." + group.key).c_str(), level, names, nullptr);
+        if (newLevel != level)
+        {
+            s.SetGroupLevel(static_cast<int>(g), newLevel);
+            changed = true;
+        }
+        if (ImGui::IsItemHovered() && !group.hint.empty()) { ImGui::SetTooltip("%s: %s", group.label.c_str(), group.hint.c_str()); }
+        ImGui::SameLine();
+        if (ImGui::TreeNode("knobs", "%s", group.label.c_str()))
+        {
+            // The knobs of the group at its level (Ultra when not managed): what the table asks, what the knob holds.
+            const int shown = level >= 0 ? level : settings::kScalabilityLevels - 1;
+            for (const auto& [name, op] : group.levels[static_cast<std::size_t>(shown)])
+            {
+                float current = 0.0f, target = 0.0f;
+                const bool read = s.Read(name, current);
+                const bool hasTarget = s.Target(name, op, target);
+                const bool pinned = s.Pins().count(name) != 0;
+                const bool differs = read && hasTarget && std::abs(current - target) > 1e-4f * std::max(1.0f, std::abs(target));
+                const char* opText = op.kind == settings::ScalabilityOp::Kind::Max ? "max " : op.kind == settings::ScalabilityOp::Kind::Min ? "min " :
+                                     op.kind == settings::ScalabilityOp::Kind::Level ? "level" : "";
+                char line[256];
+                if (op.kind == settings::ScalabilityOp::Kind::Level)
+                {
+                    std::snprintf(line, sizeof(line), "%-34s table: level        now %g%s", name.c_str(), static_cast<double>(current), pinned ? "  (pinned by --set/MCP)" : "");
+                }
+                else
+                {
+                    std::snprintf(line, sizeof(line), "%-34s table: %s%-8g  now %g%s", name.c_str(), opText, static_cast<double>(op.value),
+                                  static_cast<double>(current), pinned ? "  (pinned by --set/MCP)" : "");
+                }
+                if (differs && level >= 0) { ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", line); }
+                else { ImGui::TextUnformatted(line); }
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    if (!s.Pins().empty())
+    {
+        std::string pins;
+        for (const std::string& p : s.Pins()) { pins += (pins.empty() ? "" : ", ") + p; }
+        ImGui::TextWrapped("Pinned by --set / MCP (left alone): %s", pins.c_str());
+        if (ImGui::SmallButton("Unpin")) { s.ClearPins(); changed = true; }
+    }
+    const settings::ScalabilityReport& r = s.LastReport();
+    ImGui::TextWrapped("Last apply (%s): %d knob(s) changed, %d pinned, %d failed; render targets %d, idle reconciles %d; %.2f ms",
+                       r.reason.c_str(), r.keysWritten, r.keysPinned, r.keysFailed, r.targetChanges, r.idleChanges, r.ms);
+    if (changed)
+    {
+        s.Apply("Developer Controls");
+        std::string why;
+        if (!s.SaveUser(why)) { LOG_WARNING(logging::LogCategory::App, "scalability: not saved: {}", why); }
+    }
 }
 
 void DeveloperWindow::DrawTraceControls()
@@ -603,6 +735,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             ImGuiWindowFlags_HorizontalScrollbar))
         {
             ImGui::PushItemWidth(ImGui::CalcItemWidth() * 0.70f);
+            if (activeTab_ == Tab::Scalability)
+            {
+                DrawScalabilityTab();
+            }
             if (activeTab_ == Tab::Frame)
             {
                 const float fps = renderer.GetFPS();

@@ -2,7 +2,7 @@
 """Distribution plan D4 (docs/distribution_build_plan.md §5 item 3): record the shader permutations a shipped build asks for.
 
 Runs the Release exe (the Shipping defines: no WITH_EDITOR) over every level and every arm -- time of day, window size,
-DLSS mode, Play -- with --shader-model=6.6 (the shipped target) and --shader-record / --vfs-record, then merges the
+DLSS mode, Play, the graphics presets -- with --shader-model=6.6 (the shipped target) and --shader-record / --vfs-record, then merges the
 records into tools/dist/shader_list.txt (what --shader-cook compiles) and tools/dist/vfs_record.txt (every content file
 the runs opened: what the cook's static walk misses -- files named only in code). Both lists are sorted; the script
 prints what changed against the committed ones, so an update is reviewed, not taken blindly.
@@ -21,12 +21,21 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 ARMS = [
-    ("day 1440p", ["--time=15:00", "--window=2560x1440"]),
-    ("night 1440p", ["--time=00:00", "--window=2560x1440"]),
-    ("twilight DLAA", ["--time=19:30", "--dlss=dlaa"]),
-    ("day 1080p no DLSS", ["--time=15:00", "--window=1920x1080", "--dlss=off"]),
-    ("day 4K", ["--time=15:00", "--window=3840x2160"]),
-    ("Play", ["--time=15:00", "--play"]),
+    # "--scalability=off": the build's own settings, whatever a developer's user_settings.json (the repo root) says.
+    ("day 1440p", ["--time=15:00", "--window=2560x1440", "--scalability=off"]),
+    ("night 1440p", ["--time=00:00", "--window=2560x1440", "--scalability=off"]),
+    ("twilight DLAA", ["--time=19:30", "--dlss=dlaa", "--scalability=off"]),
+    ("day 1080p no DLSS", ["--time=15:00", "--window=1920x1080", "--dlss=off", "--scalability=off"]),
+    ("day 4K", ["--time=15:00", "--window=3840x2160", "--scalability=off"]),
+    ("Play", ["--time=15:00", "--play", "--scalability=off"]),
+    # The graphics presets (docs/scalability_plan.md §8.6): Low and Medium run other passes -- SDSM, the bloom pyramid, SSR,
+    # the sky occlusion map, no GI --, High a few other knobs; FXAA is the no-DLSS resolution road's.
+    ("Low day", ["--time=15:00", "--scalability=low"]),
+    ("Low night", ["--time=00:00", "--scalability=low"]),
+    ("Low no DLSS + FXAA", ["--time=15:00", "--scalability=low", "--dlss=off", "--set=aa.fxaa:1"]),
+    ("Medium day", ["--time=15:00", "--scalability=medium"]),
+    ("Medium night", ["--time=00:00", "--scalability=medium"]),
+    ("High day", ["--time=15:00", "--scalability=high"]),
 ]
 
 

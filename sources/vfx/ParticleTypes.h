@@ -10,6 +10,15 @@ namespace vfx
 // Debug: freeze every particle sim (Tick accumulation and GPU dispatches stop; state persists).
 inline bool g_freeze = false;
 
+// UE's r.EmitterSpawnRateScale (`--set particles.spawnScale`, the Effects group of docs/scalability_plan.md): every
+// emitter's spawn rate times this. Read where the spawn is accumulated, in the game half's Tick: no render copy.
+inline float g_spawnScale = 1.0f;
+// The boats' spray, capped at runtime by the Effects group (`--set spray.rateMax / spray.mistMax`): the ocean's own
+// sprayRate / sprayMist stay as the level has them (the editor saves that config), Scene::Sync drives the emitters with the
+// smaller. 1 and 4 = the ranges' tops: no cap.
+inline float g_sprayRateMax = 1.0f;
+inline float g_sprayMistMax = 4.0f;
+
 // A/B, transient (`--set particles.airFromFog:1`): a lit particle takes the air's light from the height fog's colour, as
 // before 2026-11-09, instead of the sky's irradiance cube (DrawParams.skyIrradianceScale).
 inline bool g_litAirFromFog = false;

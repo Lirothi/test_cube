@@ -184,6 +184,13 @@ extern std::atomic<bool> g_modelBusyBackground;
 // make every "no intentional image delta" check downstream diff the frame counter instead of the
 // image. Off by default: the HUD is what makes an exploratory shot carry its own camera.
 extern bool g_hudHidden;
+// "--scalability=<level>" (main.cpp): the graphics preset at boot, 0..3 = Low..Ultra, -1 = off, -2 = not given, -3 = auto.
+extern int g_bootScalability;
+// "--scalability-check": the graphics levels' gate in a running process (App.cpp).
+extern bool g_scalabilityCheck;
+extern int g_scalabilityCheckExit;
+// "--settings-menu[=graphics|display]": the player's settings screen open at boot on that tab, for a --shot (§8.5).
+extern std::string g_bootSettingsMenu;
 
 class App {
 public:

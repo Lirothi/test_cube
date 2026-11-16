@@ -61,6 +61,7 @@ public:
         // Metrics
         double   avgMs = 0.0;   // EMA
         double   maxMs = 0.0;   // reset by cooldown
+        double   lastMs = 0.0;  // the last committed frame's sum (the auto-detect's sample: the EMA lags ~333 frames)
         uint32_t lastCount = 0; // how many times the scope appeared last frame
 
         void Accumulate(double ms) {
@@ -71,6 +72,7 @@ public:
             if (frameCount == 0) { lastCount = 0; return; }
             const double cur = frameMsSum;
             maxMs = (std::max)(maxMs, cur);
+            lastMs = cur;
             if (avgMs <= 0.0) { avgMs = cur; }
             else { avgMs = avgMs * emaAlpha + cur * (1.0 - emaAlpha); }
             lastCount = frameCount;
@@ -144,6 +146,7 @@ public:
         uint32_t entryId = 0;
         double   avgMs = 0.0;
         double   maxMs = 0.0;
+        double   lastMs = 0.0;
         uint32_t usages = 0;
         std::wstring name;
         std::wstring formatted; // HUD cache only; numeric snapshots never format text
@@ -265,6 +268,7 @@ public:
         double maxMs = 0.0; // since the last ResetMaxNow / cooldown
         uint32_t usages = 0;
         bool gpu = false;
+        double lastMs = 0.0; // the last committed frame's (no smoothing)
     };
     std::vector<OverlaySample> OverlaySnapshot() const;
 

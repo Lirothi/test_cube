@@ -55,6 +55,9 @@
     <Filter Include="sources\app\game">
       <UniqueIdentifier>{c2afbd32-4240-4f92-903d-a566cb3727fc}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\settings">
+      <UniqueIdentifier>{6a1f3e2b-9c4d-4f7a-b8e1-5d2c7a9e3f10}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\camera">
       <UniqueIdentifier>{8d2abf54-69b6-4d38-8341-5ef5780f5d74}</UniqueIdentifier>
     </Filter>
@@ -233,6 +236,12 @@
     </ClCompile>
     <ClCompile Include="sources/app/Shipping.cpp">
       <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/Scalability.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/GameSettingsMenu.cpp">
+      <Filter>sources\app\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/AppController.cpp">
       <Filter>sources\app</Filter>
@@ -970,6 +979,12 @@
     </ClInclude>
     <ClInclude Include="sources/app/Shipping.h">
       <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/settings/Scalability.h">
+      <Filter>sources\app\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/ui/GameSettingsMenu.h">
+      <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/AppController.h">
       <Filter>sources\app</Filter>

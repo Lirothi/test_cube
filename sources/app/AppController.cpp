@@ -109,10 +109,15 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         if (!developerWindow_.OpenTab(g_bootDevTab)) // once, like --mem-window
         {
             LOG_WARNING(logging::LogCategory::App, "--dev-tab={}: no Developer Controls tab has that label "
-                        "(Frame, AA / Scale, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
-                        "Streaming, Memory, Bindings)", g_bootDevTab);
+                        "(Scalability, Frame, AA / Scale, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
+                        "Tessy, Physics, Streaming, Memory, Bindings)", g_bootDevTab);
         }
         g_bootDevTab.clear();
+    }
+    if (!g_bootSettingsMenu.empty())
+    {
+        settingsMenu_.OpenTab(g_bootSettingsMenu); // once: "--settings-menu[=<tab>]" for a headless capture
+        g_bootSettingsMenu.clear();
     }
 #if WITH_EDITOR
     if (g_bootEditor)
@@ -281,7 +286,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #if WITH_EDITOR
         const bool panelsOpen = editorController_.IsOpen() || developerWindow_.AnyWindowOpen() || raceResults;
 #else
-        const bool panelsOpen = developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_;
+        const bool panelsOpen = developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_ || settingsMenu_.IsOpen();
 #endif
         if (!panelsOpen && io.WantCaptureKeyboard)
         {
@@ -402,15 +407,23 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 #if TC_PACKAGED
     // Esc is the game's menu here, on foot, at a helm or with the camera free; the mouse is the menu's while it is up and
     // the game's again when Esc or Continue closes it.
-    if (escape)
+    if (escape && settingsMenu_.IsOpen())
+    {
+        settingsMenu_.Cancel(); // Esc on the settings: back to the menu, nothing kept
+    }
+    else if (escape)
     {
         gameMenuOpen_ = !gameMenuOpen_;
         if (playSession_.Playing()) { playSession_.SetMouseFree(gameMenuOpen_); }
     }
-    else if (gameMenuOpen_ && playSession_.Playing())
+    else if ((gameMenuOpen_ || settingsMenu_.IsOpen()) && playSession_.Playing())
     {
         playSession_.SetMouseFree(true);
     }
+#else
+    // A build without the packages' menu opens the settings only by --settings-menu: Esc cancels them, the mouse is theirs.
+    if (escape && settingsMenu_.IsOpen()) { settingsMenu_.Cancel(); }
+    else if (settingsMenu_.IsOpen() && playSession_.Playing()) { playSession_.SetMouseFree(true); }
 #endif
 #endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
@@ -423,6 +436,12 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 
 void AppController::DrawGameMenu(LevelManager& levelManager)
 {
+    // The settings screen covers the menu while it is open (in a dev build only --settings-menu opens it).
+    if (settingsMenu_.IsOpen())
+    {
+        settingsMenu_.Draw();
+        return;
+    }
 #if TC_PACKAGED
     // The levels are the packages' (the cook puts in only the profile's): data/levels/*.json, read once.
     if (!gameMenuOpen_) { return; }
@@ -444,6 +463,7 @@ void AppController::DrawGameMenu(LevelManager& levelManager)
         gameMenuOpen_ = false;
         if (playSession_.Playing()) { playSession_.SetMouseFree(false); }
     }
+    if (ImGui::Button("Settings", button)) { settingsMenu_.Open(); }
     ImGui::SeparatorText("Levels");
     std::string current(levelManager.GetActiveLevelSourcePath());
     std::replace(current.begin(), current.end(), '\\', '/');
