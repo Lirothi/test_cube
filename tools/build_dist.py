@@ -2,9 +2,9 @@
 r"""The distribution build -- docs/distribution_build_plan.md §8.2, §8.3. One command from the tree to
 dist/<Product>-<version>/ (and its zip), the same for the console, the editor's Build Distribution window and MCP.
 
-    python tools/build_dist.py --profile=test                    # content: cook + the folder, Shipping exe as built
+    python tools/build_dist.py --profile=test                    # content: Cook up to date, cook + the folder, Shipping exe as built
     python tools/build_dist.py --profile=release --mode=full     # MSBuild Cook + Shipping, cook, folder, zip, symbols
-    python tools/build_dist.py --profile=test --mode=check       # the dependency walk and its report, nothing built
+    python tools/build_dist.py --profile=test --mode=check       # Cook up to date, the dependency walk and its report
     python tools/build_dist.py --profile=test --mode=record      # Release record runs -> shader_list.txt / vfs_record.txt
 
     --levels=a.json,b.json  --boot-level=a.json  --version=1.2.3  --no-encrypt
@@ -18,7 +18,8 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
                             the whole command line; x64/Development, the folder <product>-<version>-dev, its PDB beside the
                             exe, never encrypted, the profile's "devInclude" cooked too). Default: the profile's "flavour",
                             else shipping.
-    --skip-build            content/full: take the exes as they are
+    --skip-build            take the exes as they are: check/content do not bring x64/Cook up to date (an incremental
+                            MSBuild, 0.5 s when nothing changed), full builds neither Cook nor the game's exe
     --key=<key.json>        the package key (default %USERPROFILE%\.test_cube\pak_key.json; made there if missing)
     --out=<folder>          instead of the profile's "out" (dist)
     --progress=json         one JSON object a line on stdout: {"stage", "fraction", "message", "level", ...}
@@ -557,8 +558,16 @@ def build(args, progress):
         if args.mode in ("full",) and not args.skip_build:
             progress.begin("build", f"MSBuild Cook (version {version_text})")
             msbuild("Cook", progress, logs, generated)
-        elif not cook_exe.exists():
-            raise BuildError(f"no {cook_exe}: build the Cook configuration (or --mode=full)")
+        elif args.mode in ("check", "content") and not args.skip_build:
+            # The cook as the tree has it NOW (owner, 2026-11-17): a check or a content build took x64/Cook as it lay, and
+            # one from before the last change to the cook ran the old code -- a new switch unknown (--override-licences: its
+            # 4 licence errors stayed), a rule the tree had changed still applied. Incremental, with the tree's own (dev)
+            # headers: 0.5 s when nothing changed; the first one after a full build recompiles the stamped version files and
+            # links (~20 s). The game's exe stays as built (content's "as built" is the point of that mode).
+            progress.begin("build", "MSBuild Cook (incremental: the cook as the tree has it)")
+            msbuild("Cook", progress, logs)
+        if not cook_exe.exists():
+            raise BuildError(f"no {cook_exe}: build the Cook configuration (or drop --skip-build)")
 
         if args.mode == "check":
             progress.begin("cook", "the dependency walk (--cook-check)")

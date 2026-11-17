@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <intrin.h> // __cpuid: the CPU's brand string for the auto-detect's system identity
 #include <filesystem>
 #include <optional> // the main thread's "Whole Cycle" held across the loop's turn (render thread, plan G8)
 #include <thread>
@@ -2201,8 +2202,8 @@ namespace
     // Levels the loop has finished loading (loadPendingLevel), so the scalability check knows when a reload is in.
     int g_levelLoadsCompleted = 0;
 
-    // The adapter as the auto-detect remembers it: its name and the user-mode driver's version (a new GPU or driver
-    // measures again), and its own memory.
+    // The adapter as the auto-detect remembers it: its name and the user-mode driver's version (only the name is compared:
+    // a new GPU measures again, a driver update keeps the player's levels), and its own memory.
     std::string GpuIdentity(ID3D12Device* device, std::uint64_t& vramBytes)
     {
         DXGI_ADAPTER_DESC1 desc{};
@@ -2221,6 +2222,30 @@ namespace
         std::snprintf(driver, sizeof(driver), "%u.%u.%u.%u", HIWORD(umd.HighPart), LOWORD(umd.HighPart),
                       HIWORD(umd.LowPart), LOWORD(umd.LowPart));
         return vfs::Narrow(desc.Description) + " / " + driver;
+    }
+
+    // The machine beside its GPU (owner, 2026-11-17: "auto-detect forced at the first start of a build on a new system"):
+    // the CPU's brand string and the installed memory. A settings folder carried to another computer with the same graphics
+    // card measures again there; a driver update still keeps the player's levels.
+    std::string SystemIdentity()
+    {
+        int regs[4]{};
+        char brand[49]{};
+        __cpuid(regs, static_cast<int>(0x80000000u));
+        if (static_cast<unsigned>(regs[0]) >= 0x80000004u)
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                __cpuid(regs, static_cast<int>(0x80000002u + static_cast<unsigned>(i)));
+                std::memcpy(brand + 16 * i, regs, sizeof(regs));
+            }
+        }
+        std::string cpu(brand);
+        const std::size_t first = cpu.find_first_not_of(' ');
+        cpu = first == std::string::npos ? std::string("unknown CPU") : cpu.substr(first, cpu.find_last_not_of(' ') - first + 1);
+        ULONGLONG installedKb = 0;
+        const unsigned long long gb = GetPhysicallyInstalledSystemMemory(&installedKb) ? (installedKb + 512ull * 1024ull) / (1024ull * 1024ull) : 0ull;
+        return cpu + " / " + std::to_string(gb) + " GB";
     }
 
     // Auto-detect (docs/scalability_plan.md §5): the real frame, not a synthetic benchmark. High at a Balanced render
@@ -2273,7 +2298,7 @@ namespace
             s.Apply("auto-detect: " + why);
             std::string error;
             if (s.AutodetectSaves() && !s.SaveUser(error)) { LOG_WARNING(logging::LogCategory::App, "auto-detect: not saved: {}", error); }
-            nlohmann::json record = { { "gpu", gpu }, { "vramGB", std::round(gb * 10.0) / 10.0 }, { "preset", preset },
+            nlohmann::json record = { { "gpu", gpu }, { "system", SystemIdentity() }, { "vramGB", std::round(gb * 10.0) / 10.0 }, { "preset", preset },
                                       { "resolution", resolution }, { "why", why }, { "gpuTimeScale", s.autodetectGpuScale } };
             nlohmann::json ms = nlohmann::json::object();
             for (int l = 0; l < settings::kScalabilityLevels; ++l)
@@ -3486,18 +3511,30 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #if TC_PACKAGED
                 else
                 {
-                    // A packaged build's first start, or another GPU since the last measurement: auto-detect (§5). A
-                    // driver update alone keeps the player's levels (it would replace a choice made by hand). A developer
-                    // build measures only when asked.
+                    // A packaged build's first start on a system -- no measurement saved, another GPU, or another
+                    // computer (its CPU and memory) since the last one: auto-detect (§5), FORCED (Scalability.h
+                    // AutodetectForced). A driver update alone keeps the player's levels (it would replace a choice made
+                    // by hand). A record from before 2026-11-17 has no "system": its GPU alone decides, as it did. A
+                    // developer build measures only when asked.
                     std::uint64_t vram = 0;
                     const std::string gpu = GpuIdentity(renderer.GetDevice(), vram);
+                    const std::string system = SystemIdentity();
                     const auto adapterOnly = [](const std::string& identity) { return identity.substr(0, identity.find(" / ")); };
                     const nlohmann::json record = nlohmann::json::parse(settings::Scalability::ReadUserSection("autodetect"), nullptr, false);
-                    const std::string measuredOn = record.is_object() && record.contains("gpu") && record["gpu"].is_string()
-                                                 ? record["gpu"].get<std::string>() : std::string();
-                    if (measuredOn.empty() || adapterOnly(measuredOn) != adapterOnly(gpu))
+                    const auto recorded = [&record](const char* key) {
+                        return record.is_object() && record.contains(key) && record[key].is_string() ? record[key].get<std::string>() : std::string();
+                    };
+                    const std::string measuredOn = recorded("gpu");
+                    const std::string measuredSystem = recorded("system");
+                    const char* why = measuredOn.empty()                                  ? "the first start on this system"
+                                    : adapterOnly(measuredOn) != adapterOnly(gpu)          ? "another GPU"
+                                    : !measuredSystem.empty() && measuredSystem != system ? "another computer"
+                                                                                          : nullptr;
+                    if (why)
                     {
-                        LOG_INFO(logging::LogCategory::App, "auto-detect: {} -- {}", measuredOn.empty() ? "the first start" : "measured on " + measuredOn, gpu);
+                        LOG_INFO(logging::LogCategory::App, "auto-detect: {} -- {}, {}{}", why, gpu, system,
+                                 measuredOn.empty() ? std::string() : " (measured on " + measuredOn +
+                                     (measuredSystem.empty() ? std::string() : ", " + measuredSystem) + ")");
                         scalability.RequestAutodetect(true);
                     }
                 }

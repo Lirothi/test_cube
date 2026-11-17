@@ -14,6 +14,18 @@ namespace menu_text
     inline constexpr const char* kRestartLevel = "Restart";
     inline constexpr const char* kNoLevels = "no levels";
     inline constexpr const char* kQuit = "Quit";
+    // A developer's build only (not Shipping): Play from the level's Player Start or the camera, and back to the free camera
+    inline constexpr const char* kDeveloper = "Developer";
+    inline constexpr const char* kPlayFromStart = "Play (from the Player Start)";
+    inline constexpr const char* kPlayFromCamera = "Play (from the camera)";
+    inline constexpr const char* kStopPlay = "Stop playing (free camera)";
+
+    // The first start on a system: the forced auto-detect's screen
+    inline constexpr const char* kDetectTitle = "Setting up the graphics";
+    inline constexpr const char* kDetectBody = "The first start on this computer (or with a new graphics card): the game "
+                                               "measures how fast it draws here and picks the graphics levels. It takes about "
+                                               "15 seconds; Settings > Graphics can change them afterwards.";
+    inline constexpr const char* kDetectStarting = "starting...";
 
     // The settings screen
     inline constexpr const char* kSettingsTitle = "Settings";

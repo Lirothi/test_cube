@@ -772,7 +772,11 @@ distribution: packages, our file system over packages and direct paths, encrypti
   tree, a killed or cancelled build left the release KEY in every dev build after it. `build_dist.py` repairs a stale
   stamp it finds.
 - **`python tools/build_dist.py --profile=<test|release|path> --mode=check|record|content|full`** (`--levels --boot-level
-  --version --no-encrypt --flavour=shipping|development --skip-build --out --key --progress=json --keep-temp`): `full` =
+  --version --no-encrypt --flavour=shipping|development --skip-build --out --key --progress=json --keep-temp`): `check`
+  and `content` bring x64/Cook up to date first (an incremental MSBuild with the tree's dev headers: 0.5 s when nothing
+  changed, ~20 s the first time after a full build; owner, 2026-11-17 -- they took it as it lay, and a stale one ran the
+  old cook: a new switch unknown), the game's exe stays as built; `--skip-build` = as they are, and the window's automatic
+  size check on opening passes it (no compile for opening a window); `record` builds Release; `full` =
   MSBuild Cook + Shipping (or Development) with the
   version (`0.1.0+<build> (<git>[-dirty])`, the build number from `<out>/build_history.json`) and the embedded key, the
   cook, the folder (exe, the DLLs it LOADS -- sampled from a run, NGX's over-the-air copies mapped back to the local
@@ -802,7 +806,8 @@ distribution: packages, our file system over packages and direct paths, encrypti
   '<name>')` for a path an object of a level's objects / pointLights / spotLights names -- is a button: a click selects it
   in the open level (`BuildDistributionPanel::ObjectOfMessage`, the hook `selectObject`; another level is named, not
   opened). `BuildJob::Status(maxEvents)` copies only the newest events asked for (the window 200, MCP 12).
-- **The check mode's gate**: `python tools/dist/check_gate.py` (needs x64/Cook): the test profile's walk passes; three
+- **The check mode's gate**: `python tools/dist/check_gate.py` (its first arm brings x64/Cook up to date): the test
+  profile's walk passes; three
   control arms FAIL and must say why -- a missing include (`missing file ... (named by profile include)`), a level whose
   object names a missing mesh (the error names the level and the object), a level under `logs/` (`lies in a folder no
   package carries` -- such a level shipped as nothing, silently, until 2026-11-16). Its files go to `out/check_gate/`
@@ -906,19 +911,37 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   the frame's mean 112 -> 152), the field of view `g_cameraPlayerFovDeg` (horizontal at 16:9, Hor+: the vertical kept at
   any aspect; 0 = the level's, the projection bit for bit as before; the camera's `GetHFov()` is what the projection took),
   mouse sensitivity and inverted look (`Camera::AddLookInput`, the one road). `--set image.brightnessEv / image.fovDeg /
-  controls.sensitivity / controls.invertY`.
+  controls.sensitivity / controls.invertY`. **The inverted look is the person's setting, never a binding** (2026-11-17,
+  owner: "my Y invert flies into the build"): `input/bindings.json` carried LookY `"invert": true` since 2025-10 -- with
+  DirectX's pitch (positive = DOWN) and raw mouse y (positive = toward the person) that is the flight-style look, so every
+  distribution shipped the developer's taste and the menu's "Invert vertical look" turned it NORMAL. LookY is plain now;
+  invertY true = the mouse pushed away looks down. A build with the editor has no game menu: Developer Controls > Frame
+  "Invert vertical look" / "Mouse sensitivity" (user_settings.json controls, saved at once / when the slider is let go;
+  `settings::SaveControlsSettings`). The owner's own invert lives in the owner's user_settings.json (gitignored), not in the tree.
 - **Auto-detect** (§5): the real frame -- High at Balanced, 60 frames and 5 s to settle (1 s for the next levels), the
   median of the GPU frame's OWN times over 3 s (the profiler's `OverlaySample::lastMs`; its `avgMs` is an EMA of 0.997 a
   frame, ~333 frames to settle, and measured a level as a blend with the one before -- Medium 3.55 instead of 3.2 ms, the
   reviews of 2026-11-14); within 0.6 of the budget (60 fps less 30 %, 11.7 ms) Ultra is tried, over it Medium, Low, then the
   resolution down; under 6 / 4 GB of VRAM the textures stay at Medium / Low; one frame over 1 s stops it at Medium. A
-  packaged build runs it at its first start and when the GPU (its name -- a driver update keeps the player's levels)
-  changed, and saves it; `--scalability=auto` (saved only packaged), MCP `scalability.autodetect:1` and the menu's button
-  (kept by Done, dropped by Cancel, which also stops a measurement) do not save. This machine (RTX 4090): Ultra (High 4.25,
+  packaged build runs it at its first start on a SYSTEM -- no measurement saved, another GPU (its name -- a driver update
+  keeps the player's levels), or another computer (the record's `system`: the CPU's brand string and the installed memory,
+  App.cpp `SystemIdentity`, since 2026-11-17; a record without it is judged by its GPU alone) -- and saves it.
+  **That run is FORCED** (owner, 2026-11-17; `Scalability::AutodetectForced`, any run that saves -- `--scalability=auto`
+  in a packaged build too): a card over the frame says what happens and which level is measured (AppController
+  `DrawAutodetectScreen`, the HUD line "SETTING UP THE GRAPHICS"), the player, the free camera, F8 and the Esc menu wait
+  (the boot's own Play still starts: its view is the one measured), nothing cancels it (`AbortAutodetect` ignores it), and a
+  quit before the end saves nothing, so the next start measures again. Checked on the release distribution with the
+  Development exe and an empty `--user-dir`: the card at 7 s; quit there -> no record, the next start measures; a full run
+  -> the record with `system`; the next start does not measure; the record's system edited -> "another computer", it
+  measures; `system` taken out -> it does not; Esc posted at 4 s opens nothing during it, the same Esc after it opens the
+  menu. `--scalability=auto` in a dev build, MCP `scalability.autodetect:1` and the menu's button (kept by Done, dropped by
+  Cancel, which also stops a measurement) do not save and are not forced. This machine (RTX 4090): Ultra (High 4.25,
   Ultra 4.56 ms); `gpuTimeScale:4`: Low (High 16.9, Medium 12.9, Low 9.9).
 - **The menu**: Esc in EVERY build without the editor (Release too since 2026-11-16; F1 stays Developer Controls; the
-  mouse is the menu's while it is up): Continue, Settings, the level as ONE drop-down with Load / Restart (owner: "a
-  drop-down, not a million buttons"; a dev build lists the tree's data/levels, a packaged one its packages'), Quit.
+  mouse is the menu's while it is up): Continue, Settings, Developer (not in Shipping: Play from the Player Start or the
+  camera / Stop playing, the editor's Play and Stop without the editor), the level as ONE drop-down with Load / Restart
+  (owner: "a drop-down, not a million buttons"; a dev build lists the tree's data/levels, a packaged one its packages'),
+  Quit.
   `--settings-menu[=display|graphics|image|controls|menu]` opens a tab (or the Esc menu) at boot for a `--shot`. Settings:
   Display (mode, monitor, size, VSync, the limits; a change of the window asks "Keep these display settings?" and goes back
   after 15 s), Graphics (auto-detect, Quality -- Custom while the groups differ --, render resolution, the groups with "*"
@@ -1306,7 +1329,9 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
 UE's Play In Editor (2026-11-05, owner: "the physics should not simulate just in the editor"; `docs/play_mode_plan.md`, `sources/app/game`). In a build with the editor (Debug, Release_Editor) the world STANDS, panels open or closed, and nothing but a session changes that: `physics::Settings::simulate` is no knob any more, AppController says it every frame (`physics.simulate` answers `unknown setting`). A build without the editor (Release) always runs, and its camera is free until `--play` or F8: every shot and measurement of a Release build stands on that.
 
 - **No copy of the world.** All a session changes is render offsets (below, "The pose is a render offset") and the camera, which `PlaySession` puts back, so Stop leaves the document and the level as they were. Checked 2026-11-09 (owner: "put the yacht back where it was before it sailed off"; scratchpad-style `yacht_stop.py`): wind_test's yacht after 72 m at the helm, and after drifting without it, is at its authored (52.657, 0, 115.447) after Stop, a frame of it the same as before Play (`physics::World::SetSimulating(false)`: every Dynamic and kinematic body to `entry.rest`, its offset cleared). What a person sees jump is the HEIGHT: a vessel stands in the editor where it is placed, and wind_test's yacht is placed at y 0 where it floats ~0.38 lower (its draft): it hangs over the water before Play and after Stop, and drops into it in Play. The owner's yacht that "did not come back" had been KEPT: the HUD said "K keep" beside the helm's keys and read as an anchor for the session; Keep wrote its pose into the level, so Stop put it there. The HUD says "K write the poses to the level" now, Keep's status "Wrote the pose of N objects into the level (unsaved; Ctrl+Z after Stop undoes it)", the Play button's tooltip "Not an anchor". `K` (UE's Keep Simulation Changes, `keepSimulation`) is the one thing that writes: the selection's bodies if any of them moved, else every body that did, one undo entry.
-- **Keys** (`input/bindings.json`): Alt+P or Level Editor > Play (from the level's Player Start, from the camera without one), Play From Camera; in Play WASD and the mouse, Shift, C or Ctrl (held), Space; Esc or F2 stops (F2 and Developer Controls' checkbox open the editor, and opening it stops the session); F8 ejects and possesses (the body stands and lives, the camera flies, UE's Possess / Eject; `GenerateFont` moved to Ctrl+F8); Shift+F1 or losing the focus frees the mouse, a click takes it back. Release: F8 starts, Esc opens the game's menu (it frees the mouse), Shift+F1 frees the mouse. The HUD's line under `Time:` says the mode and the keys.
+- **Keys** (`input/bindings.json`): Alt+P or Level Editor > Play (from the level's Player Start, from the camera without one), Play From Camera; in Play WASD and the mouse, Shift, C or Ctrl (held), Space; Esc or F2 stops (F2 and Developer Controls' checkbox open the editor, and opening it stops the session); F8 ejects and possesses (the body stands and lives, the camera flies, UE's Possess / Eject; `GenerateFont` moved to Ctrl+F8); Shift+F1 or losing the focus frees the mouse, a click takes it back. Release: F8 starts, Esc opens the game's menu (it frees the mouse), Shift+F1 frees the mouse; the menu's Developer
+section (every build but Shipping) has Play -- from the level's Player Start, else from the camera -- and, in Play, Stop
+playing (the camera back where it stood at Play, the world running on; owner, 2026-11-17). The HUD's line under `Time:` says the mode and the keys.
 - **Player Start**: level object `{"type": "playerStart", "position": [the FEET], "rotationDeg": [pitch, yaw, 0], ...}`, a document object with no renderable as `freeCameraStart` and the zones are. Create > Player Start or MCP `placePlayerStart {at, yawDeg}` (a second call moves the one there is); always on screen as a capsule of the player's size, an arrow from the eye and its icon (`art/editor/viewport_icons/player_start.svg`, `tools/build_editor_icons.py`). The numbers of `physics::PlayerSettings` are optional keys of this object, edited in the Inspector, in one table (`game::PlayerKeys`) with `--set player.<key>` and Developer Controls > Physics: walkSpeed 4, sprintSpeed 6.4, crouchSpeed 2, swimSpeed 2, acceleration 20.48, braking 20.48, friction 8, airControl 0.35, jumpSpeed 4.2, height 1.8, crouchHeight 1.1, radius 0.3, eyeHeight 1.65, crouchEyeHeight 0.95, stepHeight 0.4, maxSlopeDeg 50, swimDepth 1.3. A session starts from the values as they stand plus the level's keys, and gives them back at its end.
 - **The controller**: `PlayerController` (the keys and the mouse) over `physics::PlayerBody` (`PhysicsCharacter.cpp`: Jolt's `CharacterVirtual` and UE's `CalcVelocity` / `ApplyVelocityBraking`, CharacterMovementComponent.cpp:3863, :4377, in metres, on the frame's clock). Run-up, stop and turn are UE's; a jump press counts 0.1 s before landing and 0.1 s after an edge, once; in the air a share of the acceleration and no braking; a crouch cannot stand up under a ceiling (`SetShape` refuses, it asks every frame); a step up eases in for the eye only; on a moving floor it rides and takes off at the floor's speed; deeper than swimDepth it floats with the eye over the swell (`OceanReadback`, the height under the feet), and there is no diving: under water has no render of its own. Jolt leaves the velocity it is given alone (UE: "make velocity reflect actual move"), so what a wall stopped is taken out by hand -- only what was really stopped: a walkable slope also moves less along the ground than asked, and taking that out would crawl, worse the higher the frame rate. Under `physics.killY` it comes back at the start. Not there: a body others hit (no `mInnerBodyShape`: it pushes, a falling coconut passes through), pause, arms in the frame, head bob, footsteps.
 - **A panel that closes leaves its keyboard focus behind** (found by the live test): `WantCaptureKeyboard` stayed true after F2, `App::WndProc` gives every letter to whoever holds it, and the free camera never showed it because its right button clears the focus (ImGuiLayer). Play has no right button to hold: WASD never reached the player. AppController clears it whenever no window of ours is on screen. A key through a panel's focus reaches `ImGui::IsKeyPressed`, not InputManager: Alt+P and Esc read both.

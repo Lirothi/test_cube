@@ -171,6 +171,12 @@ bool SaveImageAndControls(const ImageSettings& image, const ControlsSettings& co
     return WriteUserSections({ { "image", i.dump() }, { "controls", c.dump() } }, why);
 }
 
+bool SaveControlsSettings(const ControlsSettings& controls, std::string& why)
+{
+    const json c = { { "sensitivity", controls.sensitivity }, { "invertY", controls.invertY } };
+    return WriteUserSection("controls", c.dump(), why);
+}
+
 void ApplySavedImageAndControls()
 {
     const bool hasImage = !ReadUserSection("image").empty();

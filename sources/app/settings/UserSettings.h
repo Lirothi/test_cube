@@ -46,7 +46,7 @@ namespace settings
     struct ControlsSettings
     {
         float sensitivity = 1.0f;  // x the bindings' look speed, 0.25 .. 4
-        bool invertY = false;      // the look's vertical turned the other way
+        bool invertY = false;      // the look's vertical turned the other way: the mouse pushed away looks DOWN (flight style)
     };
     inline constexpr float kBrightnessMinEv = -2.0f, kBrightnessMaxEv = 2.0f;
     inline constexpr float kFovMinDeg = 70.0f, kFovMaxDeg = 110.0f;
@@ -60,6 +60,8 @@ namespace settings
     void ApplyImageSettings(const ImageSettings& s);
     void ApplyControlsSettings(const ControlsSettings& s);
     bool SaveImageAndControls(const ImageSettings& image, const ControlsSettings& controls, std::string& why);
+    // The controls section alone (Developer Controls > Frame: a build with the editor has no game menu).
+    bool SaveControlsSettings(const ControlsSettings& controls, std::string& why);
     // At boot, after the graphics settings: the saved image and controls (nothing saved = the knobs stay as they are).
     void ApplySavedImageAndControls();
 }

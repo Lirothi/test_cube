@@ -54,7 +54,9 @@ private:
     // The play session's keys and requests (docs/play_mode_plan.md), and what it says to the world this frame.
     void TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed);
     // Shipping's Esc menu (it has no Developer Controls): go on, the levels the packages hold, quit. A build with them draws nothing.
-    void DrawGameMenu(LevelManager& levelManager, InputManager& input);
+    void DrawGameMenu(Renderer& renderer, Scene& scene, LevelManager& levelManager, InputManager& input);
+    // The forced auto-detect's screen (a packaged build's first start on a system: Scalability::AutodetectForced).
+    void DrawAutodetectScreen();
 
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;

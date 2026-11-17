@@ -973,6 +973,9 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
         request.mode = "check";
         request.levels = levelsOnDisk_;
         request.overrideLicences = LicencesOverridden();
+        // Opening the window must not start a compile: this one takes x64/Cook as it is (a size estimate). Check and
+        // Measure sizes bring it up to date first (build_dist.py, 2026-11-17).
+        request.skipBuild = true;
         std::string why;
         if (dist::TheBuildJob().Start(request, why)) { sizesJob_ = true; }
     }

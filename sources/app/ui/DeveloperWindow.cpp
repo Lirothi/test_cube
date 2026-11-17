@@ -23,6 +23,7 @@
 #include "app/scene/Scene.h"
 #include "app/scene/SkyOcclusionMap.h" // the sky-from-above map's ranges and coverage
 #include "app/settings/Scalability.h"  // the Scalability tab
+#include "app/settings/UserSettings.h" // the look's sensitivity and inverted vertical (Frame)
 #include "core/logging/Log.h"
 #include "core/profiling/ProfilerScopes.h"
 #if WITH_EDITOR
@@ -892,6 +893,37 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "which at a few hundred fps arrive unevenly and make a turn stutter. 0 = off. For "
                         "recording a video 40-80 ms reads smooth; the turn finishes after the button is let go. "
                         "Ctrl+click to type a value.");
+                // The player's look (user_settings.json controls, the game menu's Controls tab in a build without the
+                // editor; owner, 2026-11-17: "move it to the settings"). A setting of the person's, never a binding:
+                // input/bindings.json carried LookY inverted until then, so every distribution shipped the
+                // developer's flight-style look and the menu's checkbox turned it NORMAL.
+                settings::ControlsSettings controls = settings::CurrentControlsSettings();
+                bool saveControls = false;
+                if (ImGui::Checkbox("Invert vertical look", &controls.invertY))
+                {
+                    settings::ApplyControlsSettings(controls);
+                    saveControls = true;
+                }
+                DevHelp("The mouse pushed away looks DOWN (flight style) -- the free camera, the player and the boat "
+                        "cameras alike. The person's setting, saved in user_settings.json (controls.invertY) and the "
+                        "same as the game menu's Controls > Invert vertical look; --set controls.invertY:1 for a run.");
+                if (ImGui::SliderFloat("Mouse sensitivity", &controls.sensitivity, settings::kSensitivityMin,
+                                       settings::kSensitivityMax, "x%.2f", ImGuiSliderFlags_Logarithmic))
+                {
+                    settings::ApplyControlsSettings(controls);
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit()) { saveControls = true; }
+                DevHelp("The look's speed times the bindings' own (input/bindings.json), 0.25-4. The person's setting, "
+                        "saved in user_settings.json (controls.sensitivity) when the slider is let go; the game menu's "
+                        "Controls > Mouse sensitivity.");
+                if (saveControls)
+                {
+                    std::string why;
+                    if (!settings::SaveControlsSettings(settings::CurrentControlsSettings(), why))
+                    {
+                        LOG_WARNING(logging::LogCategory::App, "controls: not saved: {}", why);
+                    }
+                }
                 bool renderThread = threading::g_renderThreadEnabled;
                 if (GRAPHICS_CONTROL(RenderThread, "renderThread", ImGui::Checkbox("Render thread", &renderThread)))
                 {

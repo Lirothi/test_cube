@@ -9,7 +9,7 @@ on the test profile must pass, and three control arms must FAIL and say why -- o
     4. a level in a folder no package carries (logs/) -> exit 3, "lies in a folder no package carries" (it shipped as
        nothing, silently, before 2026-11-16)
 
-Needs x64/Cook/test_cube.exe (build the Cook configuration). Writes nothing it does not remove: the control profiles and
+build_dist.py brings x64/Cook up to date itself (the first arm compiles what changed). Writes nothing it does not remove: the control profiles and
 the level in out/check_gate/ (gitignored; logs/ is a folder no package carries), the reports in a temp folder. Exit = the
 arms that failed.
 
@@ -50,10 +50,7 @@ def check(profile, out_dir):
 
 
 def main():
-    if not (ROOT / "x64" / "Cook" / "test_cube.exe").exists():
-        print("check gate: no x64/Cook/test_cube.exe -- build the Cook configuration first")
-        return 1
-    failed = 0
+    failed = 0  # build_dist.py's check brings x64/Cook up to date itself (the first arm builds it, the rest find it current)
     work = pathlib.Path(tempfile.mkdtemp(prefix="check_gate_"))
     gate_dir = ROOT / "out" / "check_gate"
     try:

@@ -5,6 +5,7 @@
 #include "app/BuildVersion.h" // the Development build's mark
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "app/settings/Scalability.h" // the forced auto-detect holds the game's input back
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -270,7 +271,8 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     TickPlay(input, renderer, scene, levelManager, toggleLevelEditor);
 #else
     TickPlay(input, renderer, scene, levelManager, false);
-    DrawGameMenu(levelManager, input);
+    DrawGameMenu(renderer, scene, levelManager, input);
+    DrawAutodetectScreen();
 #endif
     // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
     if (playSession_.Playing())
@@ -282,6 +284,8 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         playSession_.DrawSpectatorPanel(scene); // the camera on a bot's boat: which boat, its view, the bots' vision
     }
     const bool raceResults = playSession_.Playing() && scene.RaceRef().ResultsOpen();
+    // The forced auto-detect measures the boot's view: nobody walks or looks away until it is done.
+    const bool detecting = settings::TheScalability().AutodetectForced();
 
     // No window of ours on screen, and ImGui still holds the keyboard: a panel that closed leaves its focus behind (F2, Play), and App::WndProc gives every letter to whoever holds it.
     // A held right button clears it for the free camera (ImGuiLayer), which is why it went unseen; Play has no right button to hold, and WASD never reached the player.
@@ -306,12 +310,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (playSession_.Playing())
     {
-        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_, uiCapturingMouse);
+        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_ || detecting, uiCapturingMouse);
         if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { scene.RaceRef().DebugDraw(*draw); } // bot.debug
     }
     else
     {
-        bool allowCameraInput = !uiCapturingInput && !gameMenuOpen_;
+        bool allowCameraInput = !uiCapturingInput && !gameMenuOpen_ && !detecting;
 #if WITH_EDITOR
         if (allowCameraInput && editorController_.IsOpen())
         {
@@ -388,9 +392,12 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     (void)levelManager;
     (void)editorKeyPressed;
     physics::GameSettings().simulate = true;
+    // The forced auto-detect (a packaged build's first start on a system): no F8, no Esc menu until it is done. The boot's
+    // own Play (Shipping's startMode) still starts: it is the view the game opens on, so the one worth measuring.
+    const bool detecting = settings::TheScalability().AutodetectForced();
     if (!playSession_.Playing())
     {
-        if (g_bootPlay || eject)
+        if (g_bootPlay || (eject && !detecting))
         {
             const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
             const bool fromCamera = g_bootPlay && g_camOverride;
@@ -403,7 +410,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
             g_bootPlay = false;
         }
     }
-    else
+    else if (!detecting)
     {
         if (eject) { playSession_.TogglePossess(scene); }
         if (freeMouse) { playSession_.ToggleFreeMouse(); }
@@ -411,7 +418,11 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     // Esc is the game's menu in every build without the editor (docs/scalability_plan.md §6.1; Release too since
     // 2026-11-16 -- F1 stays Developer Controls), on foot, at a helm or with the camera free; the mouse is the menu's while
     // it is up and the game's again when Esc or Continue closes it.
-    if (escape && settingsMenu_.IsOpen())
+    if (detecting)
+    {
+        gameMenuOpen_ = false; // Esc waits for the measurement: nothing cancels it
+    }
+    else if (escape && settingsMenu_.IsOpen())
     {
         settingsMenu_.Cancel(); // Esc on the settings: back to the menu, nothing kept
     }
@@ -428,12 +439,13 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
 #if !WITH_EDITOR
     if (!playSession_.Playing()) { hudPlayLine_ = L"FREE CAMERA: right mouse look, WASD, wheel speed   F8 walk from here   Esc menu"; }
+    if (detecting) { hudPlayLine_ = L"SETTING UP THE GRAPHICS: the keys wait until the measurement is done"; }
 #endif
     hudRaceLine_ = playSession_.RaceHudLine(scene);
     hudBigText_ = playSession_.Playing() ? scene.RaceRef().BigText() : std::wstring{};
 }
 
-void AppController::DrawGameMenu(LevelManager& levelManager, InputManager& input)
+void AppController::DrawGameMenu(Renderer& renderer, Scene& scene, LevelManager& levelManager, InputManager& input)
 {
     // The settings screen covers the menu while it is open.
     if (settingsMenu_.IsOpen())
@@ -467,6 +479,28 @@ void AppController::DrawGameMenu(LevelManager& levelManager, InputManager& input
         if (playSession_.Playing()) { playSession_.SetMouseFree(false); }
     }
     if (ImGui::Button(menu_text::kSettings, button)) { settingsMenu_.Open(); }
+    // A developer's build (Release, Development -- not Shipping; owner, 2026-11-17: "a Play button in the Esc menu, from
+    // the Player Start if there is one or from the camera, and one that stops the game and goes back to the free camera;
+    // developer buttons"). The editor's Play and Stop without the editor: F8 starts the same session, and nothing else
+    // ended one. Stop puts the camera back where it stood at Play; the world runs on (no editor stands it still).
+    if (!build::Shipping())
+    {
+        ImGui::SeparatorText(menu_text::kDeveloper);
+        if (!playSession_.Playing())
+        {
+            const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+            if (ImGui::Button(start ? menu_text::kPlayFromStart : menu_text::kPlayFromCamera, button))
+            {
+                gameMenuOpen_ = false;
+                playSession_.Begin(renderer, scene, input, start ? &*start : nullptr, &scene.LevelRaceCourse(), true, false);
+            }
+        }
+        else if (ImGui::Button(menu_text::kStopPlay, button))
+        {
+            gameMenuOpen_ = false;
+            playSession_.End(renderer, scene, input);
+        }
+    }
     // The levels as ONE list (owner, 2026-11-16: "a drop-down, not a million buttons"): pick one, then Load; the open
     // one is marked and its button says Restart.
     ImGui::SeparatorText(menu_text::kLevels);
@@ -518,6 +552,29 @@ void AppController::DrawGameMenu(LevelManager& levelManager, InputManager& input
     {
         PostMessageW(static_cast<HWND>(viewport->PlatformHandleRaw), WM_CLOSE, 0, 0); // the window's own close: settings and log flushed as by its [x]
     }
+    ImGui::End();
+}
+
+void AppController::DrawAutodetectScreen()
+{
+    // The first start on a system (App.cpp, docs/scalability_plan.md §5): the frame goes on behind it -- it is what is
+    // measured -- under a card that says what happens and which level is being measured.
+    const settings::Scalability& scalability = settings::TheScalability();
+    if (!scalability.AutodetectForced()) { return; }
+    GameMenuStyle style;
+    style.Backdrop();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(style.Em(30.0f), 0.0f), ImGuiCond_Always); // 0: the height fits the text
+    ImGui::Begin("##autodetect", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoInputs |
+                 ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+    style.Title(menu_text::kDetectTitle);
+    ImGui::TextWrapped("%s", menu_text::kDetectBody);
+    ImGui::Spacing();
+    const std::string& status = scalability.AutodetectStatus();
+    ImGui::TextDisabled("%s", scalability.AutodetectRunning() && !status.empty() ? status.c_str() : menu_text::kDetectStarting);
     ImGui::End();
 }
 

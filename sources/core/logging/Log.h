@@ -304,12 +304,20 @@ namespace logging
             int width = 0;
             char fill = ' ';
             bool uppercase = false;
+            // std::format's sign flag and its 'd' type ("{:+d}", "{:2d}"): a spec this writer did not know printed
+            // the value bare and marked the line [format-error].
+            const bool plus = !spec.empty() && spec.front() == '+';
+            if (plus) { spec.remove_prefix(1); }
             std::size_t digitEnd = spec.size();
 
             if (!spec.empty() && (spec.back() == 'x' || spec.back() == 'X'))
             {
                 base = 16;
                 uppercase = spec.back() == 'X';
+                --digitEnd;
+            }
+            else if (!spec.empty() && spec.back() == 'd')
+            {
                 --digitEnd;
             }
             if (digitEnd != 0 && spec.front() == '0')
@@ -335,7 +343,8 @@ namespace logging
             }
 
             char buffer[72]{};
-            const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, base);
+            char* const first = plus ? buffer + 1 : buffer;
+            const auto result = std::to_chars(first, buffer + sizeof(buffer), value, base);
             if (result.ec != std::errc{})
             {
                 writer.MarkFormatError();
@@ -344,7 +353,7 @@ namespace logging
             }
             if (uppercase)
             {
-                for (char* cursor = buffer; cursor != result.ptr; ++cursor)
+                for (char* cursor = first; cursor != result.ptr; ++cursor)
                 {
                     if (*cursor >= 'a' && *cursor <= 'f')
                     {
@@ -352,7 +361,13 @@ namespace logging
                     }
                 }
             }
-            AppendPadded(writer, std::string_view(buffer, result.ptr), width, fill);
+            const char* start = first;
+            if (plus && *first != '-')
+            {
+                buffer[0] = '+';
+                start = buffer;
+            }
+            AppendPadded(writer, std::string_view(start, result.ptr), width, fill);
         }
 
         template <typename Float>
@@ -360,6 +375,8 @@ namespace logging
         {
             char buffer[128]{};
             std::to_chars_result result{};
+            const bool plus = !spec.empty() && spec.front() == '+'; // std::format's sign flag ("{:+.1f}")
+            if (plus) { spec.remove_prefix(1); }
             if (spec.size() >= 3 && spec.front() == '.' && spec.back() == 'f')
             {
                 int precision = 0;
@@ -397,6 +414,7 @@ namespace logging
                 writer.Append("<format-error>");
                 return;
             }
+            if (plus && buffer[0] != '-') { writer.Append('+'); }
             writer.Append(std::string_view(buffer, result.ptr));
         }
 

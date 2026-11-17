@@ -1366,6 +1366,15 @@ namespace logging
                 "fixed-buffer scalar formatting produced an unexpected result");
         }
         {
+            // std::format's sign flag and 'd' type (2026-11-17: "{:+.1f}" printed the value bare and flagged the line).
+            LogRecord signs{};
+            detail::FormatRecord(signs, "{:+.1f} {:+.1f} {:+d} {:+d} {:2d} {:03d}", 0.0f, -1.24, 3, -4, 7, 5);
+            check(
+                std::string_view(signs.message, signs.messageByteCount) == "+0.0 -1.2 +3 -4  7 005" &&
+                    signs.flags == LogRecordFlagNone,
+                "the sign flag or the 'd' type produced an unexpected result");
+        }
+        {
             // Regression: a bare nullptr literal used to take the string_view branch.
             LogRecord nullFormatted{};
             detail::FormatRecord(nullFormatted, "{}", nullptr);

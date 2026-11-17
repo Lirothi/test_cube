@@ -221,7 +221,16 @@ namespace settings
         bool TakeAutodetectRequest() { const bool r = autodetectRequested_; autodetectRequested_ = false; return r; }
         bool AutodetectSaves() const { return autodetectSave_; }
         // The menu's Cancel / Esc while it measures: it stops and applies nothing more.
-        void AbortAutodetect() { autodetectAbort_ = autodetectRunning_; autodetectRequested_ = false; }
+        // A run that saves -- a packaged build's first start on a system, `--scalability=auto` there -- is FORCED (owner,
+        // 2026-11-17): the game's until it is done (AppController holds the input, the menu and F8 back and shows that it
+        // measures), and nothing cancels it. A quit before the end saves nothing, so the next start measures again.
+        bool AutodetectForced() const { return autodetectSave_ && (autodetectRequested_ || autodetectRunning_); }
+        void AbortAutodetect()
+        {
+            if (AutodetectForced()) { return; }
+            autodetectAbort_ = autodetectRunning_;
+            autodetectRequested_ = false;
+        }
         bool TakeAutodetectAbort() { const bool r = autodetectAbort_; autodetectAbort_ = false; return r; }
         void SetAutodetectStatus(std::string status) { autodetectStatus_ = std::move(status); }
         const std::string& AutodetectStatus() const { return autodetectStatus_; }
