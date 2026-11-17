@@ -8,6 +8,8 @@ imgui.ini
 editor_state.json
 user_settings.json
 user_settings.json.tmp
+# The developer's graphics before user_settings.json v2: read once to move into its graphics section (GraphicsSettings.h kLegacyPath)
+graphics_settings.json
 editor_sessions/
 editor_cache/
 shader_cache/

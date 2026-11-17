@@ -878,7 +878,9 @@ table `data/config/scalability.json`, the menu `sources/app/ui/GameSettingsMenu.
   changed, temp + rename). **graphics_settings.json is read ONCE** -- when there is no graphics section yet, its values less
   the defaults are moved in (the round trip checked before it is written; a dev build's full snapshot and a packaged one's
   differences alike; the owner's 2026-11-16 file: `{"frame": {"vsync": true}}`, the same frame within the processes' own
-  spread) -- and never written again; a git pull or an edit of it changes nothing after that. EVERY `graphics_settings.json
+  spread) -- and never written again; a git pull or an edit of it changes nothing after that. Not in git since 2026-11-17
+  (.gitignore; owner: it showed as a change in every status): each tree keeps its own, a fresh clone has none and starts
+  from tools/dist/graphics_defaults.json. EVERY `graphics_settings.json
   <key>` IN THIS FILE NOW MEANS THAT KEY IN user_settings.json's graphics SECTION. Written by the settings menu's Apply /
   Back, Developer Controls (its autosave, the Scalability tab) and a packaged build's first-start auto-detect -- never by
   `--set`, MCP or `--scalability=auto` in dev. **A dev test that writes it must BACK IT UP AND PUT IT BACK, never delete

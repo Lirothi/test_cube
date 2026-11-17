@@ -1,11 +1,9 @@
 {
   "_comment": "docs/distribution_build_plan.md §8.0: what ships -- encrypted packages, every asset's licence known, zip and symbols.",
-  "product": "test_cube",
-  "version": "0.1.0",
-  "versionMustGrow": true,
-  "levels": ["data/levels/wind_test.json"],
   "bootLevel": "data/levels/wind_test.json",
-  "startMode": "play",
+  "compression": "zstd:19",
+  "encrypt": true,
+  "graphicsDefaults": "tools/dist/graphics_defaults.json",
   "include": [
     "fonts/*.json",
     "fonts/*.tga",
@@ -14,16 +12,32 @@
     "data/loading_screen.jpg",
     "data/materials/*.json"
   ],
-  "graphicsDefaults": "tools/dist/graphics_defaults.json",
+  "levels": [
+    "data/levels/wind_test.json"
+  ],
+  "out": "dist",
+  "product": "test_cube",
+  "recordArms": {
+    "dlss": [
+      "off",
+      "balanced",
+      "dlaa"
+    ],
+    "play": true,
+    "resolutions": [
+      "1920x1080",
+      "2560x1440",
+      "3840x2160"
+    ]
+  },
   "shaderList": "tools/dist/shader_list.txt",
-  "vfsRecord": "tools/dist/vfs_record.txt",
   "shaderModel": "6.6",
-  "recordArms": {"resolutions": ["1920x1080", "2560x1440", "3840x2160"], "dlss": ["off", "balanced", "dlaa"], "play": true},
-  "compression": "zstd:19",
-  "encrypt": true,
   "shaderSources": true,
+  "startMode": "play",
   "strictLicences": true,
-  "zip": true,
   "symbols": true,
-  "out": "dist"
+  "version": "0.1.1",
+  "versionMustGrow": true,
+  "vfsRecord": "tools/dist/vfs_record.txt",
+  "zip": true
 }
