@@ -59,6 +59,20 @@ namespace editormcp
     // The tools as tools/list reports them.
     nlohmann::json ToolList();
 
+    // The transport's own gate, decided from a request's head before any of its body is read: the HTTP status that
+    // refuses it (403 not this machine, 404 not /mcp, 405 not a POST, 415 a body that is not declared
+    // application/json), 0 = it is served. No socket, so the gate drives it (intent_regression,
+    // TestMcpDrivesTheSameRoad). The 415 is what keeps a web page out: see the rule in EditorMcpServer.cpp.
+    struct HttpRequestHead
+    {
+        std::string method;
+        std::string path;        // without its query
+        std::string origin;      // the headers' values; empty = the header is absent
+        std::string host;
+        std::string contentType;
+    };
+    int HttpRefusal(const HttpRequestHead& head);
+
     // What one call did, for the command bar's transcript.
     struct CallRecord
     {

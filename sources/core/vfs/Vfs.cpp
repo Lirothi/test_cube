@@ -913,6 +913,9 @@ namespace vfs
         if (config.mode != Config::Mode::Loose)
         {
             const std::filesystem::path folder = config.packageDir.empty() ? ContentRoot() / L"content" : config.packageDir;
+            // Config::requireEncrypted: a build with a key of its own reads only what a key it has encrypted.
+            const bool requireEncrypted = config.requireEncrypted.value_or(pak::EmbeddedKey().has_value());
+            std::size_t leftOut = 0;
             std::error_code ec;
             for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(folder, ec))
             {
@@ -924,11 +927,20 @@ namespace vfs
                     error = why;
                     return false;
                 }
+                if (requireEncrypted && !package->Encrypted())
+                {
+                    ++leftOut;
+                    LOG_ERROR(logging::LogCategory::Vfs, "vfs: {} is not encrypted, and this build mounts only packages "
+                              "encrypted with its key -- left out", Narrow(entry.path().filename().wstring()));
+                    continue;
+                }
                 mounts.packages.push_back(std::move(package));
             }
             if (ec || mounts.packages.empty())
             {
-                error = "no .tcpak in " + Narrow(folder.wstring());
+                error = leftOut != 0 ? "no encrypted .tcpak in " + Narrow(folder.wstring()) + " (" + std::to_string(leftOut) +
+                                           " unencrypted left out: this build mounts only packages encrypted with its key)"
+                                     : "no .tcpak in " + Narrow(folder.wstring());
                 return false;
             }
             detail::SortPackages(mounts.packages);

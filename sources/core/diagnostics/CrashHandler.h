@@ -18,6 +18,9 @@ namespace crash
         bool messageBox = false;                        // Shipping: tell the player
         unsigned messageBoxTimeoutMs = 0;               // 0 = until closed (the self-test closes its own)
         std::wstring product = L"test_cube";
+        // How many minidumps the folder keeps: at Install the older ones go. 0 = all of them (a player's are few and
+        // theirs to send); a dev build names 10 -- it crashes on purpose and often, and a dump is megabytes.
+        unsigned keepDumps = 0;
     };
 
     void Install(const Options& options);
@@ -28,7 +31,8 @@ namespace crash
     // std::terminate's handler is per thread in the MSVC CRT: a thread of ours calls this when it starts.
     void InstallThisThread();
 
-    // --crash-selftest=<arm>: av | stack | abort | terminate | purecall | invalidparam | fastfail -- installs the handler
-    // (the message box closing itself after 3 s) and crashes that way. Never returns; an unknown arm returns 2.
+    // --crash-selftest=<arm>: av | stack | abort | terminate | throw | purecall | invalidparam | fastfail | overflow (a
+    // tc::inl_vector outgrown: its Fatal line, then abort) -- installs the handler (the message box closing itself
+    // after 3 s) and crashes that way. Never returns; an unknown arm returns 2.
     int SelfTest(const std::string& arm, Options options);
 }

@@ -184,6 +184,13 @@ namespace vfs
         // what the game saved (WritablePath(Saved, ...)) over what shipped: {"data/bot_memory/", <user>/bot_memory},
         // {"data/ocean/", <user>/ocean} (docs/scalability_plan.md §7.4 item 3). Empty = none.
         std::vector<std::pair<std::string, std::filesystem::path>> overlays;
+        // A build that carries a key mounts only packages encrypted with a key it has (2026-11-18). Unset = that rule:
+        // on exactly when a key is embedded (pak::EmbeddedKey -- an encrypted distribution), off in every other build;
+        // set = the caller's own word (the self-test). Why: a package is mounted by its presence in the folder and
+        // sorted by the priority its own header claims, so an unencrypted file beside an encrypted game's packages
+        // replaced any file of it -- a level, config/boot.json, a cooked shader. GCM says an encrypted one is the build's.
+        // A package left out is logged as an Error and the rest mount; none left = Configure fails and says so.
+        std::optional<bool> requireEncrypted;
     };
     // Before the first read. False (and why) when a package does not open; nothing is mounted then.
     bool Configure(const Config& config, std::string& error);

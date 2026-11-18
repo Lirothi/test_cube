@@ -544,6 +544,13 @@ namespace vfs::pak
             {
                 return refuse("entry " + std::to_string(e) + " is out of bounds");
             }
+            // No file is larger than every block of the package together. Without this the sum below wraps for a size
+            // within 64 KB of 2^64: such an entry with NO blocks passed, and Read then indexed the block table past its
+            // end with a block number cut to 32 bits (a crafted package: a crash, or a read out of bounds).
+            if (entry.size > std::uint64_t{ package->blockCount_ } * kBlockSize)
+            {
+                return refuse("entry " + std::to_string(e) + " has an impossible size");
+            }
             // The layout Read relies on, exactly as the writer makes it: whole 64 KB blocks and a last one with the rest; a
             // stored block's bytes are its raw bytes; a compressed one has some. Blocks of other sizes that still added up
             // made Read loop for ever or read past a block.

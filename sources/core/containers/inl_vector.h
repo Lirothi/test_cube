@@ -10,6 +10,14 @@
 namespace tc
 {
 
+namespace detail
+{
+// More elements than the capacity the vector was declared with (core/logging/Log.cpp: a Fatal record in the session
+// log, then abort). In every build: the capacity is a contract of the declaration, and past it the write lands beyond
+// the storage -- on the stack, or on a neighbouring member. An assert said so in Debug; Release wrote there in silence.
+[[noreturn]] void InlVectorOverflow(std::size_t capacity, std::size_t wanted) noexcept;
+} // namespace detail
+
 template <typename T, std::size_t Capacity>
 class inl_vector
 {
@@ -78,7 +86,10 @@ public:
 
   void resize(size_type count, const value_type &defaultValue = value_type())
   {
-    assert(count <= Capacity && "inl_vector cannot resize beyond its static capacity");
+    if (count > Capacity) [[unlikely]]
+    {
+      detail::InlVectorOverflow(Capacity, count);
+    }
 
     if (count < m_size)
     {
@@ -209,7 +220,10 @@ public:
   template <typename... Args>
   reference emplace_back(Args &&...args)
   {
-    assert(m_size < Capacity && "inl_vector capacity exceeded");
+    if (m_size >= Capacity) [[unlikely]]
+    {
+      detail::InlVectorOverflow(Capacity, m_size + 1);
+    }
     auto *ptr = storage_ptr(m_size);
     ::new (static_cast<void *>(ptr)) value_type(std::forward<Args>(args)...);
     ++m_size;

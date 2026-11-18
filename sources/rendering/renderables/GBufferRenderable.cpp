@@ -1202,13 +1202,22 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
         D3D12_GPU_VIRTUAL_ADDRESS cb = 0;
         D3D12_GPU_DESCRIPTOR_HANDLE srvs{};
     };
-    tc::inl_vector<GlassDraw, 8> draws;
+    tc::inl_vector<GlassDraw, 32> draws;
     for (size_t s = 0; s < subs.size(); ++s)
     {
         const size_t slot = multi ? std::min<size_t>(subs[s].materialSlot, matDatas_.size() - 1) : 0;
         Material* const glass = slot < slotGlassMaterials_.size() ? slotGlassMaterials_[slot].get() : nullptr;
         const MaterialData* const md = matDatas_[slot].get();
         if (!glass || !md) { continue; }
+        if (draws.size() >= draws.capacity())
+        {
+            // The list is on the stack and fixed: the glass submeshes past it are not drawn, and say so. Until 2026-11-18
+            // it held 8 with no check: a ninth glass submesh wrote past it (an assert in Debug, the stack in Release).
+            LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::Render,
+                "glass: '{}' has more than {} glass submeshes at LOD {}: the rest are not drawn",
+                GetGeometryPath(), draws.capacity(), lod);
+            break;
+        }
         const MaterialParams& p = DrawParamsForSlot(slot);
 
         const UINT cbSize = glass->GetCBSizeBytesAligned(0, kAlign);

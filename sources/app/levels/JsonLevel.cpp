@@ -215,6 +215,25 @@ void AddAnonymousObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
 
 void JsonLevel::Load(const LevelLoadContext& ctx)
 {
+    // A level is a JSON file edited by hand, by the editor and through MCP. Its keys are read with value() / get<>(),
+    // which throw when a key holds another type than the reader expects -- and nothing above this caught it: the
+    // process ended in std::terminate over one wrong value. Now the load stops at that key and says which: what was
+    // made before it stays (the caller still finalizes and submits it), the editor's document already holds the whole
+    // file (ResetFromLevelJson runs first), so nothing is lost by saving. Only nlohmann's own exceptions: a loader's
+    // failure (a device, a file) is not a malformed level and goes on up as before.
+    try
+    {
+        LoadFromSource_(ctx);
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        LOG_ERROR(logging::LogCategory::Scene, "level '{}' is malformed -- {}. Loaded as far as that key; fix the file and "
+                  "load it again", sourcePath_, e.what());
+    }
+}
+
+void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
+{
     BOOT_SCOPE("JsonLevel::Load");
     SceneObjectFactory::MeshAssetLoadScope meshAssets; // game thread plan G10d: each mesh.json read once per load
     auto& renderer = ctx.renderer;
@@ -230,9 +249,13 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     json j;
     {
+        // Both say so in the session log first (a Release build has no assert: it used to show an empty world with
+        // nothing written anywhere), then stop a Debug run as before.
         vfs::InStream f(sourcePath_, /*binary*/ false);
         if (!f)
         {
+            LOG_ERROR(logging::LogCategory::Scene, "level '{}' cannot be opened: nothing is loaded, the world is empty",
+                      sourcePath_);
             assert(false && "Level source file not found!");
             return;
         }
@@ -241,6 +264,8 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         j = json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
         if (j.is_discarded())
         {
+            LOG_ERROR(logging::LogCategory::Scene, "level '{}' is not valid JSON: nothing is loaded, the world is empty",
+                      sourcePath_);
             assert(false && "Level source file is not valid JSON");
             return;
         }

@@ -1053,6 +1053,34 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         { "method", "notifications/initialized" } }, host),
         "a notification gets no reply at all");
 
+    // The transport's gate, without a socket: who is served at all. A client with no Origin (Claude Code, a script) is;
+    // a page is not, whatever Origin it carries -- it cannot declare a JSON body without a preflight this server refuses.
+    {
+        using Head = editormcp::HttpRequestHead;
+        const std::string jsonType = "application/json";
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "", "127.0.0.1:8128", jsonType }) == 0,
+            "a local client with no Origin and a JSON body is served");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp/", "", "localhost:8128", "Application/JSON; charset=utf-8" }) == 0,
+            "the content type is matched whatever its case and parameters");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "https://evil.example", "127.0.0.1:8128", jsonType }) == 403,
+            "a foreign Origin is refused");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "", "evil.example:8128", jsonType }) == 403,
+            "a foreign Host (DNS rebinding) is refused");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/other", "", "127.0.0.1:8128", jsonType }) == 404,
+            "another path is not found");
+        Check(editormcp::HttpRefusal(Head{ "OPTIONS", "/mcp", "null", "127.0.0.1:8128", "" }) == 405,
+            "a preflight gets 405: the browser never sends the POST it asked about");
+        // The hole this gate closed (2026-11-18): a sandboxed iframe's page, Origin null, a simple text/plain POST.
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "null", "127.0.0.1:8128", "text/plain" }) == 415,
+            "a page's simple POST (Origin null, text/plain) is refused");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "http://localhost:3000", "127.0.0.1:8128", "text/plain;charset=UTF-8" }) == 415,
+            "a page of a local web server is refused the same way");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "", "127.0.0.1:8128", "" }) == 415,
+            "a body with no declared type is refused");
+        Check(editormcp::HttpRefusal(Head{ "POST", "/mcp", "", "127.0.0.1:8128", "application/jsonp" }) == 415,
+            "a type that only starts like JSON is refused");
+    }
+
     const std::optional<json> list = call(2, "tools/list", json::object());
     bool hasRun = false;
     std::vector<std::string> saveTools;

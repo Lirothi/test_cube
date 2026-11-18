@@ -1341,7 +1341,11 @@ bool Scene::RemoveOceanObjects()
         }
         ++i;
     }
-    if (removed) { BumpStaticSetVersion(); }
+    if (removed)
+    {
+        BumpStaticSetVersion();
+        physics_.ForgetRemoved(); // the rule of every removal here: see RemoveEditorObject
+    }
     return removed;
 }
 
@@ -1441,7 +1445,16 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
         }
         ++i;
     }
-    if (removed) { BumpStaticSetVersion(); }
+    if (removed)
+    {
+        BumpStaticSetVersion();
+        // The physics world's entry of a removed object goes NOW, as in RemoveRuntimeObjects: an object's destructor only
+        // posts the removal, and until the world's next Drain its entry holds the dead pointer -- which FindVessel and
+        // CollectHulls hand out and this frame's Sync dereferences (the hulls for the wake and the spray). It used to
+        // hold only because an editor delete runs in the UI's half and Scene::Tick (a Drain) follows it in the same
+        // frame; a removal after the Tick -- an MCP call served at the hand-over, a deferred command -- had no such luck.
+        physics_.ForgetRemoved();
+    }
     return removed;
 }
 
@@ -4049,6 +4062,7 @@ void Scene::Clear()
     race_.Forget();       // its boats are
     race_.DropSpawned();  // and the race's own boats, made or asked for
     objects_.clear();
+    physics_.ForgetRemoved(); // their entries with them (RemoveEditorObject says why): none outlives its object
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
     skyOcclusion_.Invalidate(); // ...and its world from above is the old level's
 #if WITH_EDITOR

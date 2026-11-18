@@ -637,6 +637,89 @@ namespace vfs
                     t.Expect(!pak::Package::Open(badLayout, layoutError) && layoutError.find("wrong size") != std::string::npos,
                              "control: blocks of the wrong sizes that add up are refused at Open");
                 }
+                // A size within 64 KB of 2^64 and no blocks at all: the block count's sum wrapped, so the entry passed
+                // Open, and Read indexed the block table past its end. Open must refuse it (2026-11-18).
+                {
+                    std::vector<std::uint8_t> huge = ReadOs(pakA);
+                    pak::Header h;
+                    std::memcpy(&h, huge.data(), sizeof(h));
+                    std::vector<std::uint8_t> toc(static_cast<std::size_t>(h.tocRawSize));
+                    const std::size_t got = ZSTD_decompress(toc.data(), toc.size(), huge.data() + h.tocOffset,
+                                                            static_cast<std::size_t>(h.tocStoredSize));
+                    t.Expect(!ZSTD_isError(got) && got == toc.size(), "the TOC decompresses for the impossible-size arm");
+                    pak::TocHeader th;
+                    std::memcpy(&th, toc.data(), sizeof(th));
+                    auto* entries = reinterpret_cast<pak::TocEntry*>(toc.data() + sizeof(th));
+                    const auto* blocks = reinterpret_cast<const pak::TocBlock*>(entries + th.entryCount);
+                    const char* strings = reinterpret_cast<const char*>(blocks + th.blockCount);
+                    bool grown = false;
+                    for (std::uint32_t e = 0; e < th.entryCount && !grown; ++e)
+                    {
+                        if (std::string_view(strings + entries[e].pathOffset, entries[e].pathLength) != "dir/one.bin") { continue; }
+                        entries[e].size = ~std::uint64_t{ 0 };
+                        entries[e].blockCount = 0;
+                        grown = true;
+                    }
+                    t.Expect(grown, "found dir/one.bin's entry");
+                    std::vector<std::uint8_t> packed(ZSTD_compressBound(toc.size()));
+                    packed.resize(ZSTD_compress(packed.data(), packed.size(), toc.data(), toc.size(), 3));
+                    huge.resize(static_cast<std::size_t>(h.tocOffset));
+                    huge.insert(huge.end(), packed.begin(), packed.end());
+                    h.tocStoredSize = packed.size();
+                    h.tocCrc = pak::Crc32c(packed.data(), packed.size());
+                    std::memcpy(huge.data(), &h, sizeof(h));
+                    const std::filesystem::path badHuge = root / L"bad_huge.tcpak";
+                    t.Expect(WriteBytes(badHuge, huge), "write the package with an impossible entry size");
+                    std::string hugeError;
+                    t.Expect(!pak::Package::Open(badHuge, hugeError) && hugeError.find("impossible size") != std::string::npos,
+                             "control: an entry of 2^64 - 1 bytes with no blocks is refused at Open: " + hugeError);
+                }
+                // A build with a key of its own mounts only packages encrypted with a key it has (Config::requireEncrypted,
+                // 2026-11-18): beside an encrypted package an unencrypted one is left out; alone, the mount fails and says
+                // why; without the rule both mount.
+                {
+                    const std::filesystem::path policy = root / L"policy";
+                    const std::filesystem::path plainOnly = root / L"policy_plain";
+                    std::error_code pe;
+                    std::filesystem::create_directories(policy, pe);
+                    std::filesystem::create_directories(plainOnly, pe);
+                    std::filesystem::copy_file(pakA, policy / L"plain.tcpak", std::filesystem::copy_options::overwrite_existing, pe);
+                    std::filesystem::copy_file(pakA, plainOnly / L"plain.tcpak", std::filesystem::copy_options::overwrite_existing, pe);
+                    const pak::Key policyKey = pak::GenerateKey();
+                    const std::filesystem::path keyFile = root / L"policy_key.json";
+                    std::string keyError;
+                    t.Expect(pak::SaveKeyFile(policyKey, keyFile, keyError), "the policy arm's key file: " + keyError);
+                    pak::BuildOptions sealedOptions = options;
+                    sealedOptions.name = "sealed";
+                    sealedOptions.key = &policyKey;
+                    t.Expect(pak::Build(policy / L"sealed.tcpak", files, sealedOptions).ok, "the policy arm's encrypted package");
+
+                    Config strict;
+                    strict.mode = Config::Mode::Packages;
+                    strict.packageDir = policy;
+                    strict.keyFiles = { keyFile };
+                    strict.requireEncrypted = true;
+                    std::string policyError;
+                    const bool strictOk = Configure(strict, policyError);
+                    const std::vector<std::string> strictMounts = DescribeMounts();
+                    t.Expect(strictOk && strictMounts.size() == 1 && strictMounts[0].find("encrypted") != std::string::npos,
+                             "with the rule only the encrypted package mounts: " + policyError);
+
+                    Config open = strict;
+                    open.requireEncrypted = false;
+                    policyError.clear();
+                    t.Expect(Configure(open, policyError) && DescribeMounts().size() == 2,
+                             "control: without the rule the unencrypted package mounts beside it: " + policyError);
+
+                    Config alone = strict;
+                    alone.packageDir = plainOnly;
+                    policyError.clear();
+                    t.Expect(!Configure(alone, policyError) && policyError.find("unencrypted left out") != std::string::npos,
+                             "with the rule a folder of unencrypted packages does not mount, and says why: " + policyError);
+
+                    std::string ignored;
+                    Configure(Config{}, ignored); // the loose tree again, and the packages' files closed before the folder goes
+                }
             }
 
             std::filesystem::remove_all(root, ec);

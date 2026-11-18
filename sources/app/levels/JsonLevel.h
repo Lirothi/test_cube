@@ -24,5 +24,9 @@ public:
     void SetSourcePath(std::string path) override { sourcePath_ = std::move(path); }
 
 private:
+    // The load itself. Load wraps it: a key of the wrong type throws out of nlohmann, and the level is a file people
+    // and tools edit -- that is an Error naming the level and the key's complaint, not the end of the process.
+    void LoadFromSource_(const LevelLoadContext& ctx);
+
     std::string sourcePath_;
 };

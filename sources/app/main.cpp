@@ -390,6 +390,21 @@ int WINAPI WinMain(
             return crash::SelfTest(arm, options);
         }
     }
+#if !TC_PACKAGED
+    // A dev build's crash is reported too (2026-11-18): a Fatal line saying what happened and a minidump in logs/crashes.
+    // Until now only a packaged build installed the handler (below), and a dev run that died read as "the log just
+    // stops": an access violation on a worker, a throw nobody caught, the debug layer's break with no debugger, abort()
+    // out of an invariant. No message box -- the gates read the log and the exit code -- and every harness and tool below
+    // runs under it. Not under a debugger: it takes the fault first-hand, and abort() must still break into it. A CRT
+    // assert keeps its own road (the report hook above ends the process before abort is reached). The newest 10 dumps
+    // are kept.
+    if (!IsDebuggerPresent()) {
+        crash::Options options;
+        options.dumpFolder = L"logs/crashes";
+        options.keepDumps = 10;
+        crash::Install(options);
+    }
+#endif
     // --gpu-check (any build but Shipping, which runs it anyway): what the card has against what a shipped build needs.
     if (!build::Shipping() && lpCmdLine && std::strstr(lpCmdLine, "--gpu-check")) {
         const gpu::RequirementCheck check = gpu::CheckRequirements();

@@ -111,6 +111,15 @@ namespace
     // Browsers name the page in `Origin`, and a DNS-rebinding page shows up in `Host`. Anything
     // that is not this machine in either is refused. Claude Code sends neither a foreign Origin
     // nor a foreign Host, so it never notices this exists.
+    //
+    // AND A THIRD TIME (2026-11-18), because those two leave a page a way in. `Origin: null` is let through (a client
+    // with no origin of its own may send it), and null is also what a browser sends for a sandboxed iframe or a
+    // data: document -- so any web page could embed one and POST tool calls here blind; and a page served by ANY
+    // local web server has a "local" Origin. What a page cannot do is send `Content-Type: application/json` without a
+    // CORS preflight: the type is not one of the three a simple request may carry, the preflight is an OPTIONS, and
+    // OPTIONS gets 405 here with no Access-Control header -- the browser then never sends the POST. So a body that is
+    // not declared application/json is refused (415). Every MCP client declares it (the streamable-HTTP transport
+    // requires it); a script must too (python's urllib does not unless told: headers={"Content-Type": "application/json"}).
     bool IsLocalAuthority(const std::string& value)
     {
         std::string v = Lower(value);
@@ -124,6 +133,19 @@ namespace
         const std::size_t colon = v.find(':');
         const std::string host = colon == std::string::npos ? v : v.substr(0, colon);
         return host == "127.0.0.1" || host == "localhost" || host == "[::1]";
+    }
+
+    // "application/json", whatever its case and its parameters ("; charset=utf-8").
+    bool IsJsonContentType(const std::string& value)
+    {
+        static constexpr char kJson[] = "application/json";
+        constexpr std::size_t kLength = sizeof(kJson) - 1;
+        const std::string v = Lower(value);
+        if (v.compare(0, kLength, kJson) != 0)
+        {
+            return false;
+        }
+        return v.size() == kLength || v[kLength] == ';' || v[kLength] == ' ' || v[kLength] == '\t';
     }
 
     // ------------------------------------------------------------------ the screenshot handoff
@@ -370,6 +392,31 @@ namespace editormcp
         // Tessy) run at the hand-over (ServiceHandOver from App's Sync), where both halves may be read.
         std::mutex g_handOverMutex;
         std::vector<std::function<void()>> g_handOverWork;
+    }
+
+    int HttpRefusal(const HttpRequestHead& head)
+    {
+        if ((!head.origin.empty() && head.origin != "null" && !IsLocalAuthority(head.origin)) ||
+            (!head.host.empty() && !IsLocalAuthority(head.host)))
+        {
+            return 403;
+        }
+        if (head.path != "/mcp" && head.path != "/mcp/")
+        {
+            return 404;
+        }
+        // POST only. GET would open a stream for messages the server starts, and this one
+        // never starts any; DELETE ends a session, and there are none to end.
+        if (head.method != "POST")
+        {
+            return 405;
+        }
+        // The page's way in (the localhost rule, the third time): only a declared JSON body is read.
+        if (!IsJsonContentType(head.contentType))
+        {
+            return 415;
+        }
+        return 0;
     }
 
     void ServiceHandOver()
@@ -1895,6 +1942,7 @@ namespace editormcp
         std::size_t contentLength = 0;
         std::string origin;
         std::string host;
+        std::string contentType;
         std::size_t at = lineEnd == std::string::npos ? head.size() : lineEnd + 2;
         while (at < head.size())
         {
@@ -1922,29 +1970,40 @@ namespace editormcp
                 {
                     host = value;
                 }
+                else if (key == "content-type")
+                {
+                    contentType = value;
+                }
             }
             at = end + 2;
         }
 
-        if ((!origin.empty() && origin != "null" && !IsLocalAuthority(origin)) ||
-            (!host.empty() && !IsLocalAuthority(host)))
+        // The transport's gate (HttpRefusal: the localhost rule and the JSON body), before a byte of the body is read.
+        switch (HttpRefusal(HttpRequestHead{ method, path, origin, host, contentType }))
         {
+        case 0:
+            break;
+        case 403:
             LOG_WARNING(logging::LogCategory::Editor,
                 "MCP: refused a request from origin '{}' host '{}' -- not this machine",
                 origin, host);
             send(403, "Forbidden", "");
             return;
-        }
-        if (path != "/mcp" && path != "/mcp/")
-        {
+        case 404:
             send(404, "Not Found", "");
             return;
-        }
-        // POST only. GET would open a stream for messages the server starts, and this one
-        // never starts any; DELETE ends a session, and there are none to end.
-        if (method != "POST")
-        {
+        case 405:
             send(405, "Method Not Allowed", "", "Allow: POST\r\n");
+            return;
+        default:
+            // 415. The answer says what is wanted: a script that forgot the header reads it here.
+            LOG_WARNING_THROTTLED(std::chrono::seconds(5), logging::LogCategory::Editor,
+                "MCP: refused a POST declared as '{}' (origin '{}') -- a call's body is application/json; a web page "
+                "cannot declare that without a preflight, which is the point",
+                contentType, origin);
+            send(415, "Unsupported Media Type", json{ { "jsonrpc", "2.0" }, { "id", nullptr },
+                { "error", { { "code", -32600 },
+                    { "message", "Content-Type must be application/json (the MCP transport's own rule)" } } } }.dump());
             return;
         }
         if (contentLength > 16u * 1024u * 1024u)

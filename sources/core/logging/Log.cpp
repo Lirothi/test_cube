@@ -12,6 +12,8 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -1471,5 +1473,24 @@ namespace logging
         }
 
         return result;
+    }
+}
+
+// core/containers/inl_vector.h: an inline vector asked for more elements than it was declared with. Defined beside the
+// logger and not in a file of its own: every project that compiles a user of the container compiles the logger too
+// (tools/profiler_regression.vcxproj lists its sources by hand), so nothing has to be added to them.
+namespace tc::detail
+{
+    [[noreturn]] void InlVectorOverflow(std::size_t capacity, std::size_t wanted) noexcept
+    {
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "inl_vector: %zu element(s) asked of a vector declared for %zu -- a fixed-capacity list was outgrown; "
+                      "raise the capacity where it is declared, or check the count before the push",
+                      wanted, capacity);
+        // The emergency path: the record survives the abort (and the crash handler's minidump has the stack).
+        logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Core, line);
+        logging::Flush(2000);
+        std::abort();
     }
 }

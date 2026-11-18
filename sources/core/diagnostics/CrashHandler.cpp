@@ -2,11 +2,13 @@
 
 #include "core/diagnostics/CrashHandler.h"
 
+#include "core/containers/inl_vector.h" // the self-test's `overflow` arm
 #include "core/logging/Log.h"
 
 #include <Windows.h>
 #include <DbgHelp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -15,6 +17,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #pragma comment(lib, "dbghelp.lib")
 
@@ -255,6 +259,21 @@ void Install(const Options& options)
     std::error_code ec;
     g_folder = std::filesystem::absolute(options.dumpFolder, ec);
     std::filesystem::create_directories(g_folder, ec); // vfs-ok: crash dumps are written, never read
+    if (options.keepDumps > 0)
+    {
+        // The newest keepDumps stay (Options::keepDumps): the dump of a crash to come is one more.
+        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> dumps;
+        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(g_folder, ec)) // vfs-ok: the crash dumps' own folder
+        {
+            if (entry.path().extension() != L".dmp") { continue; }
+            dumps.emplace_back(entry.last_write_time(ec), entry.path()); // vfs-ok: the crash dumps' own folder
+        }
+        std::sort(dumps.begin(), dumps.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+        for (std::size_t i = options.keepDumps; i < dumps.size(); ++i)
+        {
+            std::filesystem::remove(dumps[i].second, ec);
+        }
+    }
     g_request = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (const HANDLE writer = CreateThread(nullptr, 256 * 1024, DumpWriter, nullptr, 0, nullptr)) { CloseHandle(writer); }
@@ -285,13 +304,13 @@ void InstallThisThread()
 int SelfTest(const std::string& arm, Options options)
 {
     options.messageBoxTimeoutMs = 3000;
-    const char* arms[] = { "av", "stack", "abort", "terminate", "throw", "purecall", "invalidparam", "fastfail" };
+    const char* arms[] = { "av", "stack", "abort", "terminate", "throw", "purecall", "invalidparam", "fastfail", "overflow" };
     bool known = false;
     for (const char* a : arms) { known = known || arm == a; }
     if (!known)
     {
         LOG_ERROR(logging::LogCategory::Core, "--crash-selftest={}: arms are av, stack, abort, terminate, throw, purecall, "
-                  "invalidparam, fastfail", arm);
+                  "invalidparam, fastfail, overflow", arm);
         return 2;
     }
     Install(options);
@@ -332,6 +351,14 @@ int SelfTest(const std::string& arm, Options options)
     else if (arm == "fastfail")
     {
         __fastfail(FAST_FAIL_FATAL_APP_EXIT); // nothing in the process runs: exit code 0xC0000409, the log ends here
+    }
+    else if (arm == "overflow")
+    {
+        // A fixed-capacity list outgrown (tc::inl_vector): the container's own Fatal line with the two numbers, then
+        // abort -- in every build. Before 2026-11-18 a Release build wrote past the storage here and went on.
+        tc::inl_vector<int, 2> two;
+        volatile int count = 3; // out of the optimiser's reach: the third push is the one past the capacity
+        for (int i = 0; i < count; ++i) { two.push_back(i); }
     }
     LOG_ERROR(logging::LogCategory::Core, "crash self-test: {} did not crash", arm);
     return 1;
