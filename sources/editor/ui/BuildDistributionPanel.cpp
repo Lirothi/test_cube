@@ -16,16 +16,44 @@
 #include <cfloat>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <tuple>
 
 namespace
 {
     namespace fs = std::filesystem;
 
     fs::path RepoPath(const std::string& rel) { return vfs::ContentRoot() / vfs::Widen(rel); }
+
+    // build_dist.py version_key: a.b.c[-suffix] as something that sorts -- a release after its pre-releases, suffixes by
+    // their text.
+    struct VersionKey
+    {
+        bool valid = false;
+        int a = 0, b = 0, c = 0;
+        int release = 1;
+        std::string suffix;
+        [[nodiscard]] auto Tuple() const { return std::tie(a, b, c, release, suffix); }
+    };
+    VersionKey ParseVersion(const std::string& version)
+    {
+        VersionKey key;
+        const std::size_t dash = version.find('-');
+        const std::string core = version.substr(0, dash);
+        char tail = 0;
+        if (sscanf_s(core.c_str(), "%d.%d.%d%c", &key.a, &key.b, &key.c, &tail, 1u) != 3) { return key; }
+        if (dash != std::string::npos)
+        {
+            key.release = 0;
+            key.suffix = version.substr(dash + 1);
+        }
+        key.valid = true;
+        return key;
+    }
 
     std::string ReadFileText(const fs::path& path)
     {
@@ -103,7 +131,9 @@ bool BuildDistributionPanel::ValidateRequest(const dist::BuildRequest& request, 
 {
     why.clear();
     static const char* modes[] = { "check", "record", "content", "full" };
-    if (std::find_if(std::begin(modes), std::end(modes), [&](const char* m) { return request.mode == m; }) == std::end(modes))
+    const bool deleting = request.mode == "delete" && request.deleteBuild > 0; // the window's History (MCP sets no build)
+    if (!deleting &&
+        std::find_if(std::begin(modes), std::end(modes), [&](const char* m) { return request.mode == m; }) == std::end(modes))
     {
         why = "mode \"" + request.mode + "\": check, record, content or full";
         return false;
@@ -428,6 +458,100 @@ void BuildDistributionPanel::DrawProfile()
     ImGui::SameLine();
     ImGui::SetNextItemWidth(160.0f);
     InputString("Output folder", profile_, "out", "dist");
+    DrawVersionVerdict();
+}
+
+void BuildDistributionPanel::DrawVersionVerdict()
+{
+    // build_dist.py's versionMustGrow before a run (owner, 2026-11-17): only a PUBLISHED build uses its version up.
+    if (!profile_.value("versionMustGrow", false)) { return; }
+    const std::string version = profile_.value("version", std::string("0.0.0"));
+    const VersionKey key = ParseVersion(version);
+    const nlohmann::json* blocker = nullptr;
+    std::string builtAs;
+    for (const nlohmann::json& h : history_)
+    {
+        if (!h.is_object() || h.value("profile", std::string()) != profileName_ || h.value("result", std::string()) != "built" ||
+            h.value("flavour", std::string("shipping")) != flavour_)
+        {
+            continue;
+        }
+        if (h.value("version", std::string()) == version) { builtAs += (builtAs.empty() ? "" : ", ") + std::to_string(h.value("build", 0)); }
+        if (!h.value("published", false)) { continue; }
+        const VersionKey published = ParseVersion(h.value("version", std::string()));
+        if (!key.valid || !published.valid || published.Tuple() >= key.Tuple())
+        {
+            if (!blocker || ParseVersion(blocker->value("version", std::string())).Tuple() < published.Tuple()) { blocker = &h; }
+        }
+    }
+    if (blocker)
+    {
+        ImGui::TextColored(LevelColour("error"), "Version %s: build %d (%s) is published -- raise it (or untick it in History)",
+                           version.c_str(), blocker->value("build", 0), blocker->value("version", std::string()).c_str());
+    }
+    else if (!builtAs.empty())
+    {
+        ImGui::TextDisabled("Version %s: built before (build %s), not published -- builds again", version.c_str(), builtAs.c_str());
+    }
+}
+
+void BuildDistributionPanel::SetPublished(int build, bool published)
+{
+    const fs::path path = RepoPath(OutFolder()) / L"build_history.json";
+    nlohmann::json history = nlohmann::json::parse(ReadFileText(path), nullptr, false);
+    if (!history.is_array())
+    {
+        message_ = "Not marked: cannot read " + vfs::Narrow(path.wstring());
+        return;
+    }
+    bool found = false;
+    for (nlohmann::json& h : history)
+    {
+        if (!h.is_object() || h.value("build", 0) != build || h.value("result", std::string()) != "built") { continue; }
+        if (published)
+        {
+            char date[32] = {};
+            const std::time_t now = std::time(nullptr);
+            std::tm local{};
+            localtime_s(&local, &now);
+            std::strftime(date, sizeof(date), "%Y-%m-%d %H:%M", &local);
+            h["published"] = true;
+            h["publishedDate"] = date;
+        }
+        else
+        {
+            h.erase("published");
+            h.erase("publishedDate");
+        }
+        found = true;
+    }
+    if (!found)
+    {
+        message_ = "Not marked: no built build " + std::to_string(build) + " in the history";
+        return;
+    }
+    // The history is build_dist.py's: temp + rename, so a half-written file is never what it reads.
+    fs::path tmp = path;
+    tmp += L".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out << history.dump(2) << "\n";
+        if (!out)
+        {
+            message_ = "Not marked: cannot write " + vfs::Narrow(tmp.wstring());
+            return;
+        }
+    }
+    std::error_code ec;
+    fs::rename(tmp, path, ec);
+    if (ec)
+    {
+        message_ = "Not marked: " + ec.message();
+        return;
+    }
+    history_ = history;
+    message_ = "Build " + std::to_string(build) + (published ? ": published" : ": not published");
+    LOG_INFO(logging::LogCategory::Editor, "build distribution: build {} {}", build, published ? "published" : "not published");
 }
 
 void BuildDistributionPanel::DrawLevels(const Hooks& hooks)
@@ -884,16 +1008,20 @@ void BuildDistributionPanel::DrawHistory()
 {
     if (history_.empty()) { return; }
     if (!ImGui::CollapsingHeader("History")) { return; }
-    if (ImGui::BeginTable("history", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY,
+    int toggledBuild = 0;
+    bool toggledTo = false;
+    if (ImGui::BeginTable("history", 9, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY,
                           ImVec2(0.0f, 120.0f)))
     {
         ImGui::TableSetupColumn("Build", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("Version");
+        ImGui::TableSetupColumn("Published", ImGuiTableColumnFlags_WidthFixed, 75.0f);
         ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 85.0f);
         ImGui::TableSetupColumn("Profile", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80.0f);
         ImGui::TableSetupColumn("Levels");
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 60.0f);
         ImGui::TableHeadersRow();
         for (auto it = history_.rbegin(); it != history_.rend(); ++it)
         {
@@ -903,6 +1031,29 @@ void BuildDistributionPanel::DrawHistory()
             ImGui::Text("%d", h.value("build", 0));
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(h.value("versionString", std::string()).c_str());
+            ImGui::TableNextColumn();
+            // Handed to players: a profile with versionMustGrow then needs a version above it (build_dist.py). Not while a
+            // run is going -- it writes the history at its end.
+            if (h.value("result", std::string()) == "built")
+            {
+                bool published = h.value("published", false);
+                ImGui::PushID(h.value("build", 0));
+                ImGui::BeginDisabled(dist::TheBuildJob().Running());
+                if (ImGui::Checkbox("##published", &published))
+                {
+                    toggledBuild = h.value("build", 0);
+                    toggledTo = published;
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                {
+                    const std::string when = h.value("publishedDate", std::string());
+                    ImGui::SetTooltip("%s\nPublished = handed to players. A profile with versionMustGrow (release) then needs a "
+                                      "version above it;\na version only built (not published) can be built again.",
+                                      published ? ("Published " + when).c_str() : "Not published");
+                }
+            }
             ImGui::TableNextColumn();
             // Builds before the flavour existed were all Shipping.
             ImGui::TextUnformatted(h.value("flavour", std::string("shipping")) == "development" ? "Development" : "Shipping");
@@ -934,9 +1085,113 @@ void BuildDistributionPanel::DrawHistory()
                 levels += (levels.empty() ? "" : ", ") + vfs::Narrow(fs::path(vfs::Widen(l.get<std::string>())).stem().wstring());
             }
             ImGui::TextUnformatted(levels.c_str());
+            ImGui::TableNextColumn();
+            // Out of the history and off the disk (owner, 2026-11-17), after a confirmation that lists the files. A published
+            // build is not: players may hold it, and its symbols read their crash reports.
+            const bool published = h.value("published", false);
+            ImGui::PushID(h.value("build", 0));
+            ImGui::BeginDisabled(published || dist::TheBuildJob().Running());
+            if (ImGui::SmallButton("Delete"))
+            {
+                deleteBuild_ = h.value("build", 0);
+                openDeleteConfirm_ = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+            if (published && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            {
+                ImGui::SetTooltip("Published: players may hold it. Untick Published first if it never reached anybody.");
+            }
         }
         ImGui::EndTable();
     }
+    if (toggledBuild != 0) { SetPublished(toggledBuild, toggledTo); }
+}
+
+std::vector<std::string> BuildDistributionPanel::DeletionPlan(const nlohmann::json& entry) const
+{
+    // build_dist.py delete_builds, read-only: a later build of the same version replaced the folder and the zip, so what
+    // lies there is its own (the script also reads the folder's manifest before it deletes anything).
+    std::vector<std::string> plan;
+    const int build = entry.value("build", 0);
+    std::error_code ec;
+    const auto laterOwner = [&](const char* key, const std::string& value) -> int {
+        for (const nlohmann::json& h : history_)
+        {
+            if (h.is_object() && h.value("build", 0) > build && h.value("result", std::string()) == "built" &&
+                h.value(key, std::string()) == value)
+            {
+                return h.value("build", 0);
+            }
+        }
+        return 0;
+    };
+    for (const char* key : { "folder", "zip" })
+    {
+        const nlohmann::json value = entry.value(key, nlohmann::json());
+        if (!value.is_string() || value.get<std::string>().empty()) { continue; }
+        const std::string path = value.get<std::string>();
+        if (!fs::exists(vfs::Widen(path), ec)) { continue; }
+        const int owner = laterOwner(key, path);
+        plan.push_back(owner ? "kept: " + path + " (build " + std::to_string(owner) + "'s now)" : "delete: " + path);
+        // A profile without symbols keeps the cook report beside the folder, and it goes with it.
+        const fs::path report = RepoPath(OutFolder()) / (fs::path(vfs::Widen(path)).filename().wstring() + L".cook_report.json");
+        if (std::string(key) == "folder" && !owner && fs::exists(report, ec)) { plan.push_back("delete: " + vfs::Narrow(report.wstring())); }
+    }
+    const std::string versionText = entry.value("versionString", std::string());
+    if (!versionText.empty())
+    {
+        const std::string name = versionText.substr(0, versionText.find(' ')) +
+                                 (entry.value("flavour", std::string("shipping")) == "shipping" ? "" : "-dev");
+        const fs::path symbols = RepoPath("dist_symbols") / vfs::Widen(name);
+        if (fs::exists(symbols, ec)) { plan.push_back("delete: " + vfs::Narrow(symbols.wstring()) + " (its symbols)"); }
+    }
+    plan.push_back("its entry in the history");
+    return plan;
+}
+
+void BuildDistributionPanel::DrawDeleteConfirm()
+{
+    if (openDeleteConfirm_)
+    {
+        ImGui::OpenPopup("Delete a build");
+        openDeleteConfirm_ = false;
+    }
+    if (!ImGui::BeginPopupModal("Delete a build", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) { return; }
+    const nlohmann::json* entry = nullptr;
+    for (const nlohmann::json& h : history_)
+    {
+        if (h.is_object() && h.value("build", 0) == deleteBuild_) { entry = &h; }
+    }
+    if (!entry)
+    {
+        ImGui::TextUnformatted("That build is no longer in the history.");
+        if (ImGui::Button("Close")) { ImGui::CloseCurrentPopup(); }
+        ImGui::EndPopup();
+        return;
+    }
+    ImGui::Text("Build %d (%s, %s): off the disk and out of the history. This cannot be undone.", deleteBuild_,
+                entry->value("versionString", std::string()).c_str(), entry->value("profile", std::string()).c_str());
+    for (const std::string& line : DeletionPlan(*entry)) { ImGui::BulletText("%s", line.c_str()); }
+    ImGui::Spacing();
+    if (ImGui::Button("Delete"))
+    {
+        dist::BuildRequest request;
+        request.profile = profileName_;
+        request.mode = "delete";
+        request.deleteBuild = deleteBuild_;
+        std::string why;
+        if (!ValidateRequest(request, why) || !dist::TheBuildJob().Start(request, why)) { message_ = "Not deleted: " + why; }
+        deleteBuild_ = 0;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel"))
+    {
+        deleteBuild_ = 0;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
@@ -956,7 +1211,20 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
         const std::string name = openOn_.substr(0, comma);
         if (std::find(profiles_.begin(), profiles_.end(), name) != profiles_.end()) { LoadProfile(name); }
         else { LOG_WARNING(logging::LogCategory::Editor, "--build-dist={}: no profile tools/dist/{}.json", openOn_, name); }
-        overrideLicences_ = comma != std::string::npos && openOn_.substr(comma + 1) == "override-licences";
+        // After the profile, comma-separated: override-licences (ticked), delete=<build> (its confirmation open).
+        overrideLicences_ = false;
+        for (std::size_t at = comma; at != std::string::npos;)
+        {
+            const std::size_t next = openOn_.find(',', at + 1);
+            const std::string item = openOn_.substr(at + 1, next == std::string::npos ? std::string::npos : next - at - 1);
+            if (item == "override-licences") { overrideLicences_ = true; }
+            else if (item.rfind("delete=", 0) == 0)
+            {
+                deleteBuild_ = std::atoi(item.c_str() + 7);
+                openDeleteConfirm_ = deleteBuild_ > 0;
+            }
+            at = next;
+        }
         openOn_.clear();
     }
     // The level table's sizes, once: the walk over every level on disk (a check, a second or two) -- unless a build has run
@@ -991,6 +1259,7 @@ void BuildDistributionPanel::Draw(bool* open, const Hooks& hooks)
     DrawRun(hooks);
     DrawResult();
     DrawHistory();
+    DrawDeleteConfirm(); // outside History: its header may be folded
     if (!message_.empty()) { ImGui::TextWrapped("%s", message_.c_str()); }
     ImGui::End();
 }

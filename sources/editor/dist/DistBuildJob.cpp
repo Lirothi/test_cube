@@ -55,6 +55,11 @@ std::wstring BuildCommandLine(const std::wstring& python, const BuildRequest& re
 {
     std::wstring cmd = Quote(python) + L" -u tools\\build_dist.py --progress=json";
     cmd += L" " + Quote(L"--profile=" + vfs::Widen(request.profile.empty() ? std::string("test") : request.profile));
+    if (request.mode == "delete")
+    {
+        cmd += L" --delete-build=" + std::to_wstring(request.deleteBuild);
+        return cmd;
+    }
     cmd += L" --mode=" + vfs::Widen(request.mode);
     if (!request.levels.empty())
     {

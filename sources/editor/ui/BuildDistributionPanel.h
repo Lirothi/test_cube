@@ -35,7 +35,8 @@ public:
     // A cook message that names a level's object ("... (named by <level>, object '<name>')", Cook.cpp Visit): its level
     // and object -- the line the window turns into a button that selects it. False for any other message.
     static bool ObjectOfMessage(const std::string& message, std::string& level, std::string& object);
-    // "--build-dist=<profile>[,override-licences]": the window opens on that profile (and the licence override ticked).
+    // "--build-dist=<profile>[,override-licences][,delete=<build>]": the window opens on that profile (the licence override
+    // ticked, a build's delete confirmation open) -- for a --shot.
     void OpenOn(const std::string& spec) { openOn_ = spec; }
 
 private:
@@ -62,6 +63,16 @@ private:
     void DrawRun(const Hooks& hooks);
     void DrawResult();
     void DrawHistory();
+    // The history's "published" flag (a build handed to players; build_dist.py --mark-published): versionMustGrow needs a
+    // version above every published build of the profile, and lets one only built be built again.
+    void SetPublished(int build, bool published);
+    // History "Delete": what `build_dist.py --delete-build` will take off the disk for this entry (the same rules: the
+    // folder and zip only while they are still its own), for the confirmation; then the run.
+    std::vector<std::string> DeletionPlan(const nlohmann::json& entry) const;
+    void DrawDeleteConfirm();
+    int deleteBuild_ = 0;          // the build the confirmation asks about; 0 = none
+    bool openDeleteConfirm_ = false;
+    void DrawVersionVerdict();
     [[nodiscard]] bool Dirty() const { return profile_ != saved_; }
     [[nodiscard]] std::string OutFolder() const;
 

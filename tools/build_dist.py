@@ -18,6 +18,16 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
                             the whole command line; x64/Development, the folder <product>-<version>-dev, its PDB beside the
                             exe, never encrypted, the profile's "devInclude" cooked too). Default: the profile's "flavour",
                             else shipping.
+    --mark-published=<build>[,<build>...]   --unmark-published=<build>[,...]
+                            a build handed to players (or a mark set by mistake), in <out>/build_history.json -- the
+                            window's History "Published" column; nothing is built. A profile with "versionMustGrow" then
+                            needs a version above every PUBLISHED build of it (its flavour); one built but not published
+                            builds again, its folder and zip replaced
+    --delete-build=<build>[,<build>...]
+                            a build out of the history AND off the disk (the window's History "Delete"): its folder, zip
+                            and kept cook report when they are still its own (a later build of the same version replaced
+                            them: kept), and its symbols (dist_symbols/<a.b.c+build>). Only under the output folder and
+                            dist_symbols/; a published build is refused (--unmark-published first). Nothing is built
     --skip-build            take the exes as they are: check/content do not bring x64/Cook up to date (an incremental
                             MSBuild, 0.5 s when nothing changed), full builds neither Cook nor the game's exe
     --key=<key.json>        the package key (default %USERPROFILE%\.test_cube\pak_key.json; made there if missing)
@@ -283,6 +293,148 @@ def load_history(out_dir):
     return []
 
 
+def version_key(version):
+    """a.b.c[-suffix] as something that sorts: a release (no suffix) after its pre-releases, suffixes by their text."""
+    m = re.match(r"^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-(.+))?$", version or "")
+    if not m:
+        return None
+    return (int(m[1]), int(m[2]), int(m[3]), 1 if m[4] is None else 0, m[4] or "")
+
+
+def version_blockers(history, profile_name, flavour, version):
+    """versionMustGrow (owner, 2026-11-17: "if I don't bump the version I cannot build"): the PUBLISHED builds of this
+    profile and flavour whose version this one does not grow past. A version a player may hold is one build; one that was
+    only built (tried, checked, never handed out) builds again."""
+    key = version_key(version)
+    return [h for h in history if h.get("profile") == profile_name and h.get("result") == "built"
+            and h.get("flavour", "shipping") == flavour and h.get("published")
+            and (key is None or version_key(h.get("version", "")) is None or version_key(h["version"]) >= key)]
+
+
+def mark_published(args, progress):
+    """--mark-published / --unmark-published: the history's "published" flag, nothing built."""
+    on = args.mark_published is not None
+    spec = args.mark_published if on else args.unmark_published
+    out_dir = pathlib.Path(args.out) if args.out else ROOT / load_profile(args.profile).get("out", "dist")
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
+    history = load_history(out_dir)
+    try:
+        builds = [int(b) for b in spec.split(",") if b.strip()]
+    except ValueError:
+        raise BuildError(f"build numbers, comma-separated: {spec!r}")
+    for number in builds:
+        entry = next((h for h in history if h.get("build") == number and h.get("result") == "built"), None)
+        if entry is None:
+            raise BuildError(f"no built build {number} in {history_path(out_dir)}")
+        if on:
+            entry["published"] = True
+            entry["publishedDate"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        else:
+            entry.pop("published", None)
+            entry.pop("publishedDate", None)
+        progress.emit(f"build {number} ({entry.get('versionString', entry.get('version'))}, {entry.get('profile')}): "
+                      f"{'published' if on else 'not published'}")
+    save_history(out_dir, history)
+    progress.emit("done", event="done")
+    return 0
+
+
+def delete_builds(args, progress):
+    """--delete-build: builds out of the history and their files off the disk (owner, 2026-11-17)."""
+    out_dir = pathlib.Path(args.out) if args.out else ROOT / load_profile(args.profile).get("out", "dist")
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
+    out_root = out_dir.resolve()
+    symbols_root = (ROOT / "dist_symbols").resolve()
+    history = load_history(out_dir)
+    try:
+        numbers = [int(b) for b in args.delete_build.split(",") if b.strip()]
+    except ValueError:
+        raise BuildError(f"build numbers, comma-separated: {args.delete_build!r}")
+
+    def inside(path, parent):
+        try:
+            path.resolve().relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+    def writable(func, path, _):
+        os.chmod(path, 0o666)  # a read-only file (copied from a read-only source) is deleted all the same
+        func(path)
+
+    for number in numbers:
+        progress.begin("stage", f"build {number}")
+        entry = next((h for h in history if h.get("build") == number), None)
+        if entry is None:
+            raise BuildError(f"no build {number} in {history_path(out_dir)}")
+        if entry.get("published"):
+            raise BuildError(f"build {number} ({entry.get('version')}) is published -- players may hold it; unmark it first "
+                             f"(--unmark-published={number}) if it never reached anybody")
+        # Each build replaces the folder and the zip of its version: whatever lies there now is the newest build's.
+        later = [h for h in history if h.get("build", 0) > number and h.get("result") == "built"]
+        targets = []
+        folder = entry.get("folder")
+        if folder:
+            path = pathlib.Path(folder)
+            owner = next((h for h in later if h.get("folder") == folder), None)
+            manifest = path / "manifest.json"
+            manifest_build = None
+            if manifest.exists():
+                try:
+                    manifest_build = json.loads(manifest.read_text(encoding="utf-8")).get("build")
+                except ValueError:
+                    pass
+            if not path.exists():
+                pass
+            elif owner is not None or (manifest_build is not None and manifest_build != number):
+                progress.emit(f"kept {path}: build {owner.get('build') if owner else manifest_build}'s now")
+            elif not inside(path, out_root):
+                progress.emit(f"kept {path}: not under {out_root}", level="warning")
+            else:
+                targets.append(path)
+            report = out_dir / f"{path.name}.cook_report.json"
+            if report.exists() and owner is None and inside(report, out_root):
+                targets.append(report)
+        zip_file = entry.get("zip")
+        if zip_file:
+            path = pathlib.Path(zip_file)
+            owner = next((h for h in later if h.get("zip") == zip_file), None)
+            if not path.exists():
+                pass
+            elif owner is not None:
+                progress.emit(f"kept {path}: build {owner.get('build')}'s now")
+            elif not inside(path, out_root):
+                progress.emit(f"kept {path}: not under {out_root}", level="warning")
+            else:
+                targets.append(path)
+        version_text = entry.get("versionString", "")
+        if version_text:
+            symbols = symbols_root / (version_text.split(" ")[0] + ("" if entry.get("flavour", "shipping") == "shipping" else "-dev"))
+            if symbols.exists() and inside(symbols, symbols_root):
+                targets.append(symbols)
+        for path in targets:
+            try:
+                if path.is_dir():
+                    if sys.version_info >= (3, 12):
+                        shutil.rmtree(path, onexc=writable)  # onerror is deprecated from 3.12
+                    else:
+                        shutil.rmtree(path, onerror=writable)
+                else:
+                    path.unlink()
+            except OSError as e:
+                raise BuildError(f"cannot delete {path} ({e}) -- is the game running from it? The history keeps build {number}")
+            progress.emit(f"deleted {path}")
+        history.remove(entry)
+        save_history(out_dir, history)
+        progress.emit(f"build {number} ({version_text or entry.get('version')}) out of the history"
+                      f"{'' if targets else ' (none of its files deleted)'}")
+    progress.begin("finish", "deleted")
+    progress.emit("done", event="done")
+    return 0
+
+
 def save_history(out_dir, history):
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp = history_path(out_dir).with_suffix(".tmp")
@@ -422,6 +574,9 @@ def main():
     ap.add_argument("--override-licences", action="store_true")
     ap.add_argument("--flavour", choices=["shipping", "development"])
     ap.add_argument("--skip-build", action="store_true")
+    ap.add_argument("--mark-published")
+    ap.add_argument("--unmark-published")
+    ap.add_argument("--delete-build")
     ap.add_argument("--out")
     ap.add_argument("--progress", choices=["text", "json"], default="text")
     ap.add_argument("--keep-temp", action="store_true")
@@ -429,6 +584,10 @@ def main():
     args = ap.parse_args()
     progress = Progress(args.progress == "json")
     try:
+        if args.mark_published is not None or args.unmark_published is not None:
+            return mark_published(args, progress)
+        if args.delete_build is not None:
+            return delete_builds(args, progress)
         return build(args, progress)
     except BuildError as e:
         progress.emit(str(e), level="error", event="failed")
@@ -539,11 +698,19 @@ def build(args, progress):
         history = load_history(out_dir)
         build_number = 1 + max([h.get("build", 0) for h in history] + [0])
         if profile.get("versionMustGrow") and args.mode in ("content", "full"):
-            # Each flavour its own: a Development build of 1.2.0 does not use up 1.2.0 for Shipping.
-            shipped = [h for h in history if h.get("profile") == profile["_name"] and h.get("result") == "built"
-                       and h.get("flavour", "shipping") == flavour]
-            if any(h.get("version") == version for h in shipped):
-                raise BuildError(f"profile {profile['_name']}: version {version} was built before -- raise it (--version=)")
+            # Above every PUBLISHED build of the profile; each flavour its own (a Development build of 1.2.0 does not use
+            # up 1.2.0 for Shipping). Until 2026-11-17 any build used its version up, published or not.
+            blockers = version_blockers(history, profile["_name"], flavour, version)
+            if blockers:
+                top = max(blockers, key=lambda h: version_key(h.get("version", "")) or ())
+                raise BuildError(f"profile {profile['_name']}: version {version} does not grow past {top.get('version')}, "
+                                 f"published (build {top.get('build')}, {top.get('publishedDate', '?')}) -- raise it "
+                                 f"(--version=), or unmark that build if it never reached anybody (--unmark-published=)")
+            before = [h.get("build") for h in history if h.get("profile") == profile["_name"] and h.get("result") == "built"
+                      and h.get("flavour", "shipping") == flavour and h.get("version") == version]
+            if before:
+                progress.emit(f"version {version} was built before (build {', '.join(str(b) for b in before)}), not published: "
+                              f"built again, its folder and zip replaced")
         date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         version_text, header = version_header(product, version, build_number, git_hash, dirty, date)
         # The stamped headers live under the staging folder only (test_cube.vcxproj TcGeneratedRoot): ending this build

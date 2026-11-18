@@ -702,9 +702,18 @@ distribution: packages, our file system over packages and direct paths, encrypti
   or stored, CRC32C each, AES-256-GCM through CNG when encrypted (HKDF sub-keys, synthetic nonce, AAD per block), TOC at the
   end, deterministic (same files -> same bytes), "deleted" records for patches. Tools (no window): `--pak-build=<out>
   --pak-files=<list>`, `--pak-list=`, `--pak-verify=`, `--pak-keygen=<key.json>` (never over a file), `--pak-key-header=
-  <key.json>,<out.h>`, `--vfs-selftest` (125 checks with their controls). A package that opens is checked whole: the
+  <key.json>,<out.h>`, `--vfs-selftest` (134 checks with their controls). A package that opens is checked whole: the
   block layout Read relies on, the header's TOC size against its zstd frame, a disk read error on the mapped view read as
-  damage (`EXCEPTION_IN_PAGE_ERROR`), not a crash.
+  damage (`EXCEPTION_IN_PAGE_ERROR`), not a crash; no entry is larger than all the package's blocks (2026-11-18: a size
+  within 64 KB of 2^64 wrapped the block count's sum, the entry passed with no blocks and Read indexed the block table
+  out of range -- the self-test's control arm fails without the check).
+  **A build that carries a key mounts only packages encrypted with a key it has** (2026-11-18, the code review;
+  `vfs::Config::requireEncrypted`, unset = on exactly when a key is embedded -- an encrypted distribution -- and off in
+  every other build, dev and `--no-encrypt` ones included): a package is mounted by its presence in `content\` and sorted
+  by the priority its OWN header claims, so an unencrypted file dropped beside an encrypted game replaced any file of it
+  (a level, `config/boot.json`, a cooked shader). Such a package is left out with an Error (`vfs: <file> is not
+  encrypted ... left out`), the rest mount; none left = the mount fails and says so. Checked by the self-test with the
+  rule set by hand (both ways); NOT yet run on a real keyed Shipping exe -- do that at the next encrypted `build_dist`.
 - **Shaders**: `--shader-model=6.6` caps the target (a mounted `shaders.tcpak` sets its own: `shaders/dxil/cooked.txt`);
   `--shader-record=<file>` lists every compile request; cooked DXIL is looked up first (`shaders/dxil/<id>.dxil`, the id
   without absolute paths, Release flags), a miss logs `shader permutation not cooked` once and compiles from the packaged
@@ -743,8 +752,22 @@ distribution: packages, our file system over packages and direct paths, encrypti
   Windows 10 has no SM 6.6 in-box, and without the file no device is made even on Windows 11 26100), the GPU check (SM 6.6,
   binding tier 3, DXR 1.1 -- `gpu::CheckRequirements`, `--gpu-check` in dev), NVIDIA's signature on the delay-loaded
   `sl.interposer.dll`. Crash reports (`core/diagnostics/CrashHandler.h`): a minidump in `crashes\`, a Fatal line, a box (the engine's own long-lived threads -- the task workers, render, RHI, the physics step and Jolt's jobs, the texture streaming IO -- call `InstallThisThread`: std::terminate's handler is per thread in the MSVC CRT, and each gets the 64 KB stack guarantee);
-  `--crash-selftest=av|stack|abort|terminate|throw|purecall|invalidparam|fastfail` (fastfail: no report -- nothing in the
-  process runs). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any of the game's message boxes (the gates' way past them).
+  `--crash-selftest=av|stack|abort|terminate|throw|purecall|invalidparam|fastfail|overflow` (fastfail: no report --
+  nothing in the process runs; overflow: a `tc::inl_vector` outgrown, below). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any
+  of the game's message boxes (the gates' way past them).
+  **A dev build reports its crashes too** (2026-11-18, the code review; main.cpp, `#if !TC_PACKAGED`): Debug, Release and
+  Release_Editor install the same handler -- no message box, minidumps in `logs/crashes` (the newest 10 kept,
+  `crash::Options::keepDumps`), the session log's `crash: <what> -- minidump <path>` Fatal line, the exit code the
+  exception's (0xC0000005 ...) or 3 for abort / terminate. Every harness and tool runs under it (the log's `crash
+  reports: on` line). Not under a debugger (it takes the fault, and abort() must break into it); a CRT assert keeps its
+  own road (the report hook ends the process first); scene-stress still installs its own filter over it. Until then a
+  dev run that died read as "the log just stops" and was dug out of WER's dumps.
+  **`tc::inl_vector` ends the process on an overflow, in every build** (same day): `emplace_back` / `push_back` /
+  `resize` past the declared capacity write a Fatal line with both numbers (`inl_vector: N element(s) asked of a vector
+  declared for M`, `tc::detail::InlVectorOverflow` in Log.cpp) and abort -- an assert said so in Debug, Release wrote
+  past the storage in silence (the task system's dependents, the render graph's lists). A caller that can meet more
+  than its capacity checks `size() < capacity()` first and says what it dropped: the glass draws of one object
+  (`GBufferRenderable::RenderTranslucent`, 32 now, were 8 unchecked) do.
 - **Development|x64 = the packaged game WITH the developer features** (`TC_PACKAGED=1` without `TC_SHIPPING`; owner,
   2026-11-13: "two kinds of build, dev and shipping"; docs/scalability_plan.md §7). Picked at BUILD time, not by hand:
   the Build Distribution window's "Build type" Shipping / Development, `build_dist.py --flavour=development`, MCP
@@ -789,6 +812,19 @@ distribution: packages, our file system over packages and direct paths, encrypti
   and a command-line value). The key: `%USERPROFILE%\.test_cube\pak_key.json`, made on the first encrypted build --
   KEEP A COPY; a lost key leaves its packages unreadable. `release` needs `versionMustGrow` and every licence known (until
   the owner settles `rocks` and three textures in `import_staging/`, it builds only with the licences overridden).
+  **`versionMustGrow` counts only PUBLISHED builds** (2026-11-17, owner: "if I don't bump the version I cannot build"; until
+  then any build used its version up): a build is published when it is handed to players -- the window's History
+  "Published" tick, `build_dist.py --mark-published=<build>[,...]` / `--unmark-published=` (the history's `published` and
+  `publishedDate`; nothing built) -- and a content / full build then needs a version above every published build of the
+  profile and flavour (`version_key`: a.b.c, a release after its pre-releases). A version only built builds again: its
+  folder and zip are replaced, its symbols kept apart by the full string (`dist_symbols/0.1.1+3`). The window says it
+  under the Version row before a run (red: published, raise it; grey: built before, builds again). **History "Delete"**
+  (owner, same day; `build_dist.py --delete-build=<build>[,...]`, a job of the window's: mode `delete`, never MCP's): the
+  build out of the history and its files off the disk after a confirmation that lists them -- its folder, zip and kept cook
+  report while they are still its own (a later build of the same version replaced them: kept, and the folder's
+  manifest.json is read first), its symbols (`dist_symbols/<a.b.c+build>`); only under the output folder and
+  dist_symbols/; a published build is refused. `--build-dist=<profile>,delete=<build>` opens the confirmation for a
+  `--shot`.
   **`--override-licences`** (2026-11-16, owner: "a checkbox to override the licences when building the release config";
   the window's "Override the licences for this build" under "Every licence known", MCP `build_dist {overrideLicences:
   true}`): ONE build ships what a profile's `strictLicences` refuses -- the cook makes each such asset a warning
@@ -1232,8 +1268,13 @@ frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `se
   person's to keep or discard. The per-level editor camera is not saved with it.
 - Each edit is one undo entry and shows in the command bar's transcript under **claude**.
 - Only while the editor is open with a level; calls wait up to 60 s for a frame, then fail.
-- Browser requests are refused (`Origin`/`Host` must be this machine), so a web page cannot
-  drive it. A second editor cannot bind the port and says so in its panel -- and a SCRIPT that waits for the port then talks to
+- Browser requests are refused, three ways (`editormcp::HttpRefusal`, in the gate): `Origin` / `Host` must be this
+  machine (403), and **the body must be declared `Content-Type: application/json` (415, 2026-11-18)** -- `Origin: null`
+  is let through and is also what a sandboxed iframe or a data: page sends, and a page of ANY local web server has a
+  local Origin, so those two alone left a page a blind way in; a page cannot declare JSON without a CORS preflight, and
+  OPTIONS gets 405. Every MCP client sends it; **a script must too** (`headers={"Content-Type": "application/json"}`:
+  python's urllib does not by itself -- the 415's body says so). Checked live on a socket, seven arms.
+  A second editor cannot bind the port and says so in its panel -- and a SCRIPT that waits for the port then talks to
 whatever holds it (2026-11-09: a check's reset_settings / set_settings / set_camera went to the owner's open editor;
 withdrawn there, his frames were not served in 60 s). A script's own editor takes `--mcp-port=<n>` (App.h
 g_bootMcpPort; scratchpad `mcp.py` reads MCP_PORT) and checks that port is free BEFORE launching.
@@ -2417,7 +2458,11 @@ A KNOB THAT SEEMS TO SAVE TIME: compare what it costs the picture on what reads 
 - **The pose is a render offset.** A body moves its object through `RenderableObject::SetRenderOffset`, at the hand-over (`World::SyncPoses`; in `Scene::Tick` on a frame with no step or under `physics.async:0`), so the authored transform, the document and a Save
   never see it; only Keep writes it. Numbers cross as they are (position and quaternion, never a matrix), no change of handedness: the gate `pose` holds it.
 - **What does not move does not pay.** Objects arrive through a registry (`SetPhysicsMotion`, the transform setters and `SetVisible` queue an event; nothing walks the scene), and without an awake
-  body or a moving boat `PhysicsSystem::Update` is not called: `Scene::TickPhysics` 0.001 ms.
+  body or a moving boat `PhysicsSystem::Update` is not called: `Scene::TickPhysics` 0.001 ms. An object's destructor
+  only POSTS its removal: until the world's next Drain its entry holds the dead pointer, which `FindVessel` /
+  `CollectHulls` hand out and `Scene::Sync` dereferences. So every removal in Scene ends with `physics_.ForgetRemoved()`
+  (2026-11-18: `RemoveEditorObject`, `RemoveOceanObjects` and `Clear` joined `RemoveRuntimeObjects`; the editor's delete
+  had held only because `scene.Tick` -- a Drain -- follows the UI in the same frame). A new removal path does the same.
 - **The step runs in the frame's idle window** (`physics.async`, default 1; 2026-11-04, owner, on a trace where the game thread stood in `Scene::TickPhysics` and then idled in `Renderer::WaitForFrame`, and on the next, where the step lay over the render frame: "a huge idle of many cores, and we cram everything into one stretch"). `World::Tick` counts the steps owed and reads the water; `World::KickStep`, from the game loop the moment `Game: Wait Render Thread` ends, starts them on a thread of their own (row `Physics Step`, Jolt's pool as before), after what went since the Tick (`loadPendingLevel` runs in between, which is also why `ocean` is not touched past the Tick); `World::SyncPoses`, at the top of `Scene::Sync`, takes the poses. A step done by then gives the very bytes the step in line gives, every frame: no lag (gate `async`). One that is not leaves the object where it stood for a frame and the frame does not wait; its time waits, past `physics.maxSteps` it is dropped, as in line. While a step runs its thread owns the system, the entries' poses and `awake`, and never touches an object (one may be gone): anything else that reaches the world calls `Impl::Join` first (a ray, the player, the debug lines, an object added, moved or gone, Keep; a trace shows it as `Physics.Wait Step`, `get_readouts` physics `stepWaits`, and `handOversHeld` counts the frames shown late). It needs the render thread: on one thread there is no wait to run in, and `frame.renderThread:0` steps in line. 3000 coconuts landing (Release, the frame GPU-bound, alternated twice): the render frame on a step's frames 2.14 / 1.89 -> 1.82 / 1.45, the same as its other frames, `Whole Cycle` p95 2.91 / 2.36 -> 2.79 / 1.99, the step itself 1.39 / 1.32 -> 1.27 / 1.21, done 2.0-2.2 ms before the hand-over, late 0-1 of ~185; on the game thread `Scene::TickPhysics` p95 1.81 (in line) -> 0.15. `physics.stepDelayMs:8` (a heavy world without building one, a 9.6 ms step): in line 204 of 599 frames over 1.5x the median, p95 10.81 ms; here 0-2, p95 ~6.3, every step a frame late. The price: a frame with no wait to run in (CPU-bound) has the step miss its hand-over, a frame late. A profiler scope on a thread of its own that crosses a frame is dropped unless the thread calls `Profiler::MarkThreadCrossFrame`; such a scope is kept between two frames too. `--set physics.async:0` = in line, `physics.kickInTick:1` = started in Tick, beside the render frame: the A/Bs.
 - **The world's limits are a heap's, not Jolt's sample's** (2026-11-04, perf review). `kMaxContactConstraints` 10240 ran out at 4000-5000 bodies in a heap, and what does not fit does not collide: 5271 of 10000 fell through the island, the step looking cheap all the while. 65536 now, and the step takes the whole table out of the temp allocator (~1 KB a contact, touched as used): `TempAllocatorImplWithMallocFallback`, 128 MB reserved, because the plain one aborts past its end. Jolt's own count 30.9 -> 163.8 MB; `mi commit` 359 -> 361-380 MB, private +20-50 MB. Heaps: 5000 a 3.7 ms step, 10000 11.5 ms and the frame still 5.5 ms, nothing lost. Past the limits again (body pairs from ~30000): `[ERROR]`, `get_readouts` physics `stepErrors`, red in Developer Controls. Past `kMaxBodies` the statics are built first, so the bodies go and not the ground.
 - **The same level gives the same world.** `dirty` and `entries` walk by the objects' addresses, and Jolt's answer depends on the order bodies come and wake in: the same scene differed from run to run within 100 frames (the control in gate `async`). `BuildDirty` sorts by the bytes of the position, statics first; `WakeAllDynamic` and `FlushRemovals` go by body id.

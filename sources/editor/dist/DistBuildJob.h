@@ -14,7 +14,7 @@ namespace dist
     struct BuildRequest
     {
         std::string profile;                 // "test", or a path to a profile .json
-        std::string mode = "content";        // check | record | content | full
+        std::string mode = "content";        // check | record | content | full | delete (the window's History only)
         std::vector<std::string> levels;     // empty = the profile's
         std::string bootLevel;               // empty = the profile's (or the first of `levels`)
         std::string version;                 // empty = the profile's
@@ -24,6 +24,9 @@ namespace dist
         // --override-licences: ship the assets the profile's "strictLicences" refuses (a warning each); the profile keeps it.
         bool overrideLicences = false;
         bool skipBuild = false;
+        // mode "delete": `--delete-build=<n>` -- the build out of the history and its own files off the disk (the window's
+        // History "Delete", after its confirmation; never MCP's, which sets no build).
+        int deleteBuild = 0;
     };
 
     struct BuildEvent

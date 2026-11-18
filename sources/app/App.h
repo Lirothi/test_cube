@@ -139,7 +139,8 @@ extern std::string g_bootEditMesh;
 // itself behind a menu, and the pane is judged by LOOKING at it.
 extern bool g_bootShowImport;
 extern bool g_bootBuildDist; // "--build-dist": the Level Editor's Build Distribution window open at boot (implies --editor)
-// "--build-dist=<profile>[,override-licences]": that profile loaded in it, and its licence override ticked (a --shot of it).
+// "--build-dist=<profile>[,override-licences][,delete=<build>]": that profile loaded in it, its licence override ticked, a
+// build's delete confirmation open (a --shot of them).
 extern std::string g_bootBuildDistProfile;
 extern std::string g_bootImportItem;
 // "--inspect=<environment type>[#<group>]": select the level's environment object of that type at boot and scroll
