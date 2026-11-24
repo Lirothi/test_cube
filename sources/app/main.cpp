@@ -383,7 +383,11 @@ int WINAPI WinMain(
 
     // --crash-selftest=<arm> (any build; §9): a crash of that kind, its minidump and -- in Shipping -- the message box.
     if (lpCmdLine) {
-        if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); !arm.empty()) {
+        if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); arm == "terminate-frame") {
+            // No early exit: the game starts as always (and installs the handlers as always), and its first frame throws
+            // after the renderer's BeginFrame (crash::SelfTestFrame, App.cpp) -- through the renderer's terminate handler.
+            crash::ArmSelfTestInFrame();
+        } else if (!arm.empty()) {
             crash::Options options;
             options.dumpFolder = build::Packaged() ? L"crashes" : L"logs/crashes";
             options.messageBox = build::Packaged();

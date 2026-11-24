@@ -2127,6 +2127,35 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `logs/crashes` (Shipping — в `crashes\`; его окно сообщения закрывает переменная окружения
   `TEST_CUBE_MESSAGE_TIMEOUT_MS`). Контроль — та же ветка без правки: отчёт говорит `abort()`, текста исключения
   в нём нет (10.4, п. 3).
+
+  **Сделано (2026-11-24).** Якоря на месте (`Renderer.cpp:522-539`, `:783-786`, `CrashHandler.cpp:299`,
+  `main.cpp:386-390`). `BeginFrame` запоминает обработчик, который заменяет (`s_terminateBefore =
+  std::set_terminate(...)`); `ReportOnTerminate` после отчёта об устройстве и аварийной строки зовёт его
+  (`crash::OnTerminate`: `what()`, минидамп), а `abort()` — только если его нет (dev-прогон под отладчиком
+  обработчиков не ставит). Устаревший комментарий над ним переписан: обработчик стоит на потоке, который начинает
+  кадры (игровом); бросок на воркере сюда не приходит (его ловит планировщик), бросок, просто покинувший `WinMain`, —
+  тоже. Ветка `--crash-selftest=terminate-frame` (`crash::ArmSelfTestInFrame` / `SelfTestFrame`, вызов в `App.cpp`
+  сразу после `renderer.BeginFrame()`; с ней `main.cpp` не выходит раньше — игра стартует как обычно). **Отступление
+  от плана, найденное контролем:** простой непойманный `throw` на главном потоке до `std::terminate` не доходит.
+  `crash::Install` заменил фильтр верхнего уровня CRT, а именно он вызывал `terminate`, и отчёт пишет
+  `UnhandledFilter`: «an uncaught C++ exception at KERNELBASE.dll+0xc408a», код 0xE06D7363, без строки
+  `ReportOnTerminate` и без текста — первая сборка ветки так и вышла. Поэтому ветка бросает из `noexcept`-функции:
+  так в `terminate` и приходят деструкторы и `noexcept`-функции игрового потока. Проба на MSVC 14.51 (простой бросок /
+  через `noexcept` / с нашим фильтром / в цепочке; `eh_probe/probe.cpp` в рабочей папке сессии): через `noexcept`
+  `std::current_exception()` в обработчике есть и предыдущий в цепочке достаёт `what()`, а простой бросок при нашем
+  фильтре уходит в фильтр. Измерено. Контроль без исправления — Release (wind_test) и Shipping (незашифрованный
+  дистрибутив профиля `test`, `build_dist.py --mode=full --out` в рабочую папку сессии, свой `--user-dir`,
+  `TEST_CUBE_MESSAGE_TIMEOUT_MS=3000`): строка `std::terminate reached ...`, затем `crash: abort()`, текста
+  исключения нет, минидамп, код 3, в Shipping окно показано. С исправлением, там же: `std::terminate reached on the
+  thread that begins the frames; ... the crash report follows`, затем `crash: std::terminate (uncaught exception:
+  the crash self-test's uncaught exception in a frame (--crash-selftest=terminate-frame))`, минидамп в
+  `logs/crashes` / `crashes\`, в Shipping окно, код 3. Старые ветки `terminate` и `throw` — как были. Общий гейт:
+  Debug, Release_Editor, Release, Shipping, Development, Cook собираются; `check_*.py` (четыре) — 0;
+  `intent_regression` — PASS. Найдено по пути, не M2: простой непойманный бросок на главном потоке попадает в отчёт
+  без текста — это показывает и ветка `throw`. `UnhandledFilter` мог бы отдавать 0xE06D7363 прежнему фильтру CRT:
+  тот ставит текущее исключение и зовёт `terminate`. Кандидат в отдельный M-шаг. Не покрыто: настоящий `terminate`
+  при удалении устройства не воспроизводился; у потока рендера своего `ReportOnTerminate` нет (там
+  `crash::OnTerminate` через `InstallThisThread`) — это не менялось.
 - **M3. `BCryptGenRandom` без проверки результата** (10.4, п. 4). `core/vfs/PakCrypto.cpp:134-137`: отказ
   генератора — ошибка операции, а не ключ из нулей. Генератор зовут ровно два места: `GenerateKey` (`:142-148`,
   ключ и его guid) и `WriteKeyHeader` (`:193-196`, маски встроенного ключа). Nonce блоков генератором НЕ

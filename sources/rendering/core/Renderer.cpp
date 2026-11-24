@@ -511,14 +511,18 @@ bool Renderer::SetBloomFftResidency(bool held)
     return true;
 }
 
-// The renderer the terminate handler below reports through, and the one-shot install flag.
+// The renderer the terminate handler below reports through (also its one-shot install flag), and the handler it stands
+// over.
 //
-// A device removal usually surfaces as a ThrowIfFailed, and when that happens on a WORKER thread
-// (any pass body recording commands) the throw is never caught: the process dies through
-// std::terminate with exit code 0xC0000409 and the report never runs, because the next BeginFrame
-// never happens. Measured, not theorised — one hang in three left nothing on disk for exactly this
-// reason while the others logged fine. A terminate handler is the only place that path passes.
+// std::terminate's handler is per thread in the MSVC CRT. This one is set by the first BeginFrame, on the thread that
+// begins the frames (the game thread), over crash::OnTerminate (crash::Install), and it reaches std::terminate there --
+// an exception out of a noexcept function, a destructor. It adds the device-removal report and hands over to the handler
+// before it, which names the exception (what()) and writes the minidump. It used to call abort() itself: the crash report
+// said "abort()" and the exception was lost (docs/architecture_review_plan.md M2). A throw on a task worker does not come
+// here (the task system catches it: "Task callback threw"), nor does one that merely leaves WinMain (crash::Install's
+// unhandled-exception filter reports it).
 static Renderer* s_reportRenderer = nullptr;
+static std::terminate_handler s_terminateBefore = nullptr;
 static void ReportOnTerminate()
 {
     if (s_reportRenderer && s_reportRenderer->GetDevice())
@@ -532,10 +536,13 @@ static void ReportOnTerminate()
     // The process is going down without unwinding; the RAII log session never runs, so this is
     // the emergency path: DBWIN + unbuffered append, no writer thread, one attempt.
     logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Render,
-        "std::terminate reached (an uncaught exception, typically a ThrowIfFailed on a worker "
-        "thread); device-removal report attempted, see logs/device_removed.log if the device was lost");
+        "std::terminate reached on the thread that begins the frames; device-removal report attempted, see "
+        "logs/device_removed.log if the device was lost; the crash report follows");
     logging::Flush(2000); // the frames before the throw are still in the ring; the writer is alive
-    std::abort();
+    if (s_terminateBefore != nullptr && s_terminateBefore != &ReportOnTerminate) {
+        s_terminateBefore(); // crash::OnTerminate: the exception's what(), the minidump; it does not return
+    }
+    std::abort(); // no handler before this one (a dev run under a debugger installs none): the CRT's way
 }
 
 // Async-compute: apply a change to the async switch, draining BOTH queues first.
@@ -779,10 +786,10 @@ void Renderer::BeginFrame() {
     //
     // The terminate handler is installed here rather than at construction only because this is the
     // first point at which a Renderer is guaranteed to be fully built and about to touch the GPU.
-    // It costs one branch per frame and it is what makes a worker-thread death reportable at all.
+    // It costs one branch per frame; it keeps the handler it replaces and calls it (ReportOnTerminate).
     if (s_reportRenderer == nullptr) {
         s_reportRenderer = this;
-        std::set_terminate(&ReportOnTerminate);
+        s_terminateBefore = std::set_terminate(&ReportOnTerminate);
     }
     if (render::g_deviceRemovalCheck) {
         ReportDeviceRemovalOnce();

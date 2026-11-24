@@ -29,6 +29,7 @@ namespace
     Options g_options;
     std::filesystem::path g_folder;              // absolute, made at Install
     std::atomic<bool> g_installed{ false };
+    std::atomic<bool> g_selfTestInFrame{ false }; // --crash-selftest=terminate-frame (ArmSelfTestInFrame)
     std::atomic<bool> g_reporting{ false };      // the first crash reports; any other thread that crashes meanwhile waits
     std::atomic<DWORD> g_reportingThread{ 0 };   // ... and a fault inside the report on that thread ends the process
     HANDLE g_request = nullptr;
@@ -250,6 +251,16 @@ namespace
     {
         void Pure() override {}
     };
+
+    // terminate-frame: an exception out of a noexcept function (a destructor, a callback) is how a throw on the game thread
+    // reaches std::terminate. A throw that merely leaves WinMain does not: crash::Install replaced the CRT's top-level filter
+    // (which would have called std::terminate), so it is UnhandledFilter's "an uncaught C++ exception" instead. Probed
+    // 2026-11-24 (MSVC 14.51): through noexcept, std::current_exception() is set in the terminate handler.
+    __declspec(noinline) void ThrowFrameSelfTest()
+    {
+        throw std::runtime_error("the crash self-test's uncaught exception in a frame (--crash-selftest=terminate-frame)");
+    }
+    __declspec(noinline) void ThrowThroughNoexcept() noexcept { ThrowFrameSelfTest(); }
 }
 
 void Install(const Options& options)
@@ -310,7 +321,7 @@ int SelfTest(const std::string& arm, Options options)
     if (!known)
     {
         LOG_ERROR(logging::LogCategory::Core, "--crash-selftest={}: arms are av, stack, abort, terminate, throw, purecall, "
-                  "invalidparam, fastfail, overflow", arm);
+                  "invalidparam, fastfail, overflow, terminate-frame", arm);
         return 2;
     }
     Install(options);
@@ -362,5 +373,20 @@ int SelfTest(const std::string& arm, Options options)
     }
     LOG_ERROR(logging::LogCategory::Core, "crash self-test: {} did not crash", arm);
     return 1;
+}
+
+void ArmSelfTestInFrame()
+{
+    g_selfTestInFrame.store(true);
+    LOG_INFO(logging::LogCategory::Core, "crash self-test: terminate-frame -- the first frame after Renderer::BeginFrame throws "
+             "on the game thread");
+}
+
+void SelfTestFrame()
+{
+    if (!g_selfTestInFrame.exchange(false)) { return; }
+    LOG_INFO(logging::LogCategory::Core, "crash self-test: terminate-frame throws now, out of a noexcept function");
+    logging::Flush(2000);
+    ThrowThroughNoexcept();
 }
 }

@@ -11,6 +11,7 @@
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "core/diagnostics/BootProfile.h"
+#include "core/diagnostics/CrashHandler.h"   // --crash-selftest=terminate-frame (crash::SelfTestFrame)
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
 #include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
@@ -3603,6 +3604,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // No join of tracked tasks here: the render half joins its own before the frame is submitted
             // (SceneRenderer::Render), and a game-half join would wait on nothing (TaskSystem: one list per role).
             renderer.BeginFrame();
+            crash::SelfTestFrame(); // --crash-selftest=terminate-frame: std::terminate here, on the game thread
 #if PROF_GPU_ENABLED
             Profiler::Get().CollectGpuResults();
 #endif

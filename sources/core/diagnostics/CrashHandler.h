@@ -35,4 +35,10 @@ namespace crash
     // tc::inl_vector outgrown: its Fatal line, then abort) -- installs the handler (the message box closing itself
     // after 3 s) and crashes that way. Never returns; an unknown arm returns 2.
     int SelfTest(const std::string& arm, Options options);
+    // --crash-selftest=terminate-frame (main.cpp arms it instead of calling SelfTest): the game starts as always, and the
+    // first frame after the renderer's BeginFrame throws out of a noexcept function on the game thread (SelfTestFrame): to
+    // std::terminate, on the thread whose terminate handler the renderer sets there over this one
+    // (docs/architecture_review_plan.md M2).
+    void ArmSelfTestInFrame();
+    void SelfTestFrame(); // throws once when armed, does nothing otherwise
 }
