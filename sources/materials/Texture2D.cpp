@@ -356,6 +356,24 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     const UINT width = std::max(1u, hdr.width);
     const UINT height = std::max(1u, hdr.height);
 
+    // 1b) The header's numbers are the file's word: nothing is sized, built or created by them until they are what a 2D
+    //     texture can be (TextureCube's 2b; docs/architecture_review_plan.md M4). A mip count of 2^31 built a table of
+    //     2^31 mips -- 14.6 s of a level load -- before the size check refused it; a 65536 x 131072 BC1 header wrapped
+    //     mip 0's 32-bit size to 0, passed that check and threw out of the level load at the resource's creation.
+    {
+        UINT mostMips = 1;
+        for (UINT edge = std::max(width, height); edge > 1; edge >>= 1) { ++mostMips; }
+        const UINT64 rowUnits = fp.isBC ? (UINT64(width) + 3) / 4 : UINT64(width);
+        const UINT64 rows = fp.isBC ? (UINT64(height) + 3) / 4 : UINT64(height);
+        const UINT64 mip0Bytes = rowUnits * fp.bytesPerBlockOrPixel * rows; // the table counts it in 32 bits
+        if (width > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION || height > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+            mipCount > mostMips || mip0Bytes > UINT32_MAX) {
+            LOG_ERROR(logging::LogCategory::Asset, "DDS header is damaged ({}x{}, {} mips): {}",
+                      hdr.width, hdr.height, hdr.mipMapCount, desc.path);
+            return false;
+        }
+    }
+
     // 2) Texture streaming A1: the file's mip table, then its self-check. Offsets and sizes come
     //    from the header alone (DdsMipTable.h); the check is that (a) they add up to exactly the
     //    bytes the file holds after its header and (b) every mip's tight row and slice agree with
@@ -449,8 +467,18 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, memTag_, debugName_.c_str(), tex_.GetAddressOfForCreate()));
+    {
+        const HRESULT created = gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, memTag_, debugName_.c_str(), tex_.GetAddressOfForCreate());
+        if (created == E_INVALIDARG) {
+            // The description is the header's (a DDS the checks above let through that D3D still refuses): a file's
+            // fault, so a failed load -- not an exception out of the level load. Any other failure is the device's.
+            LOG_ERROR(logging::LogCategory::Asset, "DDS texture refused by D3D (E_INVALIDARG, {}x{}, {} mips): {}",
+                      td.Width, td.Height, td.MipLevels, desc.path);
+            return false;
+        }
+        ThrowIfFailed(created);
+    }
 
     // 5) Compute footprints for every RESIDENT mip
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(residentMips);
