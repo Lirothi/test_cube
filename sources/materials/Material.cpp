@@ -1536,8 +1536,7 @@ struct IncludeCapture : public ID3DInclude {
     }
 
     static std::wstring Widen(const char* s) {
-        std::string a = (s ? s : "");
-        return std::wstring(a.begin(), a.end());
+        return vfs::Widen(s ? s : "");
     }
 
     HRESULT Open(D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID pParentData,
@@ -2349,7 +2348,7 @@ static std::wstring JoinDefines(const Material::DefineList& defs) {
     std::sort(s.begin(), s.end());
     std::wstring out;
     for (auto& e : s) {
-        out += std::wstring(e.begin(), e.end());
+        out += vfs::Widen(e);
         out += L";";
     }
     return out;

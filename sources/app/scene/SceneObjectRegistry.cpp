@@ -1,4 +1,5 @@
 #include "app/scene/SceneObjectRegistry.h"
+#include "core/vfs/Vfs.h"
 
 #include <cassert>
 #include <cmath>
@@ -63,7 +64,7 @@ private:
 
 std::wstring Widen(const std::string& s)
 {
-    return std::wstring(s.begin(), s.end());
+    return vfs::Widen(s);
 }
 
 float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))

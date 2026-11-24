@@ -1,4 +1,5 @@
 #include "editor/ui/MaterialEditorPanel.h"
+#include "core/vfs/Vfs.h"
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
@@ -665,7 +666,7 @@ void MaterialEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     MaterialDataManager* mgr = ctx.renderer.GetMaterialDataManager();
     if (mgr)
     {
-        mgr->LoadPresetFromFile(std::wstring(path_.begin(), path_.end()));
+        mgr->LoadPresetFromFile(vfs::Widen(path_));
         mgr->EvictCached(name_);
     }
     registry.Refresh(); // re-index for CB thumbnails/badges

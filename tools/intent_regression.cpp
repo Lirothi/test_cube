@@ -66,6 +66,7 @@
 #include "rendering/meshes/MeshManager.h"
 #include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
 #include "text/FontAtlas.h"                        // TestAFontTgaIsSizedByItsBytesNotItsHeader (LoadFontTga8)
+#include "core/vfs/Vfs.h"                          // TestAMaterialMapNamedInCyrillicKeepsItsName (vfs::Widen)
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
@@ -3353,6 +3354,31 @@ void TestAMaterialOfTheWrongTypeIsAnErrorNotACrash()
     Check(!threw, "a material's field of the wrong type does not throw out of the loader");
 }
 
+void TestAMaterialMapNamedInCyrillicKeepsItsName()
+{
+    // The material's map paths were widened byte by byte (std::wstring(s.begin(), s.end())): every non-ASCII path named
+    // another file (docs/architecture_review_plan.md M8). A material in a temp folder whose albedo is named in Cyrillic:
+    // its path is the UTF-8 decoded, character for character.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_utf8_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const std::string albedo = "textures/\xd0\xbf\xd0\xb5\xd1\x81\xd0\xbe\xd0\xba.dds"; // "песок" in UTF-8
+    {
+        std::ofstream out(dir / "cyrillic.json", std::ios::binary | std::ios::trunc);
+        out << "{\"albedo\": \"" << albedo << "\"}";
+    }
+    MaterialDataManager manager;
+    const bool loaded = manager.LoadPresetFromFile((dir / "cyrillic.json").wstring(), "cyrillic");
+    const MaterialPreset* preset = manager.FindPreset("cyrillic");
+    fs::remove_all(dir, ec);
+    const std::wstring expected = L"textures/\x043f\x0435\x0441\x043e\x043a.dds";
+    Check(loaded && preset && preset->albedoPath == expected && vfs::Widen(albedo) == expected,
+          "a map named in Cyrillic keeps its name: " + (preset ? vfs::Narrow(preset->albedoPath) + " (" +
+          std::to_string(preset->albedoPath.size()) + " characters, 15 expected)" : std::string("no material")));
+}
+
 void TestAMeshBinThatLiesIsAnErrorNotACrash()
 {
     // A .mesh.bin's counts sized its vectors and its indices were trusted (docs/architecture_review_plan.md M5). Two copies
@@ -5986,6 +6012,7 @@ int main(int argc, char** argv)
         TestModelRepliesOfAnyShape();
         TestAToolPathCannotLeaveTheRepository();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
+        TestAMaterialMapNamedInCyrillicKeepsItsName();
         TestAMeshBinThatLiesIsAnErrorNotACrash();
         TestParticleFieldsOfAnotherTypeAreLeftAlone();
         TestAFontTgaIsSizedByItsBytesNotItsHeader();

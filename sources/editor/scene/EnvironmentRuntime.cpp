@@ -1,4 +1,5 @@
 #include "editor/scene/EnvironmentRuntime.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/PhotographicSettings.h" // P16.5 lumens migration
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/HeightFogSettingsJson.h"
@@ -90,7 +91,7 @@ namespace
 
     std::wstring Widen(const std::string& s)
     {
-        return std::wstring(s.begin(), s.end());
+        return vfs::Widen(s);
     }
 
     void ApplySkybox(EditorContext& ctx, const nlohmann::json& p)

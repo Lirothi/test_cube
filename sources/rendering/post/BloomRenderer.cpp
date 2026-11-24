@@ -122,7 +122,7 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
             if (up.Begin(renderer))
             {
                 Texture2D::CreateDesc desc;
-                desc.path = std::wstring(want.begin(), want.end());
+                desc.path = vfs::Widen(want);
                 desc.usage = Texture2D::Usage::LinearData;
                 bloomKernelTex_.SetMemTag(MemTag::Bloom);
                 bloomKernelReady_ = bloomKernelTex_.CreateFromFile(
@@ -151,7 +151,7 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                 if (up.Begin(renderer))
                 {
                     Texture2D::CreateDesc desc;
-                    desc.path = std::wstring(want.begin(), want.end());
+                    desc.path = vfs::Widen(want);
                     desc.usage = Texture2D::Usage::AlbedoSRGB;
                     coronaTex_.SetMemTag(MemTag::Bloom);
                     coronaReady_ = coronaTex_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());

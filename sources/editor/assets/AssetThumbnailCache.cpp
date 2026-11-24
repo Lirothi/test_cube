@@ -1,4 +1,5 @@
 #include "editor/assets/AssetThumbnailCache.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/BarrierTranslation.h"
 #if WITH_EDITOR
 
@@ -718,11 +719,10 @@ namespace
         return true;
     }
 
-    std::wstring WidenAscii(const std::string& text)
+    std::wstring WidenUtf8(const std::string& text)
     {
-        // Asset paths under the content roots are ASCII; a widening copy is enough
-        // and avoids pulling in a locale-aware conversion.
-        return std::wstring(text.begin(), text.end());
+        // UTF-8 (an asset's path may hold any name): a byte-wise copy broke every non-ASCII one.
+        return vfs::Widen(text);
     }
 
     Texture2D::Usage UsageForRecord(const EditorAssetRecord& record)
@@ -1543,7 +1543,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
     case PendingLoad::Kind::DiskCache:
     {
         Texture2D::CreateDesc desc;
-        desc.path = WidenAscii(job->load.kind == PendingLoad::Kind::DiskCache
+        desc.path = WidenUtf8(job->load.kind == PendingLoad::Kind::DiskCache
             ? job->load.cachePath
             : job->load.path);
         desc.usage = job->load.kind == PendingLoad::Kind::DiskCache
@@ -1600,7 +1600,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         break;
     case PendingLoad::Kind::Cube:
         job->ok = job->cube.CreateFromDDS(&renderer,
-            job->commands->CommandList(), WidenAscii(job->load.path),
+            job->commands->CommandList(), WidenUtf8(job->load.path),
             job->commands->KeepAlive());
         break;
     case PendingLoad::Kind::Material:

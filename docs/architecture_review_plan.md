@@ -2313,6 +2313,19 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `TestAMaterialOfTheWrongTypeIsAnErrorNotACrash` (временная папка) — у материала, чей `"albedo"` назван
   кириллицей, путь текстуры равен `vfs::Widen` этой строки (`MaterialDataManager.cpp:27` — расширение путей карт;
   контроль: побайтное расширение даёт другой путь); гейт A.
+
+  **Сделано (2026-11-24).** Якоря на месте (`MaterialDataManager.cpp:27`, `:271` → в дереве `:300` и `:360`,
+  `EditorController.cpp:676`, `MaterialEditorPanel.cpp:668`). `grep` нашёл больше: 17 мест в 12 файлах. Все переведены на
+  `vfs::Widen`: материал (пути карт, имя файла материала, второй разбор), редактор (материал, пресет океана, панель
+  материала), уровень и объекты (`JsonLevel`, `SceneObjectFactory`, `SceneObjectRegistry`, `EnvironmentRuntime` — их
+  локальные `Widen` теперь зовут `vfs::Widen`), миниатюры (`WidenAscii` с комментарием «пути ASCII» стал `WidenUtf8`),
+  блум (пути ядра и короны), шейдеры (`include` из DXC, ключ определений), имена трасс в HUD гонки. Оставшееся
+  совпадение `grep` — комментарий в `Vfs.h`, который и описывает запрет. Тест `TestAMaterialMapNamedInCyrillicKeepsItsName`
+  (временная папка): `"albedo": "textures/песок.dds"` даёт путь из 15 символов, равный `vfs::Widen`. Контроль
+  (`MaterialDataManager.cpp` из HEAD): «textures/￐﾿￐ﾵ…dds (23 characters, 15 expected)» — каждый байт UTF-8 стал знаковым
+  `U+FFxx`. Общий гейт (A): Debug, Release_Editor, Release собираются; `check_*.py` (четыре) — 0; `intent_regression` —
+  PASS. Не покрыто: остальные места (уровень, редактор, блум, шейдеры) живьём с не-ASCII путём не проверялись — та же
+  функция, что в тесте.
 - **M9. Инструменты чтения для модели** (10.15, п. 5-6). `editor/intent/EditorRepoSearch.cpp`: `read` и `ls`
   ограничить теми же корнями, что `grep` (`kRoots`, строка 26); `std::regex_search` (строка 298) — под тем же
   `try`, что компиляция шаблона; `grep` вынести из кадра панели (`CommandBarPanel.cpp:1251`) в задачу. Готово:

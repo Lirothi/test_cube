@@ -1,4 +1,5 @@
 #include "editor/EditorController.h"
+#include "core/vfs/Vfs.h"
 
 #include "core/diagnostics/BootProfile.h"
 #include "core/logging/Log.h"
@@ -673,7 +674,7 @@ namespace
             for (const std::string& file : written)
             {
                 if (!IsMaterialDefinition(file)) { continue; }
-                materials->LoadPresetFromFile(std::wstring(file.begin(), file.end()));
+                materials->LoadPresetFromFile(vfs::Widen(file));
                 const std::string name = std::filesystem::path(file).stem().string();
                 materials->EvictCached(name);
                 staleMaterials.push_back(name);
@@ -759,7 +760,7 @@ namespace
         scene.RemoveOceanObjects();
         Systems::DestroyOceanSimulation();
 
-        OceanSimulation* ocean = Systems::CreateOceanSimulation(std::wstring(normalizedPreset.begin(), normalizedPreset.end()));
+        OceanSimulation* ocean = Systems::CreateOceanSimulation(vfs::Widen(normalizedPreset));
         if (!ocean)
         {
             levelStatus = "Ocean create failed";

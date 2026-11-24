@@ -1,4 +1,5 @@
 #include "app/game/Race.h"
+#include "core/vfs/Vfs.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,7 +49,7 @@ namespace game
             return text;
         }
 
-        std::wstring Wide(const std::string& text) { return std::wstring(text.begin(), text.end()); }
+        std::wstring Wide(const std::string& text) { return vfs::Widen(text); } // a track's name may be any UTF-8
 
         float TopSpeed(const physics::VesselHull& hull)
         {

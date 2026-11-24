@@ -24,7 +24,7 @@ namespace
     // objects use the same keys, minus the params that never existed there).
     MaterialPreset ParseMaterialPresetJson(const nlohmann::json& p)
     {
-        const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+        const auto widen = [](const std::string& s) { return vfs::Widen(s); };
         MaterialPreset preset;
         preset.albedoPath   = widen(p.value("albedo", std::string{}));
         preset.mrPath       = widen(p.value("mr", std::string{}));
@@ -297,7 +297,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     // I1/I3 editor) aren't in presets_ yet; data/materials/<name>.json is the source of truth.
     auto pit = presets_.find(name);
     if (pit == presets_.end()) {
-        const std::wstring path = L"data/materials/" + std::wstring(name.begin(), name.end()) + L".json";
+        const std::wstring path = L"data/materials/" + vfs::Widen(name) + L".json";
         if (LoadPresetFromFile(path, name)) {
             pit = presets_.find(name);
         }
@@ -357,7 +357,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
         return {}; // no material on this group
     }
 
-    const auto widen = [](const std::string& s) { return std::wstring(s.begin(), s.end()); };
+    const auto widen = [](const std::string& s) { return vfs::Widen(s); };
 
     auto md = std::make_shared<MaterialData>();
     md->fromGltf = true;
