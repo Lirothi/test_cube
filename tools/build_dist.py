@@ -336,16 +336,91 @@ def held_by_a_live_process(path):
         return True
 
 
-def clear_stale_work(tmp_root, progress):
+def clear_stale_work(tmp_root, progress, keep=()):
     """The staging folders of runs that are gone (killed, cancelled: nothing of them is a distribution); a live run's
-    folder is left alone."""
+    folder is left alone, and so is one an unfinished publication still moves things out of (`keep`)."""
+    keep = {pathlib.Path(k).resolve() for k in keep}
     for entry in tmp_root.iterdir():
         if not entry.is_dir():
+            continue
+        if entry.resolve() in keep:
+            progress.emit(f"{entry} holds an unfinished publication: left for the next build to finish")
             continue
         if held_by_a_live_process(entry / WORK_LOCK):
             progress.emit(f"another build is at work in {entry}: left alone")
             continue
         shutil.rmtree(entry, ignore_errors=True)
+
+
+# ---- the publication: one build into place, or the next writer finishes it ----
+# The folder, its symbols, its zip and its history entry were four separate steps (the symbols written in place first,
+# then two renames of the folder, the zip, the history), and a run killed between any two left parts of two builds: a new
+# exe beside an old PDB, dist/ without the version, a folder the history does not list (docs/architecture_review_plan.md
+# M12). Now every move and the history entry are written down FIRST (<out>/.publishing.json), then made one by one, the
+# record noting each one done; a run killed anywhere leaves the record, and the next writer (content, full, delete, mark)
+# makes the rest -- a check names it. The pieces wait in the dead run's staging, which clear_stale_work then leaves alone.
+
+PUBLISHING = ".publishing.json"
+
+
+def publication_path(out_dir):
+    return out_dir / PUBLISHING
+
+
+def write_publication(out_dir, record):
+    tmp = publication_path(out_dir).with_suffix(".tmp")
+    tmp.write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp, publication_path(out_dir))
+
+
+def unfinished_publication(out_dir):
+    """The record a killed publication left, or None."""
+    path = publication_path(out_dir)
+    if not path.exists():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        return record if isinstance(record, dict) and isinstance(record.get("moves"), list) else None
+    except (ValueError, OSError):
+        return None
+
+
+def publish(out_dir, moves, entry, work, progress):
+    """`moves`: [(source, destination), ...] in order -- a destination that is there must have been moved away by an
+    earlier move. Written down, then made (finish_publication)."""
+    write_publication(out_dir, {"work": str(work), "moves": [[str(s), str(d)] for s, d in moves], "done": 0,
+                                "entry": entry})
+    finish_publication(out_dir, progress)
+
+
+def finish_publication(out_dir, progress, recovering=False):
+    """Make what the record says is not done yet, then the history entry, then forget the record. A move whose source is
+    gone was made (the run died before noting it); each is made once, in its order."""
+    record = unfinished_publication(out_dir)
+    if record is None:
+        return False
+    if recovering:
+        entry = record.get("entry", {})
+        progress.emit(f"finishing the publication of {entry.get('versionString', entry.get('version'))} (build "
+                      f"{entry.get('build')}) that a killed build left: {record['done']} of {len(record['moves'])} moves made",
+                      level="warning")
+    moves = record["moves"]
+    for i in range(int(record.get("done", 0)), len(moves)):
+        source, destination = pathlib.Path(moves[i][0]), pathlib.Path(moves[i][1])
+        if source.exists():
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(source, destination)
+        record["done"] = i + 1
+        write_publication(out_dir, record)
+    history = load_history(out_dir)
+    entry = record.get("entry")
+    if entry and not any(h.get("build") == entry.get("build") for h in history):
+        history.append(entry)
+        save_history(out_dir, history)
+    publication_path(out_dir).unlink()
+    if recovering and record.get("work"):
+        shutil.rmtree(record["work"], ignore_errors=True)  # the dead run's staging: nothing left in it to publish
+    return True
 
 
 def acquire_writer(out_dir):
@@ -406,6 +481,7 @@ def mark_published(args, progress):
         raise BuildError(f"build numbers, comma-separated: {spec!r}")
     writer = acquire_writer(out_dir)
     try:
+        finish_publication(out_dir, progress, recovering=True)  # a killed build's entry first
         history = load_history(out_dir)
         for number in builds:
             entry = next((h for h in history if h.get("build") == number and h.get("result") == "built"), None)
@@ -433,6 +509,7 @@ def delete_builds(args, progress):
         out_dir = ROOT / out_dir
     writer = acquire_writer(out_dir)
     try:
+        finish_publication(out_dir, progress, recovering=True)  # a killed build's entry first
         return delete_builds_locked(args, progress, out_dir)
     finally:
         release_writer(writer)
@@ -758,7 +835,16 @@ def build(args, progress):
     writer = acquire_writer(out_dir) if args.mode in ("content", "full") else None
     tmp_root = out_dir.parent / ".dist_tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
-    clear_stale_work(tmp_root, progress)  # only the folders of runs that are gone: a live run keeps its staging
+    pending = unfinished_publication(out_dir)
+    if pending is not None and writer is not None:
+        finish_publication(out_dir, progress, recovering=True)
+        pending = None
+    elif pending is not None:
+        entry = pending.get("entry", {})
+        progress.emit(f"{publication_path(out_dir)}: the publication of {entry.get('versionString', entry.get('version'))} "
+                      f"was cut short -- the next content or full build finishes it", level="warning")
+    # only the folders of runs that are gone: a live run keeps its staging, an unfinished publication its pieces
+    clear_stale_work(tmp_root, progress, keep=[pending["work"]] if pending and pending.get("work") else ())
     work = pathlib.Path(tempfile.mkdtemp(prefix="build_", dir=tmp_root))
     work_lock = open(work / WORK_LOCK, "w")  # held open to the end: this run is alive (clear_stale_work)
     logs = work / "logs"
@@ -992,35 +1078,43 @@ def build(args, progress):
                         kind = zipfile.ZIP_STORED if path.suffix == ".tcpak" else zipfile.ZIP_DEFLATED
                         z.write(path, f"{folder_name}/{path.relative_to(stage).as_posix()}", compress_type=kind)
             progress.emit(f"{tmp_zip.name} ({tmp_zip.stat().st_size / 1048576:.1f} MB)")
+        # The symbols too are made in the staging (they were written into dist_symbols/ first, before anything else of the
+        # build was in place) and published with the folder, its zip and its history entry as one (publish).
         symbols = None
         if profile.get("symbols", False):
-            progress.begin("symbols", "the PDB and the cook report into dist_symbols/")
+            progress.begin("symbols", "the PDB and the cook report, in the staging for dist_symbols/")
             symbols = symbols_root(out_dir) / (version_text.split(" ")[0] + ("" if flavour == "shipping" else "-dev"))
-            symbols.mkdir(parents=True, exist_ok=True)
+            work_symbols = work / "symbols"
+            work_symbols.mkdir()
             for name in (EXE_NAME, "test_cube.pdb"):
                 if (ship_dir / name).exists():
-                    shutil.copy2(ship_dir / name, symbols / name)
-            shutil.copy2(report_kept, symbols / "cook_report.json")
+                    shutil.copy2(ship_dir / name, work_symbols / name)
+            shutil.copy2(report_kept, work_symbols / "cook_report.json")
             progress.emit(str(symbols))
         kept_report = symbols / "cook_report.json" if symbols else out_dir / f"{folder_name}.cook_report.json"
-        if not symbols:
-            shutil.copy2(report_kept, kept_report)
+        moves = []
         if final.exists():
-            os.replace(final, work / "replaced")
-        os.replace(stage, final)
+            moves.append((final, work / "replaced"))
+        moves.append((stage, final))
+        if symbols:
+            if symbols.exists():
+                moves.append((symbols, work / "replaced_symbols"))
+            moves.append((work / "symbols", symbols))
+        else:
+            moves.append((report_kept, kept_report))
         if tmp_zip:
             zip_path = out_dir / f"{folder_name}.zip"
-            os.replace(tmp_zip, zip_path)
+            moves.append((tmp_zip, zip_path))
 
         progress.begin("finish", f"built {final}")
         packages = {p["name"]: p.get("packageBytes") for p in report.get("packages", [])}
-        history.append({"product": product, "version": version, "build": build_number, "versionString": version_text,
-                        "profile": profile["_name"], "flavour": flavour, "git": git_hash, "dirty": dirty, "date": date,
-                        "result": "built",
-                        "folder": str(final), "bytes": total, "zip": str(zip_path) if zip_path else None,
-                        "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt,
-                        **({"licencesOverridden": overridden} if overridden else {})})
-        save_history(out_dir, history)
+        entry = {"product": product, "version": version, "build": build_number, "versionString": version_text,
+                 "profile": profile["_name"], "flavour": flavour, "git": git_hash, "dirty": dirty, "date": date,
+                 "result": "built",
+                 "folder": str(final), "bytes": total, "zip": str(zip_path) if zip_path else None,
+                 "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt,
+                 **({"licencesOverridden": overridden} if overridden else {})}
+        publish(out_dir, moves, entry, work, progress)
         progress.emit("done", event="done", folder=str(final), zip=str(zip_path) if zip_path else None, bytes=total,
                       report=str(kept_report), flavour=flavour, licencesOverridden=len(overridden),
                       version=version_text, warnings=len(report.get("warnings", [])))

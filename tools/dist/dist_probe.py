@@ -153,6 +153,115 @@ check(bd.load_history(out) == [], "... and the entry leaves the history")
 after = listing(repo_symbols), (repo_symbols.stat().st_mtime_ns if repo_symbols.exists() else None)
 check(before == after, "the repository's dist_symbols is as it was: nothing listed, added or removed")
 
+# ---- 5. a publication killed anywhere: the next writer finishes it, and the parts are of ONE build (M12) ----
+# build 1 is in place (folder, symbols, zip, history); build 2 is published (bd.publish) and the run dies at the k-th
+# os.replace of it -- every point: the record, each move, each note of a move, the history. Then the next writer
+# (bd.finish_publication, as main / --delete-build / --mark-published call it) and the four parts are compared: the
+# folder's manifest against the history's last entry of the version, the exe of dist_symbols/<version+build> against the
+# manifest's hash, the zip's manifest against the folder's. The control: the same death, nobody finishing it.
+import hashlib  # noqa: E402
+import shutil  # noqa: E402
+import zipfile  # noqa: E402
+
+VERSION, NAME = "0.1.0", "test_cube-0.1.0"
+
+
+def make_build(root, build):
+    """A build's parts as build_dist leaves them in its staging: the folder, the symbols, the zip; and its entry."""
+    folder = root / NAME
+    folder.mkdir(parents=True)
+    exe = f"exe of build {build}".encode()
+    (folder / "test_cube.exe").write_bytes(exe)
+    manifest = {"version": VERSION, "build": build, "versionString": f"{VERSION}+{build} (probe)",
+                "files": {"test_cube.exe": {"size": len(exe), "sha256": hashlib.sha256(exe).hexdigest()}}}
+    (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    symbols = root / "symbols"
+    symbols.mkdir()
+    (symbols / "test_cube.exe").write_bytes(exe)
+    (symbols / "test_cube.pdb").write_text(f"pdb of build {build}", encoding="utf-8")
+    zip_path = root / f"{NAME}.zip"
+    with zipfile.ZipFile(zip_path, "w") as z:
+        for p in folder.iterdir():
+            z.write(p, f"{NAME}/{p.name}")
+    entry = {"product": "test_cube", "version": VERSION, "build": build, "versionString": manifest["versionString"],
+             "profile": "test", "flavour": "shipping", "result": "built"}
+    return folder, symbols, zip_path, entry
+
+
+def moves_for(out, work, build, folder, symbols, zip_path):
+    final, symbols_final = out / NAME, bd.symbols_root(out) / f"{VERSION}+{build}"
+    moves = []
+    if final.exists():
+        moves.append((final, work / "replaced"))
+    moves.append((folder, final))
+    if symbols_final.exists():
+        moves.append((symbols_final, work / "replaced_symbols"))
+    moves += [(symbols, symbols_final), (zip_path, out / f"{NAME}.zip")]
+    return moves
+
+
+def one_build(out):
+    """'' when the folder, the symbols, the zip and the history are of one build, else what differs."""
+    manifest_path = out / NAME / "manifest.json"
+    if not manifest_path.exists():
+        return "no version folder in the output"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = [h for h in bd.load_history(out) if h.get("version") == VERSION]
+    if not entries or entries[-1].get("build") != manifest["build"] or entries[-1].get("versionString") != manifest["versionString"]:
+        return f"the folder is build {manifest['build']}, the history's last is {entries[-1].get('build') if entries else None}"
+    symbols_exe = bd.symbols_root(out) / f"{VERSION}+{manifest['build']}" / "test_cube.exe"
+    if not symbols_exe.exists() or hashlib.sha256(symbols_exe.read_bytes()).hexdigest() != manifest["files"]["test_cube.exe"]["sha256"]:
+        return f"dist_symbols/{VERSION}+{manifest['build']} is not that exe's"
+    with zipfile.ZipFile(out / f"{NAME}.zip") as z:
+        if json.loads(z.read(f"{NAME}/manifest.json").decode("utf-8")) != manifest:
+            return "the zip holds another build's manifest"
+    return ""
+
+
+class Killed(Exception):
+    pass
+
+
+real_replace = bd.os.replace
+points = None
+for kill_at in range(1, 64):
+    out = fresh(f"publish_{kill_at}")
+    old_work, new_work = out.parent / "old_work", out.parent / ".dist_tmp" / "build_dead"
+    old_work.mkdir()
+    new_work.mkdir(parents=True)
+    f1, s1, z1, e1 = make_build(old_work, 1)
+    bd.publish(out, moves_for(out, old_work, 1, f1, s1, z1), e1, old_work, Quiet())
+    check_first = one_build(out)
+    f2, s2, z2, e2 = make_build(new_work, 2)
+    calls = [0]
+
+    def dying_replace(src, dst, _calls=calls, _at=kill_at):
+        _calls[0] += 1
+        if _calls[0] == _at:
+            raise Killed()
+        return real_replace(src, dst)
+
+    bd.os.replace = dying_replace
+    try:
+        bd.publish(out, moves_for(out, new_work, 2, f2, s2, z2), e2, new_work, Quiet())
+        died = False
+    except Killed:
+        died = True
+    finally:
+        bd.os.replace = real_replace
+    if not died:
+        points = kill_at - 1
+        check(check_first == "" and one_build(out) == "", f"publication: {points} os.replace calls, all made, one build")
+        break
+    left = one_build(out)  # the control: what the death left, nobody finishing it
+    bd.finish_publication(out, Quiet(), recovering=True)  # the next writer
+    after = one_build(out)
+    manifest = json.loads((out / NAME / "manifest.json").read_text(encoding="utf-8")) if (out / NAME).exists() else {}
+    check(after == "" and not bd.publication_path(out).exists(),
+          f"publication killed at its os.replace #{kill_at}: left {('one build' if not left else repr(left))}; the next writer "
+          f"finished it: {'one build, ' + str(manifest.get('build')) if after == '' else repr(after)}")
+check(points is not None and points >= 9, f"the publication's points were all tried ({points})")
+
 print()
 print("dist probe:", "PASS" if not failures else f"FAIL ({len(failures)})")
 sys.exit(len(failures))
