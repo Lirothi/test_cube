@@ -16,6 +16,7 @@
 #include "app/scene/SceneFrameData.h" // g_skyIrradianceSrv / Scale
 #include "core/Helpers.h"
 #include "core/math/Math.h"
+#include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "ocean/WaterMask.h" // g_waterMaskFrame: the hulls a collideHulls particle dies in
 #include "vfx/WindState.h" // W8: g_windDriftXZ
@@ -129,7 +130,7 @@ void ParticleEmitterObject::Init(Renderer* renderer,
     if (!desc_.texture.empty())
     {
         Texture2D::CreateDesc td{};
-        td.path = std::wstring(desc_.texture.begin(), desc_.texture.end());
+        td.path = vfs::Widen(desc_.texture); // UTF-8: byte by byte broke every non-ASCII name (architecture review M8)
         td.usage = Texture2D::Usage::AlbedoSRGB;
         sprite_.SetMemTag(MemTag::Vfx);
         hasSprite_ = sprite_.CreateFromFile(renderer, uploadCmdList, td, uploadKeepAlive);

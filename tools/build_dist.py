@@ -359,6 +359,10 @@ def clear_stale_work(tmp_root, progress, keep=()):
 # M12). Now every move and the history entry are written down FIRST (<out>/.publishing.json), then made one by one, the
 # record noting each one done; a run killed anywhere leaves the record, and the next writer (content, full, delete, mark)
 # makes the rest -- a check names it. The pieces wait in the dead run's staging, which clear_stale_work then leaves alone.
+# A run that is not killed but meets an EXCEPTION on the way (a move refused: the old folder held by its running exe or a
+# console in it; Ctrl+C) undoes the publication instead (undo_publication): build()'s end removes its staging, and a
+# record of moves whose pieces are gone was "finished" by the next writer into the old folder deleted and a build listed
+# that never existed (found by the review of the M steps, 2026-11-24).
 
 PUBLISHING = ".publishing.json"
 
@@ -387,10 +391,20 @@ def unfinished_publication(out_dir):
 
 def publish(out_dir, moves, entry, work, progress):
     """`moves`: [(source, destination), ...] in order -- a destination that is there must have been moved away by an
-    earlier move. Written down, then made (finish_publication)."""
+    earlier move. Written down, then made (finish_publication). An exception on the way undoes it (undo_publication: the
+    build before is in place again, the record gone) and goes on up; only an undo that fails too leaves the record -- and
+    clear_own_work the staging -- for the next writer to finish."""
     write_publication(out_dir, {"work": str(work), "moves": [[str(s), str(d)] for s, d in moves], "done": 0,
                                 "entry": entry})
-    finish_publication(out_dir, progress)
+    try:
+        finish_publication(out_dir, progress)
+    except BaseException:
+        try:
+            undo_publication(out_dir, progress)
+        except Exception as error:
+            progress.emit(f"the publication could not be undone either ({error}); its record and staging are kept, and the "
+                          f"next content or full build finishes it", level="error")
+        raise
 
 
 def finish_publication(out_dir, progress, recovering=False):
@@ -421,6 +435,44 @@ def finish_publication(out_dir, progress, recovering=False):
     if recovering and record.get("work"):
         shutil.rmtree(record["work"], ignore_errors=True)  # the dead run's staging: nothing left in it to publish
     return True
+
+
+def undo_publication(out_dir, progress):
+    """Put back what this run's unfinished publication moved, the last move first, take its history entry out, and forget
+    the record: the build before it is in place again. The record is lowered to each move BEFORE that move is put back,
+    so a death inside the undo leaves a record the next writer finishes like any other (a move whose source is gone was
+    made). The move the record says is next may have been made too (dead before its note): its destination is there and
+    its source is not."""
+    record = unfinished_publication(out_dir)
+    if record is None:
+        return
+    moves = record["moves"]
+    for i in reversed(range(min(int(record.get("done", 0)) + 1, len(moves)))):
+        record["done"] = i
+        write_publication(out_dir, record)
+        source, destination = pathlib.Path(moves[i][0]), pathlib.Path(moves[i][1])
+        if destination.exists() and not source.exists():
+            os.replace(destination, source)
+    entry = record.get("entry") or {}
+    history = load_history(out_dir)
+    kept = [h for h in history if h.get("build") != entry.get("build")]
+    if len(kept) != len(history):
+        save_history(out_dir, kept)
+    publication_path(out_dir).unlink()
+    progress.emit(f"the publication of build {entry.get('build')} was undone: what was in place before it is in place again",
+                  level="warning")
+
+
+def clear_own_work(out_dir, work, progress):
+    """build()'s end: its staging goes -- unless an unfinished publication still moves things out of it (one an exception
+    cut short and the undo could not put back): then it stays for the next writer to finish from, as a killed run's
+    does."""
+    record = unfinished_publication(out_dir)
+    if record and record.get("work") and pathlib.Path(record["work"]).resolve() == pathlib.Path(work).resolve():
+        progress.emit(f"{work} is kept: the publication from it is unfinished; the next content or full build finishes it",
+                      level="warning")
+        return
+    shutil.rmtree(work, ignore_errors=True)
 
 
 def acquire_writer(out_dir):
@@ -1092,6 +1144,8 @@ def build(args, progress):
             shutil.copy2(report_kept, work_symbols / "cook_report.json")
             progress.emit(str(symbols))
         kept_report = symbols / "cook_report.json" if symbols else out_dir / f"{folder_name}.cook_report.json"
+        # Whatever is in a destination's place is moved aside first (publish's rule), the files too: os.replace would
+        # overwrite the last build's zip or report, and an undone publication could not put it back.
         moves = []
         if final.exists():
             moves.append((final, work / "replaced"))
@@ -1101,9 +1155,13 @@ def build(args, progress):
                 moves.append((symbols, work / "replaced_symbols"))
             moves.append((work / "symbols", symbols))
         else:
+            if kept_report.exists():
+                moves.append((kept_report, work / "replaced_report"))
             moves.append((report_kept, kept_report))
         if tmp_zip:
             zip_path = out_dir / f"{folder_name}.zip"
+            if zip_path.exists():
+                moves.append((zip_path, work / "replaced_zip"))
             moves.append((tmp_zip, zip_path))
 
         progress.begin("finish", f"built {final}")
@@ -1122,7 +1180,7 @@ def build(args, progress):
     finally:
         work_lock.close()
         if not args.keep_temp:
-            shutil.rmtree(work, ignore_errors=True)
+            clear_own_work(out_dir, work, progress)
         release_writer(writer)
         if not args.keep_temp:
             try:

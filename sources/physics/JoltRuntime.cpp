@@ -179,7 +179,7 @@ namespace
         zone.traced = IsCoarseZone(text);
         if (zone.traced)
         {
-            const std::wstring wide(text.begin(), text.end());
+            const std::wstring wide(text.begin(), text.end()); // ASCII: Jolt's zone names are identifiers in its source
             zone.key = Profiler::RegisterTraceLiteral(wide.c_str());
         }
         return local.emplace(name, zone).first->second;

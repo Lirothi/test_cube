@@ -160,6 +160,13 @@ distribution: packages, our file system over packages and direct paths, encrypti
   itself (an entry whose folder IS the output folder). Probe: scratchpad-style `dist_probe.py` (the history in five
   states, a live / dead / lockless staging folder, two writers, a killed writer, the script refusing over a damaged
   history, a delete beside a scratch output with the repository's `dist_symbols` listed before and after).
+  **A publication is one or none** (docs/architecture_review_plan.md M12, and its review the same day): the folder, its
+  symbols, its zip or kept report and its history entry are written down in `<out>/.publishing.json` before they are
+  moved; whatever is in a destination's place is moved aside first (never overwritten). A KILLED run leaves the record,
+  and the next writer (content, full, delete, mark) finishes it; a check names it. An EXCEPTION on the way -- the old
+  folder held by its running exe or a console in it (`PermissionError`), Ctrl+C -- undoes it, the last build in place
+  again; only an undo that fails too leaves the record and keeps that run's staging for the next writer. `dist_probe.py`
+  kills a child at every point and fails every point once and for good.
   **`--override-licences`** (2026-11-16, owner: "a checkbox to override the licences when building the release config";
   the window's "Override the licences for this build" under "Every licence known", MCP `build_dist {overrideLicences:
   true}`): ONE build ships what a profile's `strictLicences` refuses -- the cook makes each such asset a warning

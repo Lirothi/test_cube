@@ -1463,9 +1463,9 @@ static HRESULT CompileDXC(const std::wstring& file,
     // Defines
     for (auto& kv : defines) {
         std::wstring w = L"-D";
-        w += std::wstring(kv.first.begin(), kv.first.end());
+        w += vfs::Widen(kv.first); // as JoinDefines widens them for the cache key (architecture review M8)
         if (!kv.second.empty()) {
-            w += L"=" + std::wstring(kv.second.begin(), kv.second.end());
+            w += L"=" + vfs::Widen(kv.second);
         }
         owned.push_back(std::move(w));
     }

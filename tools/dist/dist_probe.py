@@ -155,7 +155,9 @@ check(before == after, "the repository's dist_symbols is as it was: nothing list
 
 # ---- 5. a publication killed anywhere: the next writer finishes it, and the parts are of ONE build (M12) ----
 # build 1 is in place (folder, symbols, zip, history); build 2 is published (bd.publish) and the run dies at the k-th
-# os.replace of it -- every point: the record, each move, each note of a move, the history. Then the next writer
+# os.replace of it -- every point: the record, each move, each note of a move, the history. The death is real: the
+# publication runs in a child process that ends itself (os._exit) there, so no except and no finally of build_dist runs,
+# as when the editor's Cancel or a crash ends it (an exception is branch 6's road). Then the next writer
 # (bd.finish_publication, as main / --delete-build / --mark-published call it) and the four parts are compared: the
 # folder's manifest against the history's last entry of the version, the exe of dist_symbols/<version+build> against the
 # manifest's hash, the zip's manifest against the folder's. The control: the same death, nobody finishing it.
@@ -196,7 +198,10 @@ def moves_for(out, work, build, folder, symbols, zip_path):
     moves.append((folder, final))
     if symbols_final.exists():
         moves.append((symbols_final, work / "replaced_symbols"))
-    moves += [(symbols, symbols_final), (zip_path, out / f"{NAME}.zip")]
+    moves.append((symbols, symbols_final))
+    if (out / f"{NAME}.zip").exists():  # the last build's zip, aside first (build_dist.build does the same)
+        moves.append((out / f"{NAME}.zip", work / "replaced_zip"))
+    moves.append((zip_path, out / f"{NAME}.zip"))
     return moves
 
 
@@ -212,55 +217,124 @@ def one_build(out):
     symbols_exe = bd.symbols_root(out) / f"{VERSION}+{manifest['build']}" / "test_cube.exe"
     if not symbols_exe.exists() or hashlib.sha256(symbols_exe.read_bytes()).hexdigest() != manifest["files"]["test_cube.exe"]["sha256"]:
         return f"dist_symbols/{VERSION}+{manifest['build']} is not that exe's"
+    if not (out / f"{NAME}.zip").exists():
+        return "no zip beside the folder"
     with zipfile.ZipFile(out / f"{NAME}.zip") as z:
         if json.loads(z.read(f"{NAME}/manifest.json").decode("utf-8")) != manifest:
             return "the zip holds another build's manifest"
     return ""
 
 
-class Killed(Exception):
-    pass
+KILL_CHILD = """
+import json, os, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import build_dist as bd
+out, work, at = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), int(sys.argv[4])
+moves = [(pathlib.Path(s), pathlib.Path(d)) for s, d in json.loads(sys.argv[5])]
+real, calls = os.replace, [0]
+def dying(src, dst):
+    calls[0] += 1
+    if calls[0] == at:
+        os._exit(9)  # the process ends here: nothing after it runs
+    return real(src, dst)
+os.replace = dying
+class Quiet:
+    def emit(self, *a, **k): pass
+    def begin(self, *a, **k): pass
+bd.publish(out, moves, json.loads(sys.argv[6]), work, Quiet())
+"""
 
 
-real_replace = bd.os.replace
-points = None
-for kill_at in range(1, 64):
-    out = fresh(f"publish_{kill_at}")
-    old_work, new_work = out.parent / "old_work", out.parent / ".dist_tmp" / "build_dead"
+def build_one_in_place(name):
+    """A fresh output with build 1 published, and build 2's parts in a staging beside it: (out, staging, moves, entry)."""
+    out = fresh(name)
+    old_work, new_work = out.parent / "old_work", out.parent / ".dist_tmp" / "build_x"
     old_work.mkdir()
     new_work.mkdir(parents=True)
     f1, s1, z1, e1 = make_build(old_work, 1)
     bd.publish(out, moves_for(out, old_work, 1, f1, s1, z1), e1, old_work, Quiet())
-    check_first = one_build(out)
     f2, s2, z2, e2 = make_build(new_work, 2)
-    calls = [0]
+    return out, new_work, moves_for(out, new_work, 2, f2, s2, z2), e2
 
-    def dying_replace(src, dst, _calls=calls, _at=kill_at):
-        _calls[0] += 1
-        if _calls[0] == _at:
-            raise Killed()
-        return real_replace(src, dst)
 
-    bd.os.replace = dying_replace
-    try:
-        bd.publish(out, moves_for(out, new_work, 2, f2, s2, z2), e2, new_work, Quiet())
-        died = False
-    except Killed:
-        died = True
-    finally:
-        bd.os.replace = real_replace
-    if not died:
+def build_of(out):
+    path = out / NAME / "manifest.json"
+    return json.loads(path.read_text(encoding="utf-8")).get("build") if path.exists() else None
+
+
+points = None
+for kill_at in range(1, 64):
+    out, new_work, moves, e2 = build_one_in_place(f"publish_{kill_at}")
+    check_first = one_build(out)
+    child = subprocess.run([sys.executable, "-I", "-c", KILL_CHILD, str(repo / "tools"), str(out), str(new_work), str(kill_at),
+                            json.dumps([[str(s), str(d)] for s, d in moves]), json.dumps(e2)],
+                           capture_output=True, text=True, timeout=60)
+    if child.returncode == 0:
         points = kill_at - 1
         check(check_first == "" and one_build(out) == "", f"publication: {points} os.replace calls, all made, one build")
         break
+    if child.returncode != 9:
+        check(False, f"publication killed at its os.replace #{kill_at}: the child ended otherwise ({child.returncode}): "
+                     f"{child.stderr.strip()[-300:]}")
+        continue
     left = one_build(out)  # the control: what the death left, nobody finishing it
+    record_left = bd.publication_path(out).exists()
     bd.finish_publication(out, Quiet(), recovering=True)  # the next writer
     after = one_build(out)
-    manifest = json.loads((out / NAME / "manifest.json").read_text(encoding="utf-8")) if (out / NAME).exists() else {}
-    check(after == "" and not bd.publication_path(out).exists(),
+    # A record names the dead staging, which the finish removes; without one (dead before the record) clear_stale_work does.
+    check(after == "" and not bd.publication_path(out).exists() and (not record_left or not new_work.exists()),
           f"publication killed at its os.replace #{kill_at}: left {('one build' if not left else repr(left))}; the next writer "
-          f"finished it: {'one build, ' + str(manifest.get('build')) if after == '' else repr(after)}")
+          f"finished it: {'one build, ' + str(build_of(out)) if after == '' else repr(after)}")
 check(points is not None and points >= 9, f"the publication's points were all tried ({points})")
+
+# ---- 6. a publication that fails by an EXCEPTION inside build(): undone, build 1 stays (M review, 2026-11-24) ----
+# A move refused (the old folder held by its running exe or a console in it -- PermissionError), Ctrl+C. build() ends with
+# clear_own_work, which removes its staging. Before the undo the record stayed and the staging went, and the next writer
+# "finished" a publication whose pieces were gone: it moved the old folder into the dead staging and deleted it, and
+# listed build 2, which never existed. First every point fails once (the undo puts build 1 back, the record goes); then
+# every point fails and so does every os.replace after it (the undo cannot be made: the record and the staging stay, and
+# the next writer, the disk free again, finishes the publication). The control: the same failures without the undo.
+real_replace = bd.os.replace
+for stuck in (False, True):
+    points6 = None
+    for fail_at in range(1, 64):
+        out, new_work, moves, e2 = build_one_in_place(f"publish_fail_{int(stuck)}_{fail_at}")
+        calls = [0]
+
+        def failing_replace(src, dst, _calls=calls, _at=fail_at, _stuck=stuck):
+            _calls[0] += 1
+            if _calls[0] == _at or (_stuck and _calls[0] > _at):
+                raise PermissionError(13, "the process cannot access the file because another process is using it", str(src))
+            return real_replace(src, dst)
+
+        bd.os.replace = failing_replace
+        failed = False
+        try:
+            bd.publish(out, moves, e2, new_work, Quiet())
+        except PermissionError:
+            failed = True
+        finally:
+            bd.clear_own_work(out, new_work, Quiet())  # build()'s finally
+            bd.os.replace = real_replace
+        if not failed:
+            points6 = fail_at - 1
+            check(one_build(out) == "" and build_of(out) == 2, f"publication ({'stuck' if stuck else 'one failure'}): "
+                                                                f"{points6} os.replace calls, all made, build 2")
+            break
+        left, left_build = one_build(out), build_of(out)
+        record_left, staging_left = bd.publication_path(out).exists(), new_work.exists()
+        bd.finish_publication(out, Quiet(), recovering=True)  # the next writer
+        after, after_build = one_build(out), build_of(out)
+        what = (f"left {('build ' + str(left_build)) if not left else repr(left)}, record {'kept' if record_left else 'gone'}, "
+                f"staging {'kept' if staging_left else 'gone'}; the next writer: "
+                f"{('build ' + str(after_build)) if not after else repr(after)}")
+        if not stuck:
+            ok = left == "" and left_build == 1 and not record_left and after == "" and after_build == 1
+        else:
+            ok = (staging_left or not record_left) and after == "" and not bd.publication_path(out).exists()
+        check(ok and not new_work.exists(),
+              f"publication {'stuck' if stuck else 'refused'} at its os.replace #{fail_at} (PermissionError): {what}")
+    check(points6 is not None and points6 >= 9, f"the failing publication's points were all tried ({points6})")
 
 print()
 print("dist probe:", "PASS" if not failures else f"FAIL ({len(failures)})")
