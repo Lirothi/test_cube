@@ -5,9 +5,15 @@
 #include <atomic>
 #include <barrier>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include "third_party/json/json.hpp"
+
+// ThreadRole.cpp's one scope name. ProfilerScopes.cpp, which defines it in the game, brings the text and input layers.
+namespace ProfilerScopes {
+extern const Profiler::ScopeNameKey kGameParkRender = Profiler::RegisterTraceLiteral(L"Game: Park Render");
+}
 
 struct ProfilerTestAccess {
     static void Join(Profiler& p) { TaskSystem::Get().Wait(p.overlayTask_); }
@@ -26,6 +32,9 @@ struct ProfilerTestAccess {
     }
     static void FlushWriter(Profiler& p) { p.StopTraceWriter(); }
     static UINT QueryCount(Profiler& p) { return p.nextGpuQuery_.load(); }
+    static void SetTraceEventLimit(Profiler& p, size_t limit) { std::lock_guard<std::mutex> lock(p.mtx_); p.traceEventLimit_ = limit; }
+    static size_t DefaultTraceEventLimit() { return Profiler::kTraceEventLimit; }
+    static size_t TraceFilesKept() { return Profiler::kTraceFilesKept; }
 };
 
 namespace {
@@ -95,6 +104,91 @@ void CpuTests(Profiler& p) {
     const auto longName = Profiler::RegisterTraceLiteral(L"Regression.Scope name longer than forty characters.\u041f\u0440\u043e\u0444\u0438\u043b\u044c");
     p.BeginFrame(105); ProfilerTestAccess::Sample(p, longName, 1.0); End(p);
     Check(Find(p, "Regression.Scope name longer than forty characters.Профиль").usages == 1, "snapshot preserves full UTF-8 names");
+}
+
+// Architecture review 10.16 p. 2: CPU_SCOPE / GPU_SCOPE pasted the token __LINE__ itself, so every scope was named
+// _prof_scope___LINE__ and two in one block did not compile. This function IS the check: it builds or it does not.
+void TwoScopesInOneBlock(Profiler& p) {
+    const auto a = Profiler::RegisterTraceLiteral(L"Regression.Block.A");
+    const auto b = Profiler::RegisterTraceLiteral(L"Regression.Block.B");
+    p.BeginFrame(300);
+    {
+        CPU_SCOPE(a);
+        CPU_SCOPE(b);
+        CPU_SCOPE_N(a, first); CPU_SCOPE_N(b, second);
+    }
+    End(p);
+    Check(Find(p, "Regression.Block.A").usages == 2 && Find(p, "Regression.Block.B").usages == 2,
+        "two CPU_SCOPEs in one block, and two CPU_SCOPE_Ns on one line, compile and are both counted");
+}
+void TwoGpuScopesInOneBlock(ID3D12GraphicsCommandList* cl, Profiler::ScopeNameKey key) {
+    GPU_SCOPE(cl, key);
+    GPU_SCOPE(cl, key);
+    GPU_SCOPE_N(cl, key, first); GPU_SCOPE_N(cl, key, second);
+}
+
+size_t CompleteEvents(const std::string& path) {
+    std::ifstream input(path);
+    if (!input) { return SIZE_MAX; }
+    const auto trace = nlohmann::json::parse(input);
+    size_t complete = 0;
+    for (const auto& e : trace["traceEvents"]) { complete += e.value("ph", "") == "X" ? 1u : 0u; }
+    return complete;
+}
+
+// Architecture review 10.16 p. 4: a recording grew without end. Past its event limit it stops as Stop would (a
+// Warning says so), and the file is written with what it holds.
+void TraceStopsAtItsLimit(Profiler& p) {
+    const auto key = Profiler::RegisterTraceLiteral(L"Regression.Limit");
+    constexpr size_t limit = 500;
+    ProfilerTestAccess::SetTraceEventLimit(p, limit);
+    p.BeginTraceCapture();
+    for (uint64_t frame = 310; frame < 320; ++frame) {
+        p.BeginFrame(frame);
+        for (int i = 0; i < 200; ++i) { ProfilerTestAccess::Sample(p, key, 0.001); }
+        End(p);
+    }
+    const auto during = p.GetTraceCaptureStatus();
+    if (during.active) { p.StopTraceCapture(); p.BeginFrame(320); End(p); } // the code before the limit: end it here
+    ProfilerTestAccess::FlushWriter(p);
+    ProfilerTestAccess::SetTraceEventLimit(p, ProfilerTestAccess::DefaultTraceEventLimit());
+    const auto status = p.GetTraceCaptureStatus();
+    const size_t complete = status.lastPath.empty() ? SIZE_MAX : CompleteEvents(status.lastPath);
+    LOG_INFO(logging::LogCategory::Profiling, "limit {}: after 10 frames active={} recorded={} dropped={} file={} ({} events)",
+        limit, during.active, during.framesRecorded, status.droppedEvents, status.lastPath, complete);
+    Check(!during.active && during.framesRecorded == 3 && status.droppedEvents > 0 && complete <= limit && complete > limit - 210,
+        "a recording past its event limit stops at that frame and its file is written with what it holds");
+}
+
+// Architecture review 10.16 p. 4: traces/ kept every trace. A write keeps the newest kTraceFilesKept written traces;
+// a trace the owner named is never pruned.
+void TracesKeepTheNewestTen(Profiler& p) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::remove_all("traces", ec);
+    fs::create_directory("traces");
+    std::ofstream("traces/trace_named_by_hand.json") << "{}\n";
+    const auto key = Profiler::RegisterTraceLiteral(L"Regression.Retention");
+    const size_t kept = ProfilerTestAccess::TraceFilesKept();
+    std::vector<std::string> written;
+    for (uint64_t i = 0; i <= kept; ++i) {
+        p.RequestTraceCapture(1);
+        p.BeginFrame(330 + i);
+        ProfilerTestAccess::Sample(p, key, 0.001);
+        End(p);
+        ProfilerTestAccess::FlushWriter(p);
+        written.push_back(p.GetTraceCaptureStatus().lastPath);
+    }
+    bool distinct = true;
+    for (size_t i = 1; i < written.size(); ++i) { distinct = distinct && written[i] != written[i - 1] && !written[i].empty(); }
+    bool newestKept = true;
+    for (size_t i = 1; i < written.size(); ++i) { newestKept = newestKept && fs::exists(written[i]); }
+    size_t traces = 0;
+    for (const auto& entry : fs::directory_iterator("traces")) { traces += entry.path().extension() == ".json" ? 1u : 0u; }
+    LOG_INFO(logging::LogCategory::Profiling, "retention: {} traces written, the first {} {}, {} json files in traces/",
+        written.size(), written.front(), fs::exists(written.front()) ? "is still there" : "is gone", traces);
+    Check(distinct && !fs::exists(written.front()) && newestKept && fs::exists("traces/trace_named_by_hand.json")
+        && traces == kept + 1, "the eleventh trace deletes the first; ten written and the hand-named one stay");
 }
 
 void Hr(HRESULT result) { if (FAILED(result)) { throw std::runtime_error("D3D12 harness operation failed"); } }
@@ -221,6 +315,7 @@ void GpuTests(Profiler& p) {
     Commands overflow(device.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
     p.SetEnabled(false);
     { Profiler::ScopedGpu disabled(overflow.list.Get(), inner); }
+    TwoGpuScopesInOneBlock(overflow.list.Get(), inner);
     Check(ProfilerTestAccess::QueryCount(p) == 0, "disabled GPU profiling reserves no queries");
     p.SetEnabled(true);
     {
@@ -254,10 +349,20 @@ int main() {
     logging::LogConfig config;
     config.debuggerSink = false;
     logging::Initialize(config);
+    // The traces go to a folder of this run's own: a write deletes older traces, and the repository's traces/ are the
+    // owner's.
+    namespace fs = std::filesystem;
+    const fs::path home = fs::current_path();
+    const fs::path scratch = fs::temp_directory_path() / ("profiler_regression_" + std::to_string(GetCurrentProcessId()));
     try {
+        fs::create_directories(scratch / "traces");
+        fs::current_path(scratch);
         TaskSystem::Get().Start(8);
         auto& profiler = Profiler::Get();
         CpuTests(profiler);
+        TwoScopesInOneBlock(profiler);
+        TraceStopsAtItsLimit(profiler);
+        TracesKeepTheNewestTen(profiler);
         GpuTests(profiler);
         ProfilerTestAccess::FlushWriter(profiler);
         TaskSystem::Get().Stop();
@@ -266,6 +371,9 @@ int main() {
         LOG_ERROR(logging::LogCategory::Profiling, "profiler regression exception: {}", e.what());
         TaskSystem::Get().Stop();
     }
+    std::error_code ec;
+    fs::current_path(home, ec);
+    fs::remove_all(scratch, ec);
     LOG_INFO(logging::LogCategory::Profiling, "profiler regression: {} ({} failures)", failures ? "FAIL" : "PASS", failures);
     logging::Shutdown();
     return failures ? 1 : 0;

@@ -232,6 +232,52 @@ uint64_t TraceOutputThreadIndex(const Profiler::TraceEvent& ev) {
     return static_cast<uint64_t>(ev.threadIndex) + kCpuTraceThreadIndexBase;
 }
 
+// A name WriteTraceJson makes: trace_YYYYMMDD_HHMMSS_<...>.json. A trace the owner renamed is never pruned.
+bool IsWrittenTraceName(std::wstring_view name) {
+    constexpr std::wstring_view prefix = L"trace_", suffix = L".json";
+    if (name.size() < prefix.size() + 16 + suffix.size() || !name.starts_with(prefix) || !name.ends_with(suffix)) {
+        return false;
+    }
+    const std::wstring_view stamp = name.substr(prefix.size(), 16); // YYYYMMDD_HHMMSS_
+    for (size_t i = 0; i < stamp.size(); ++i) {
+        const bool ok = (i == 8 || i == 15) ? stamp[i] == L'_' : (stamp[i] >= L'0' && stamp[i] <= L'9');
+        if (!ok) { return false; }
+    }
+    return true;
+}
+
+// Keeps the newest `keepCount` written traces in `folder` by write time (the name breaks a tie: within one process
+// it counts up); `written` is always kept. Architecture review 10.16 p. 4: traces/ grew without end.
+void PruneOldTraces(const std::filesystem::path& folder, const std::filesystem::path& written, size_t keepCount) {
+    namespace fs = std::filesystem;
+    struct Item { fs::path path; fs::file_time_type time; };
+    std::vector<Item> items;
+    std::error_code ec;
+    for (fs::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code itemError;
+        if (!it->is_regular_file(itemError) || !IsWrittenTraceName(it->path().filename().wstring())) { continue; }
+        const fs::file_time_type time = it->last_write_time(itemError);
+        if (!itemError) { items.push_back({ it->path(), time }); }
+    }
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        return a.time != b.time ? a.time > b.time : a.path.filename() > b.path.filename();
+    });
+    size_t kept = 0, deleted = 0;
+    for (const Item& item : items) {
+        if (item.path.filename() == written.filename() || kept < keepCount) { ++kept; continue; }
+        std::error_code removeError;
+        if (fs::remove(item.path, removeError)) { ++deleted; }
+        else {
+            LOG_WARNING(logging::LogCategory::Profiling, "trace retention: cannot delete {} ({})",
+                item.path.generic_string(), removeError.message());
+        }
+    }
+    if (deleted != 0) {
+        LOG_INFO(logging::LogCategory::Profiling, "trace retention: deleted {} older traces in {}, keeping the newest {}",
+            deleted, folder.generic_string(), kept);
+    }
+}
+
 } // namespace
 
 
@@ -303,6 +349,7 @@ void Profiler::DrainThreadSamples(bool capture, uint64_t startUs) {
                 } else {
                     ev.tsUs -= startUs;
                 }
+                if (TraceEventRoom_Locked(1) == 0) { continue; }
                 traceEvents_.push_back(ev);
             }
         }
@@ -337,6 +384,8 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceFramesRecorded_ = 0;
         traceEvents_.clear();
         traceCounters_.clear();
+        traceEventsDropped_ = 0;
+        traceLimitReached_ = false;
         traceRecording_.store(true, std::memory_order_release);
         traceStartUs_ = ToMicroseconds(frameCpuStart_);
         traceFirstFrame_ = frameNo;
@@ -370,20 +419,25 @@ void Profiler::EndFrame() {
         if (traceCapturing_) {
             const uint64_t startUs = ToMicroseconds(frameCpuStart_);
             const uint64_t endUs = ToMicroseconds(frameEnd);
-            TraceEvent frame;
-            frame.key = RegisterTraceDynamic(L"Frame " + std::to_wstring(frameNo_));
-            frame.tsUs = startUs - traceStartUs_;
-            frame.durUs = endUs - startUs;
-            frame.threadIndex = GetThreadIndex_Locked(std::this_thread::get_id());
-            frame.frameNumber = frameNo_;
-            frame.hasFrameNumber = true;
-            traceEvents_.push_back(frame);
-            TraceEvent handling;
-            handling.key = kTraceHandlingKey;
-            handling.tsUs = endUs - traceStartUs_;
-            handling.durUs = ToMicroseconds(CpuClock::now()) - endUs;
-            handling.threadIndex = frame.threadIndex;
-            traceEvents_.push_back(handling);
+            const uint32_t threadIndex = GetThreadIndex_Locked(std::this_thread::get_id());
+            if (TraceEventRoom_Locked(1) != 0) {
+                TraceEvent frame;
+                frame.key = RegisterTraceDynamic(L"Frame " + std::to_wstring(frameNo_));
+                frame.tsUs = startUs - traceStartUs_;
+                frame.durUs = endUs - startUs;
+                frame.threadIndex = threadIndex;
+                frame.frameNumber = frameNo_;
+                frame.hasFrameNumber = true;
+                traceEvents_.push_back(frame);
+            }
+            if (TraceEventRoom_Locked(1) != 0) {
+                TraceEvent handling;
+                handling.key = kTraceHandlingKey;
+                handling.tsUs = endUs - traceStartUs_;
+                handling.durUs = ToMicroseconds(CpuClock::now()) - endUs;
+                handling.threadIndex = threadIndex;
+                traceEvents_.push_back(handling);
+            }
             ++traceFramesRecorded_;
             if (!traceOpenEnded_ && traceFramesRemaining_) { --traceFramesRemaining_; }
             if (traceStopRequested_ || (!traceOpenEnded_ && traceFramesRemaining_ == 0)) {
@@ -677,7 +731,8 @@ void Profiler::CollectGpuResults() {
     CollectGpuResolvedSamples(gpuFrameSamples_, capture ? &events : nullptr, startUs);
     if (!events.empty()) {
         std::lock_guard<std::mutex> lock(mtx_);
-        traceEvents_.insert(traceEvents_.end(), events.begin(), events.end());
+        const size_t room = TraceEventRoom_Locked(events.size());
+        traceEvents_.insert(traceEvents_.end(), events.begin(), events.begin() + static_cast<ptrdiff_t>(room));
     }
     // BeginFrame precedes the renderer's fence wait: recheck after readback.
     // Never overwrite an unread ring slot when a queue is more than 8 frames late.
@@ -837,6 +892,21 @@ void Profiler::ResetMax_Unsafe() {
     endFrameAsyncMaxMs_ = 0.0;
 }
 
+size_t Profiler::TraceEventRoom_Locked(size_t count) {
+    const size_t held = traceEvents_.size() + traceCounters_.size();
+    const size_t room = held < traceEventLimit_ ? (std::min)(count, traceEventLimit_ - held) : 0;
+    if (room == count) { return room; }
+    traceEventsDropped_ += count - room;
+    if (!traceLimitReached_) {
+        traceLimitReached_ = true;
+        if (traceCapturing_) { traceStopRequested_ = true; } // ends at this frame's close, as Stop would
+        LOG_WARNING(logging::LogCategory::Profiling,
+            "trace capture: the recording reached its limit of {} events at frame {} -- stopped there; the file keeps "
+            "what was recorded", traceEventLimit_, frameNo_);
+    }
+    return room;
+}
+
 void Profiler::FinishTraceIfReady() {
     TraceDumpData dump;
     {
@@ -851,6 +921,7 @@ void Profiler::FinishTraceIfReady() {
         dump.counters.swap(traceCounters_);
         dump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
         dump.threadNames = threadIndexToName_;
+        dump.droppedEvents = traceEventsDropped_;
         traceDraining_ = false;
         traceStartUs_ = 0;
         traceRequestFrameCount_ = traceFramesRemaining_ = 0;
@@ -955,6 +1026,7 @@ void Profiler::RecordTraceCounters(const char* track, const char* const* names, 
     const uint64_t nowUs = ToMicroseconds(CpuClock::now());
     std::lock_guard<std::mutex> lk(mtx_);
     if (!traceCapturing_) { return; }
+    if (TraceEventRoom_Locked(1) == 0) { return; }
     c.tsUs = nowUs > traceStartUs_ ? nowUs - traceStartUs_ : 0;
     traceCounters_.push_back(c);
 }
@@ -968,6 +1040,7 @@ Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const {
     s.framesRemaining = traceFramesRemaining_;
     s.framesRecorded = traceFramesRecorded_;
     s.events = traceEvents_.size();
+    s.droppedEvents = traceEventsDropped_;
     s.lastPath = traceLastPath_;
     return s;
 }
@@ -1104,7 +1177,13 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
         std::lock_guard<std::mutex> lock(mtx_);
         traceLastPath_ = fileName;
     }
-    LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events)", fileName, dump.events.size());
+    if (dump.droppedEvents != 0) {
+        LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events; {} past the limit dropped)", fileName,
+            dump.events.size(), dump.droppedEvents);
+    } else {
+        LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events)", fileName, dump.events.size());
+    }
+    PruneOldTraces("traces", fileName, kTraceFilesKept);
 }
 
 #endif // PROF_ENABLED

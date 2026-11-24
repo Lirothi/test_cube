@@ -139,6 +139,7 @@ public:
         std::vector<ScopeNameKey> dynamicKeys;
         std::vector<std::string> threadNames;
         std::vector<TraceCounter> counters;
+        size_t droppedEvents = 0; // past the recording's limit
     };
 
     // --- overlay data (snapshot) ---
@@ -155,8 +156,8 @@ public:
 public:
     static Profiler& Get();
 
+    // A scope's name for as long as the process runs (one entry per distinct text).
     static ScopeNameKey RegisterTraceLiteral(const wchar_t* name);
-    static ScopeNameKey RegisterTraceDynamic(std::wstring name, uint32_t* outIndex = nullptr);
 
     // Frame boundaries
     void BeginFrame(uint64_t frameNo);
@@ -215,9 +216,15 @@ public:
         ScopeNameKey key_{};
     };
 
+// The scope's variable is named through a second macro: `a##__LINE__` pastes the token __LINE__ itself, so every
+// scope was `_prof_scope___LINE__` and two in one block did not compile (architecture review 10.16 p. 2). One more
+// expansion step turns __LINE__ into its number first. CPU_SCOPE_N names its variable by `id`: two on one line (a
+// macro that opens several scopes) stay apart.
+#define PROF_CONCAT_INNER(a, b) a##b
+#define PROF_CONCAT(a, b)       PROF_CONCAT_INNER(a, b)
 #if PROF_ENABLED
-#define CPU_SCOPE(keyExpr)       Profiler::ScopedCpu _prof_scope_##__LINE__(keyExpr)
-#define CPU_SCOPE_N(keyExpr, id) Profiler::ScopedCpu _prof_scope_##__LINE__(keyExpr)
+#define CPU_SCOPE(keyExpr)       Profiler::ScopedCpu PROF_CONCAT(_prof_scope_, __LINE__)(keyExpr)
+#define CPU_SCOPE_N(keyExpr, id) Profiler::ScopedCpu PROF_CONCAT(_prof_scope_n_, id)(keyExpr)
 #else
 #define CPU_SCOPE(keyExpr)       do { } while (0)
 #define CPU_SCOPE_N(keyExpr, id) do { } while (0)
@@ -239,8 +246,8 @@ public:
     };
 
 #if PROF_ENABLED
-#define GPU_SCOPE(cmdList, keyExpr)       Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, keyExpr)
-#define GPU_SCOPE_N(cmdList, keyExpr, id) Profiler::ScopedGpu _prof_gpu_scope_##__LINE__(cmdList, keyExpr)
+#define GPU_SCOPE(cmdList, keyExpr)       Profiler::ScopedGpu PROF_CONCAT(_prof_gpu_scope_, __LINE__)(cmdList, keyExpr)
+#define GPU_SCOPE_N(cmdList, keyExpr, id) Profiler::ScopedGpu PROF_CONCAT(_prof_gpu_scope_n_, id)(cmdList, keyExpr)
 #else
 #define GPU_SCOPE(cmdList, keyExpr)       do { } while (0)
 #define GPU_SCOPE_N(cmdList, keyExpr, id) do { } while (0)
@@ -295,6 +302,7 @@ public:
         uint32_t framesRemaining = 0; // meaningless when openEnded
         uint32_t framesRecorded = 0;
         size_t   events = 0;
+        size_t   droppedEvents = 0;   // the current (or last) capture's events past its limit
         std::string lastPath;         // where the previous capture was written
     };
     TraceCaptureStatus GetTraceCaptureStatus() const;
@@ -332,6 +340,10 @@ public:
 private:
     Profiler();
     ~Profiler();
+    // A name made for one recording (`Frame 1234`, `GPU.Frame 1234`). The key holds its text only until the nearest
+    // trace is written: the writer then hands the entry back and the next registration overwrites it. Private so that
+    // no scope outside a recording keeps such a key (architecture review 10.16 p. 3); a lasting name is a literal.
+    static ScopeNameKey RegisterTraceDynamic(std::wstring name, uint32_t* outIndex = nullptr);
     void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end, uint64_t epoch);
 #if PROF_GPU_ENABLED
     // Step 3: ONE calibration per queue. Two queues' timestamp counters are not the same clock and
@@ -360,6 +372,8 @@ private:
     void QueueTraceWrite(TraceDumpData dump);
     void StopTraceWriter();
     void ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys);
+    // How many of `count` new events the recording still takes (mtx_ held); the first refusal stops the capture.
+    size_t TraceEventRoom_Locked(size_t count);
 #endif
 
 private:
@@ -433,6 +447,15 @@ private:
     uint64_t traceStartUs_ = 0, traceFirstFrame_ = 0, traceLastFrame_ = 0;
     std::vector<TraceEvent> traceEvents_;
     std::vector<TraceCounter> traceCounters_;
+    // A recording is bounded (architecture review 10.16 p. 4): kTraceEventLimit events -- scopes, frames, GPU ranges
+    // and counter samples together. At the limit the capture stops as Stop would, with one Warning, and is written
+    // with what it holds; what arrives after it is dropped and counted (the "trace saved" line says how many).
+    static constexpr size_t kTraceEventLimit = 4'000'000;
+    size_t traceEventLimit_ = kTraceEventLimit; // the regression lowers it
+    size_t traceEventsDropped_ = 0;
+    bool traceLimitReached_ = false;
+    // traces/trace_*.json kept after a write, the newest by write time (the session logs keep theirs the same way).
+    static constexpr size_t kTraceFilesKept = 10;
     // Mirrors traceCapturing_ across the whole capture (traceCapturingAtomic_ only covers the open
     // frame), for IsTraceCapturing's lock-free read from code running between frames.
     std::atomic<bool> traceRecording_{ false };
