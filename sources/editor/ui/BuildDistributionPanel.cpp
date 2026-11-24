@@ -105,7 +105,7 @@ namespace
     bool InputString(const char* label, nlohmann::json& object, const char* key, const char* fallback = "")
     {
         char buffer[256] = {};
-        const std::string value = object.value(key, std::string(fallback));
+        const std::string value = jsonfield::Get(object, key, std::string(fallback));
         std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
         if (ImGui::InputText(label, buffer, sizeof(buffer)))
         {
@@ -117,7 +117,7 @@ namespace
 
     bool CheckboxKey(const char* label, nlohmann::json& object, const char* key, bool fallback)
     {
-        bool value = object.value(key, fallback);
+        bool value = jsonfield::Get(object, key, fallback);
         if (ImGui::Checkbox(label, &value))
         {
             object[key] = value;
@@ -205,7 +205,7 @@ bool BuildDistributionPanel::ValidateRequest(const dist::BuildRequest& request, 
 
 std::string BuildDistributionPanel::OutFolder() const
 {
-    return profile_.is_object() ? profile_.value("out", std::string("dist")) : std::string("dist");
+    return profile_.is_object() ? jsonfield::Get(profile_, "out", std::string("dist")) : std::string("dist");
 }
 
 void BuildDistributionPanel::Refresh()
@@ -235,9 +235,13 @@ void BuildDistributionPanel::Refresh()
     if (fs::is_regular_file(DefaultKeyPath(), ec))
     {
         const nlohmann::json key = nlohmann::json::parse(ReadFileText(DefaultKeyPath()), nullptr, false);
-        keyGuid_ = key.is_object() ? key.value("guid", std::string("?")) : std::string("?");
+        keyGuid_ = key.is_object() ? jsonfield::Get(key, "guid", std::string("?")) : std::string("?");
     }
-    history_ = nlohmann::json::parse(ReadFileText(RepoPath(OutFolder()) / L"build_history.json"), nullptr, false);
+    // A history that is there and is not a list is DAMAGED, not empty: tools/build_dist.py refuses to build over it (it
+    // would number the next build 1 and lay its symbols over the real first build's), and this window says so.
+    const std::string historyText = ReadFileText(RepoPath(OutFolder()) / L"build_history.json");
+    history_ = nlohmann::json::parse(historyText, nullptr, false);
+    historyDamaged_ = !history_.is_array() && historyText.find_first_not_of(" \t\r\n") != std::string::npos;
     if (!history_.is_array()) { history_ = nlohmann::json::array(); }
     shaderListLines_ = 0;
     shaderListLevels_.clear();
@@ -314,7 +318,7 @@ void BuildDistributionPanel::LoadProfile(const std::string& name)
     profile_ = nlohmann::json::parse(ReadFileText(RepoPath("tools/dist/" + name + ".json")), nullptr, false, true);
     if (!profile_.is_object()) { profile_ = nlohmann::json::object(); }
     saved_ = profile_;
-    flavour_ = profile_.value("flavour", std::string("shipping")) == "development" ? "development" : "shipping";
+    flavour_ = jsonfield::Get(profile_, "flavour", std::string("shipping")) == "development" ? "development" : "shipping";
     overrideLicences_ = false;
     includeLoaded_ = false;
     selectionChecked_ = false;
@@ -359,20 +363,20 @@ void BuildDistributionPanel::ReadCheckReport(const std::string& path, bool allLe
     if (allLevels)
     {
         levelStats_.clear();
-        for (const nlohmann::json& s : report.value("levelStats", nlohmann::json::array()))
+        for (const nlohmann::json& s : jsonfield::Get(report, "levelStats", nlohmann::json::array()))
         {
             LevelStat stat;
-            stat.files = s.value("files", 0ull);
-            stat.bytes = s.value("bytes", 0ull);
-            stat.sharedFiles = s.value("sharedFiles", 0ull);
-            levelStats_[s.value("level", std::string())] = stat;
+            stat.files = jsonfield::Get(s, "files", 0ull);
+            stat.bytes = jsonfield::Get(s, "bytes", 0ull);
+            stat.sharedFiles = jsonfield::Get(s, "sharedFiles", 0ull);
+            levelStats_[jsonfield::Get(s, "level", std::string())] = stat;
         }
-        allLevelsErrors_ = report.value("errors", std::vector<std::string>{});
+        allLevelsErrors_ = jsonfield::Get(report, "errors", std::vector<std::string>{});
     }
     else
     {
-        checkErrors_ = report.value("errors", std::vector<std::string>{});
-        checkWarnings_ = report.value("warnings", std::vector<std::string>{});
+        checkErrors_ = jsonfield::Get(report, "errors", std::vector<std::string>{});
+        checkWarnings_ = jsonfield::Get(report, "warnings", std::vector<std::string>{});
         selectionChecked_ = true;
     }
 }
@@ -450,7 +454,7 @@ void BuildDistributionPanel::DrawProfile()
     ImGui::SameLine();
     if (ImGui::SmallButton("+0.0.1"))
     {
-        std::string v = profile_.value("version", std::string("0.0.0"));
+        std::string v = jsonfield::Get(profile_, "version", std::string("0.0.0"));
         int a = 0, b = 0, c = 0;
         sscanf_s(v.c_str(), "%d.%d.%d", &a, &b, &c);
         profile_["version"] = std::to_string(a) + "." + std::to_string(b) + "." + std::to_string(c + 1);
@@ -464,30 +468,30 @@ void BuildDistributionPanel::DrawProfile()
 void BuildDistributionPanel::DrawVersionVerdict()
 {
     // build_dist.py's versionMustGrow before a run (owner, 2026-11-17): only a PUBLISHED build uses its version up.
-    if (!profile_.value("versionMustGrow", false)) { return; }
-    const std::string version = profile_.value("version", std::string("0.0.0"));
+    if (!jsonfield::Get(profile_, "versionMustGrow", false)) { return; }
+    const std::string version = jsonfield::Get(profile_, "version", std::string("0.0.0"));
     const VersionKey key = ParseVersion(version);
     const nlohmann::json* blocker = nullptr;
     std::string builtAs;
     for (const nlohmann::json& h : history_)
     {
-        if (!h.is_object() || h.value("profile", std::string()) != profileName_ || h.value("result", std::string()) != "built" ||
-            h.value("flavour", std::string("shipping")) != flavour_)
+        if (!h.is_object() || jsonfield::Get(h, "profile", std::string()) != profileName_ || jsonfield::Get(h, "result", std::string()) != "built" ||
+            jsonfield::Get(h, "flavour", std::string("shipping")) != flavour_)
         {
             continue;
         }
-        if (h.value("version", std::string()) == version) { builtAs += (builtAs.empty() ? "" : ", ") + std::to_string(h.value("build", 0)); }
-        if (!h.value("published", false)) { continue; }
-        const VersionKey published = ParseVersion(h.value("version", std::string()));
+        if (jsonfield::Get(h, "version", std::string()) == version) { builtAs += (builtAs.empty() ? "" : ", ") + std::to_string(jsonfield::Get(h, "build", 0)); }
+        if (!jsonfield::Get(h, "published", false)) { continue; }
+        const VersionKey published = ParseVersion(jsonfield::Get(h, "version", std::string()));
         if (!key.valid || !published.valid || published.Tuple() >= key.Tuple())
         {
-            if (!blocker || ParseVersion(blocker->value("version", std::string())).Tuple() < published.Tuple()) { blocker = &h; }
+            if (!blocker || ParseVersion(jsonfield::Get(*blocker, "version", std::string())).Tuple() < published.Tuple()) { blocker = &h; }
         }
     }
     if (blocker)
     {
         ImGui::TextColored(LevelColour("error"), "Version %s: build %d (%s) is published -- raise it (or untick it in History)",
-                           version.c_str(), blocker->value("build", 0), blocker->value("version", std::string()).c_str());
+                           version.c_str(), jsonfield::Get(*blocker, "build", 0), jsonfield::Get(*blocker, "version", std::string()).c_str());
     }
     else if (!builtAs.empty())
     {
@@ -507,7 +511,7 @@ void BuildDistributionPanel::SetPublished(int build, bool published)
     bool found = false;
     for (nlohmann::json& h : history)
     {
-        if (!h.is_object() || h.value("build", 0) != build || h.value("result", std::string()) != "built") { continue; }
+        if (!h.is_object() || jsonfield::Get(h, "build", 0) != build || jsonfield::Get(h, "result", std::string()) != "built") { continue; }
         if (published)
         {
             char date[32] = {};
@@ -606,7 +610,7 @@ void BuildDistributionPanel::DrawLevels(const Hooks& hooks)
                 else { levels.erase(std::remove(levels.begin(), levels.end(), level), levels.end()); }
             }
             ImGui::TableNextColumn();
-            const bool boot = profile_.value("bootLevel", std::string()) == level;
+            const bool boot = jsonfield::Get(profile_, "bootLevel", std::string()) == level;
             if (ImGui::RadioButton("##boot", boot))
             {
                 profile_["bootLevel"] = level;
@@ -638,11 +642,11 @@ void BuildDistributionPanel::DrawLevels(const Hooks& hooks)
         ImGui::EndTable();
     }
     ImGui::Text("%zu level(s) shipped, start: %s; their own files: %llu, %s before compression (a file two levels share counts "
-                "twice here)", levels.size(), profile_.value("bootLevel", std::string("-")).c_str(),
+                "twice here)", levels.size(), jsonfield::Get(profile_, "bootLevel", std::string("-")).c_str(),
                 static_cast<unsigned long long>(files), MegaBytes(bytes).c_str());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(90.0f);
-    std::string startMode = profile_.value("startMode", std::string("play"));
+    std::string startMode = jsonfield::Get(profile_, "startMode", std::string("play"));
     if (ImGui::BeginCombo("Start in", startMode.c_str()))
     {
         for (const char* mode : { "play", "free" })
@@ -699,7 +703,7 @@ void BuildDistributionPanel::DrawContent()
     if (!includeLoaded_)
     {
         std::string text;
-        for (const nlohmann::json& line : profile_.value("include", nlohmann::json::array()))
+        for (const nlohmann::json& line : jsonfield::Get(profile_, "include", nlohmann::json::array()))
         {
             if (line.is_string()) { text += line.get<std::string>() + "\n"; }
         }
@@ -772,7 +776,7 @@ void BuildDistributionPanel::DrawOptions()
     {
         ImGui::TextDisabled("key %s (%s)", keyGuid_.c_str(), keyPath_.c_str());
     }
-    std::string compression = profile_.value("compression", std::string("zstd:19"));
+    std::string compression = jsonfield::Get(profile_, "compression", std::string("zstd:19"));
     int level = compression.rfind("zstd:", 0) == 0 ? std::atoi(compression.c_str() + 5) : 19;
     ImGui::SetNextItemWidth(160.0f);
     if (ImGui::SliderInt("zstd level", &level, 1, 22)) { profile_["compression"] = "zstd:" + std::to_string(level); }
@@ -785,7 +789,7 @@ void BuildDistributionPanel::DrawOptions()
     CheckboxKey("Symbol archive", profile_, "symbols", false);
     ImGui::SameLine();
     CheckboxKey("Every licence known", profile_, "strictLicences", false);
-    if (profile_.value("strictLicences", false))
+    if (jsonfield::Get(profile_, "strictLicences", false))
     {
         // The release rule stays in the profile; this build ships the assets it refuses. The last check was made the
         // other way: its errors no longer say what a build would do -- Check again.
@@ -836,7 +840,7 @@ void BuildDistributionPanel::DrawChecks(const Hooks& hooks)
     }
     else { line("info", "the tree is committed"); }
     const bool development = flavour_ == "development";
-    if (!development && profile_.value("encrypt", false) && keyGuid_.empty()) { line("error", "encryption is on and there is no key"); }
+    if (!development && jsonfield::Get(profile_, "encrypt", false) && keyGuid_.empty()) { line("error", "encryption is on and there is no key"); }
     std::error_code ec;
     const char* exeConfig = development ? "Development" : "Shipping";
     const bool cook = fs::is_regular_file(vfs::ContentRoot() / L"x64" / L"Cook" / L"test_cube.exe", ec);
@@ -874,7 +878,7 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     const bool running = job.Running();
     const bool development = flavour_ == "development";
     const bool blocked = (selectionChecked_ && !checkErrors_.empty()) ||
-                         (!development && profile_.value("encrypt", false) && keyGuid_.empty());
+                         (!development && jsonfield::Get(profile_, "encrypt", false) && keyGuid_.empty());
     const char* save = Dirty() ? "Save & " : "";
     ImGui::BeginDisabled(running);
     // The two builds of the game (docs/scalability_plan.md §7): the same packages, a different exe.
@@ -886,7 +890,7 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     {
         ImGui::SetTooltip("The game for players: x64/Shipping, the developer features compiled out (no F1, no --set),\n"
                           "the folder %s-<version>, encrypted when the profile says so.",
-                          profile_.value("product", std::string("test_cube")).c_str());
+                          jsonfield::Get(profile_, "product", std::string("test_cube")).c_str());
     }
     ImGui::SameLine();
     if (ImGui::RadioButton("Development", development)) { flavour_ = "development"; }
@@ -896,7 +900,7 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
                           "the whole command line, \"DEVELOPMENT BUILD\" on screen, its PDB beside the exe, never encrypted,\n"
                           "the profile's devInclude cooked too (the ocean presets, ...). The folder %s-<version>-dev;\n"
                           "its files at %%LOCALAPPDATA%%\\test_cube_dev, apart from Shipping's.",
-                          profile_.value("product", std::string("test_cube")).c_str());
+                          jsonfield::Get(profile_, "product", std::string("test_cube")).c_str());
     }
     const std::string exe = development ? "Development" : "Shipping";
     if (ImGui::Button((std::string(save) + "Check").c_str())) { StartRun("check", hooks); }
@@ -1006,6 +1010,11 @@ void BuildDistributionPanel::DrawResult()
 
 void BuildDistributionPanel::DrawHistory()
 {
+    if (historyDamaged_)
+    {
+        ImGui::TextColored(LevelColour("error"), "%s/build_history.json cannot be read: a build is refused until it is "
+                           "repaired or moved away (it holds the build numbers and what was published)", OutFolder().c_str());
+    }
     if (history_.empty()) { return; }
     if (!ImGui::CollapsingHeader("History")) { return; }
     int toggledBuild = 0;
@@ -1028,27 +1037,27 @@ void BuildDistributionPanel::DrawHistory()
             const nlohmann::json& h = *it;
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("%d", h.value("build", 0));
+            ImGui::Text("%d", jsonfield::Get(h, "build", 0));
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(h.value("versionString", std::string()).c_str());
+            ImGui::TextUnformatted(jsonfield::Get(h, "versionString", std::string()).c_str());
             ImGui::TableNextColumn();
             // Handed to players: a profile with versionMustGrow then needs a version above it (build_dist.py). Not while a
             // run is going -- it writes the history at its end.
-            if (h.value("result", std::string()) == "built")
+            if (jsonfield::Get(h, "result", std::string()) == "built")
             {
-                bool published = h.value("published", false);
-                ImGui::PushID(h.value("build", 0));
+                bool published = jsonfield::Get(h, "published", false);
+                ImGui::PushID(jsonfield::Get(h, "build", 0));
                 ImGui::BeginDisabled(dist::TheBuildJob().Running());
                 if (ImGui::Checkbox("##published", &published))
                 {
-                    toggledBuild = h.value("build", 0);
+                    toggledBuild = jsonfield::Get(h, "build", 0);
                     toggledTo = published;
                 }
                 ImGui::EndDisabled();
                 ImGui::PopID();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 {
-                    const std::string when = h.value("publishedDate", std::string());
+                    const std::string when = jsonfield::Get(h, "publishedDate", std::string());
                     ImGui::SetTooltip("%s\nPublished = handed to players. A profile with versionMustGrow (release) then needs a "
                                       "version above it;\na version only built (not published) can be built again.",
                                       published ? ("Published " + when).c_str() : "Not published");
@@ -1056,13 +1065,13 @@ void BuildDistributionPanel::DrawHistory()
             }
             ImGui::TableNextColumn();
             // Builds before the flavour existed were all Shipping.
-            ImGui::TextUnformatted(h.value("flavour", std::string("shipping")) == "development" ? "Development" : "Shipping");
+            ImGui::TextUnformatted(jsonfield::Get(h, "flavour", std::string("shipping")) == "development" ? "Development" : "Shipping");
             ImGui::TableNextColumn();
             // A build that shipped assets without a known licence (--override-licences) says so, and which.
-            const nlohmann::json overridden = h.value("licencesOverridden", nlohmann::json::array());
+            const nlohmann::json overridden = jsonfield::Get(h, "licencesOverridden", nlohmann::json::array());
             if (overridden.is_array() && !overridden.empty())
             {
-                ImGui::TextColored(LevelColour("warning"), "%s *", h.value("profile", std::string()).c_str());
+                ImGui::TextColored(LevelColour("warning"), "%s *", jsonfield::Get(h, "profile", std::string()).c_str());
                 if (ImGui::IsItemHovered())
                 {
                     std::string list;
@@ -1073,27 +1082,28 @@ void BuildDistributionPanel::DrawHistory()
                     ImGui::SetTooltip("Shipped without a known licence (licences overridden):%s", list.c_str());
                 }
             }
-            else { ImGui::TextUnformatted(h.value("profile", std::string()).c_str()); }
+            else { ImGui::TextUnformatted(jsonfield::Get(h, "profile", std::string()).c_str()); }
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(h.value("date", std::string()).c_str());
+            ImGui::TextUnformatted(jsonfield::Get(h, "date", std::string()).c_str());
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(MegaBytes(h.value("bytes", 0ull)).c_str());
+            ImGui::TextUnformatted(MegaBytes(jsonfield::Get(h, "bytes", 0ull)).c_str());
             ImGui::TableNextColumn();
             std::string levels;
-            for (const nlohmann::json& l : h.value("levels", nlohmann::json::array()))
+            for (const nlohmann::json& l : jsonfield::Get(h, "levels", nlohmann::json::array()))
             {
+                if (!l.is_string()) { continue; }
                 levels += (levels.empty() ? "" : ", ") + vfs::Narrow(fs::path(vfs::Widen(l.get<std::string>())).stem().wstring());
             }
             ImGui::TextUnformatted(levels.c_str());
             ImGui::TableNextColumn();
             // Out of the history and off the disk (owner, 2026-11-17), after a confirmation that lists the files. A published
             // build is not: players may hold it, and its symbols read their crash reports.
-            const bool published = h.value("published", false);
-            ImGui::PushID(h.value("build", 0));
+            const bool published = jsonfield::Get(h, "published", false);
+            ImGui::PushID(jsonfield::Get(h, "build", 0));
             ImGui::BeginDisabled(published || dist::TheBuildJob().Running());
             if (ImGui::SmallButton("Delete"))
             {
-                deleteBuild_ = h.value("build", 0);
+                deleteBuild_ = jsonfield::Get(h, "build", 0);
                 openDeleteConfirm_ = true;
             }
             ImGui::EndDisabled();
@@ -1108,27 +1118,31 @@ void BuildDistributionPanel::DrawHistory()
     if (toggledBuild != 0) { SetPublished(toggledBuild, toggledTo); }
 }
 
+int BuildDistributionPanel::LaterOwnerOf(const nlohmann::json& history, int build, const char* key, const std::string& value)
+{
+    if (!history.is_array() || value.empty()) { return 0; }
+    for (const nlohmann::json& h : history)
+    {
+        if (jsonfield::Get(h, "build", 0) > build && jsonfield::Get(h, "result", std::string()) == "built" &&
+            jsonfield::Get(h, key, std::string()) == value)
+        {
+            return jsonfield::Get(h, "build", 0);
+        }
+    }
+    return 0;
+}
+
 std::vector<std::string> BuildDistributionPanel::DeletionPlan(const nlohmann::json& entry) const
 {
     // build_dist.py delete_builds, read-only: a later build of the same version replaced the folder and the zip, so what
     // lies there is its own (the script also reads the folder's manifest before it deletes anything).
     std::vector<std::string> plan;
-    const int build = entry.value("build", 0);
+    const int build = jsonfield::Get(entry, "build", 0);
     std::error_code ec;
-    const auto laterOwner = [&](const char* key, const std::string& value) -> int {
-        for (const nlohmann::json& h : history_)
-        {
-            if (h.is_object() && h.value("build", 0) > build && h.value("result", std::string()) == "built" &&
-                h.value(key, std::string()) == value)
-            {
-                return h.value("build", 0);
-            }
-        }
-        return 0;
-    };
+    const auto laterOwner = [&](const char* key, const std::string& value) { return LaterOwnerOf(history_, build, key, value); };
     for (const char* key : { "folder", "zip" })
     {
-        const nlohmann::json value = entry.value(key, nlohmann::json());
+        const nlohmann::json value = jsonfield::Get(entry, key, nlohmann::json());
         if (!value.is_string() || value.get<std::string>().empty()) { continue; }
         const std::string path = value.get<std::string>();
         if (!fs::exists(vfs::Widen(path), ec)) { continue; }
@@ -1138,12 +1152,13 @@ std::vector<std::string> BuildDistributionPanel::DeletionPlan(const nlohmann::js
         const fs::path report = RepoPath(OutFolder()) / (fs::path(vfs::Widen(path)).filename().wstring() + L".cook_report.json");
         if (std::string(key) == "folder" && !owner && fs::exists(report, ec)) { plan.push_back("delete: " + vfs::Narrow(report.wstring())); }
     }
-    const std::string versionText = entry.value("versionString", std::string());
+    const std::string versionText = jsonfield::Get(entry, "versionString", std::string());
     if (!versionText.empty())
     {
         const std::string name = versionText.substr(0, versionText.find(' ')) +
-                                 (entry.value("flavour", std::string("shipping")) == "shipping" ? "" : "-dev");
-        const fs::path symbols = RepoPath("dist_symbols") / vfs::Widen(name);
+                                 (jsonfield::Get(entry, "flavour", std::string("shipping")) == "shipping" ? "" : "-dev");
+        // Beside the output folder, as tools/build_dist.py symbols_root has them (the repository's own for "dist").
+        const fs::path symbols = RepoPath(OutFolder()).parent_path() / L"dist_symbols" / vfs::Widen(name);
         if (fs::exists(symbols, ec)) { plan.push_back("delete: " + vfs::Narrow(symbols.wstring()) + " (its symbols)"); }
     }
     plan.push_back("its entry in the history");
@@ -1161,7 +1176,7 @@ void BuildDistributionPanel::DrawDeleteConfirm()
     const nlohmann::json* entry = nullptr;
     for (const nlohmann::json& h : history_)
     {
-        if (h.is_object() && h.value("build", 0) == deleteBuild_) { entry = &h; }
+        if (h.is_object() && jsonfield::Get(h, "build", 0) == deleteBuild_) { entry = &h; }
     }
     if (!entry)
     {
@@ -1171,7 +1186,7 @@ void BuildDistributionPanel::DrawDeleteConfirm()
         return;
     }
     ImGui::Text("Build %d (%s, %s): off the disk and out of the history. This cannot be undone.", deleteBuild_,
-                entry->value("versionString", std::string()).c_str(), entry->value("profile", std::string()).c_str());
+                jsonfield::Get(*entry, "versionString", std::string()).c_str(), jsonfield::Get(*entry, "profile", std::string()).c_str());
     for (const std::string& line : DeletionPlan(*entry)) { ImGui::BulletText("%s", line.c_str()); }
     ImGui::Spacing();
     if (ImGui::Button("Delete"))

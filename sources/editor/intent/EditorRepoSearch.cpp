@@ -71,20 +71,31 @@ namespace
     // Resolve a model-supplied path and prove it stays inside the repository. Refuses rather
     // than clamping: the model chose this string, and silently reinterpreting a bad one is a
     // rule nobody can reason about.
+    //
+    // BY COMPONENTS, not by the text. This compared strings -- "does the path begin with the
+    // root's path" -- and a folder beside the repository whose name merely BEGINS with the
+    // repository's passed: for D:/Programming/test_cube that is ../test_cube_backups and every
+    // worktree test_cube_<name>, all of which exist on the machine this was written on. The
+    // relative path from the root to the target says it without a prefix to get wrong: it
+    // either climbs out ("..") or it does not (docs/architecture_review_plan.md 10.15).
     bool InsideRepo(const std::string& relative, std::filesystem::path& outPath)
     {
-        const std::filesystem::path root = RepoRoot();
         std::error_code ec;
+        // The root canonical too, so both sides are spelled the same way (case, a junction).
+        const std::filesystem::path root = std::filesystem::weakly_canonical(RepoRoot(), ec);
+        if (ec || root.empty())
+        {
+            return false;
+        }
         const std::filesystem::path full =
             std::filesystem::weakly_canonical(root / relative, ec);
         if (ec)
         {
             return false;
         }
-        const std::string rootText = root.generic_string();
-        const std::string fullText = full.generic_string();
-        if (fullText.size() < rootText.size() ||
-            fullText.compare(0, rootText.size(), rootText) != 0)
+        const std::filesystem::path toTarget = full.lexically_relative(root);
+        // Empty: no relative path at all (another drive). "..": it leaves the root.
+        if (toTarget.empty() || *toTarget.begin() == "..")
         {
             return false;
         }

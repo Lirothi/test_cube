@@ -43,7 +43,16 @@ public:
     // re-captured as they drift, the sun moving...), while its resources and descriptors stay the same -- what a reader
     // that keeps its own copy of a picture lit by it (the Mesh Editor's preview) compares. Written on the render thread.
     unsigned EnvironmentRevision() const { return environmentRevision_.load(std::memory_order_relaxed); }
-    D3D12_CPU_DESCRIPTOR_HANDLE EnvironmentSrv() const { return HasEnvironment() ? environmentSrv_[0] : cube_.GetSRVCPU(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE EnvironmentSrv() const { return HasEnvironment() ? environmentSrv_[0] : FileCubeSrv(); }
+    // The file sky's cube -- or, when its file was refused (missing, cut short, a damaged header), a null descriptor of
+    // the cube's own dimension. Every reader of the sky cube comes through here or through EnvironmentSrv: Init used to
+    // drop the load's result, the cube's handle stayed zero, and the first table it was copied into took the process
+    // down inside the driver (three runs on 2026-11-24, one address; a level naming a sky that is not on the disk did
+    // the same). Before Init has made the null, the cube's own handle as it always was.
+    D3D12_CPU_DESCRIPTOR_HANDLE FileCubeSrv() const
+    {
+        return (cube_.GetResource() || nullCubeSrv_.ptr == 0) ? cube_.GetSRVCPU() : nullCubeSrv_;
+    }
     D3D12_CPU_DESCRIPTOR_HANDLE SpecularSrv() const { return HasEnvironment() ? environmentSrv_[1] : specCube_.GetSRVCPU(); }
     D3D12_CPU_DESCRIPTOR_HANDLE IrradianceSrv() const { return HasEnvironment() ? environmentSrv_[2] : irradianceCube_.GetSRVCPU(); }
     // The procedural environment's three textures (null without one) -- for a reader outside the
@@ -136,6 +145,7 @@ private:
     std::array<float, 4> moonGlow_{};
     UdsSkyFrameData udsSky_{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nightMapSrv_{}, nullSkyViewSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE nullCubeSrv_{}; // nullSkyViewHeap_'s second descriptor: a TEXTURECUBE null (FileCubeSrv)
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;
     TextureCube specCube_;

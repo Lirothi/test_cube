@@ -139,6 +139,26 @@ namespace
         }
         return preset;
     }
+
+    // A field of the wrong type ("alphaCutoff": "0.5", a string inside "tint") throws out of the JSON library, and
+    // nothing caught it: the startup scan reads every file of data/materials, so one such line in any of them ended the
+    // program before its first frame with no file named, and a preset loaded later (the Content Browser, the Material
+    // Editor) took the editor down with the level in it (docs/architecture_review_plan.md 10.13). The material is named
+    // and left out; the others load.
+    bool TryParseMaterialPreset(const nlohmann::json& p, const std::string& source, MaterialPreset& out)
+    {
+        try
+        {
+            out = ParseMaterialPresetJson(p);
+            return true;
+        }
+        catch (const nlohmann::json::exception& e)
+        {
+            LOG_ERROR(logging::LogCategory::Asset, "material {}: a field of the wrong type -- {} (the material is not loaded)",
+                      source, e.what());
+            return false;
+        }
+    }
 }
 
 void MaterialDataManager::RegisterPreset(const std::string& name, const MaterialPreset& preset)
@@ -163,7 +183,10 @@ bool MaterialDataManager::LoadPresetsFromJsonFile(const std::wstring& path)
         if (!p.is_object()) {
             continue;
         }
-        RegisterPreset(name, ParseMaterialPresetJson(p));
+        MaterialPreset preset;
+        if (TryParseMaterialPreset(p, "'" + name + "' in " + vfs::Narrow(path), preset)) {
+            RegisterPreset(name, preset);
+        }
     }
     return true;
 }
@@ -186,7 +209,9 @@ bool MaterialDataManager::LoadPresetsFromDirectory(const std::wstring& directory
         const nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
         if (j.is_discarded() || !j.is_object()) { return; }
 
-        RegisterPreset(entry.name.substr(0, entry.name.rfind('.')), ParseMaterialPresetJson(j));
+        MaterialPreset preset;
+        if (!TryParseMaterialPreset(j, entry.path, preset)) { return; }
+        RegisterPreset(entry.name.substr(0, entry.name.rfind('.')), preset);
         ++loaded;
     });
     return loaded > 0;
@@ -229,8 +254,12 @@ bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path, const std
     // find() right after would miss, and the object would silently render with no material at all:
     // the level looks like it lost its geometry. The startup scan passes no name and keeps the
     // stem, which is the same thing for a flat folder.
-    RegisterPreset(registerAs.empty() ? materialPath.stem().string() : registerAs,
-                   ParseMaterialPresetJson(json));
+    MaterialPreset preset;
+    if (!TryParseMaterialPreset(json, vfs::Narrow(path), preset))
+    {
+        return false;
+    }
+    RegisterPreset(registerAs.empty() ? materialPath.stem().string() : registerAs, preset);
     return true;
 }
 

@@ -105,9 +105,18 @@ bool TextureCube::CreateFromDDS(Renderer* r,
         return false;
     }
 
-    width_ = w; height_ = h; mipLevels_ = mips; arraySize_ = arr; format_ = fmt;
+    // 2b) The header's numbers are the file's word: nothing is created or copied by them until they are what a cubemap
+    //     can be. A mip count or a layer count out of a damaged header sized three vectors and was then cut to 16 bits.
+    UINT mostMips = 1;
+    for (UINT edge = (std::max)(w, h); edge > 1; edge >>= 1) { ++mostMips; }
+    if (w == 0 || h == 0 || w > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION || h > D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION ||
+        mips == 0 || mips > mostMips || arr > D3D12_REQ_TEXTURE2D_ARRAY_AXIS_DIMENSION || dataOfs > file.size()) {
+        LOG_ERROR(logging::LogCategory::Asset, "cubemap: the DDS header is damaged ({}x{}, {} mips, {} layers): {}",
+                  w, h, mips, arr, path);
+        return false;
+    }
 
-    // 3) Create the GPU resource (Texture2D array, arraySize = 6*N)
+    // 3) The resource's description (Texture2D array, arraySize = 6*N)
     D3D12_RESOURCE_DESC td{};
     td.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     td.Width = w;
@@ -119,15 +128,9 @@ bool TextureCube::CreateFromDDS(Renderer* r,
     td.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     td.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    // Step 15: same miss as Texture2D's raw-pixel path — step 11 converted no TextureCube site at
-    // all, so the skybox was created legacy in COPY_DEST and then took an enhanced barrier.
-    ThrowIfFailed(gpu::CreateCommittedTexture(r->GetDevice(), hp, D3D12_HEAP_FLAG_NONE, td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::TexMaterial, L"TextureCube_RESOURCE",
-        tex_.GetAddressOfForCreate()));
-
-    // 4) Prepare the upload buffer and subresource layout
+    // 4) The subresource layout, and the file against it -- BEFORE anything is created. The copy below takes
+    //    numRows x rowSizes bytes a subresource out of the file's buffer; a file shorter than its header says (a copy
+    //    that was cut short, a failed export) was read past its end (review 10.13). Texture2D refuses the same way.
     const UINT subresources = mips * arr;
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(subresources);
@@ -137,6 +140,32 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     r->GetDevice()->GetCopyableFootprints(&td, 0, subresources, 0,
         layouts.data(), numRows.data(), rowSizes.data(), &uploadBytes);
+    if (uploadBytes == 0 || uploadBytes == UINT64_MAX) {
+        // D3D's answer for a description it cannot lay out: a format out of the header that is no texture format.
+        LOG_ERROR(logging::LogCategory::Asset, "cubemap: the DDS names a format that cannot be a texture ({}): {}",
+                  static_cast<int>(fmt), path);
+        return false;
+    }
+    {
+        UINT64 described = 0;
+        for (UINT s = 0; s < subresources; ++s) { described += static_cast<UINT64>(numRows[s]) * rowSizes[s]; }
+        const UINT64 held = static_cast<UINT64>(file.size() - dataOfs);
+        if (described > held) {
+            LOG_ERROR(logging::LogCategory::Asset, "cubemap: DDS truncated: {} holds {} data bytes, its header describes {}",
+                      path, held, described);
+            return false;
+        }
+    }
+
+    width_ = w; height_ = h; mipLevels_ = mips; arraySize_ = arr; format_ = fmt;
+
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    // Step 15: same miss as Texture2D's raw-pixel path — step 11 converted no TextureCube site at
+    // all, so the skybox was created legacy in COPY_DEST and then took an enhanced barrier.
+    ThrowIfFailed(gpu::CreateCommittedTexture(r->GetDevice(), hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::TexMaterial, L"TextureCube_RESOURCE",
+        tex_.GetAddressOfForCreate()));
 
     D3D12_HEAP_PROPERTIES hpUp{}; hpUp.Type = D3D12_HEAP_TYPE_UPLOAD;
 

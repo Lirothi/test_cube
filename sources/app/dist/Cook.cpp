@@ -1172,7 +1172,7 @@ namespace
         return static_cast<int>(std::min<std::size_t>(errors_.size(), 255));
     }
 
-    std::optional<Profile> ReadProfile(const std::string& file, std::string& error)
+    std::optional<Profile> ReadProfileUnguarded(const std::string& file, std::string& error)
     {
         std::string text;
         if (!vfs::ReadText(file, text))
@@ -1226,6 +1226,21 @@ namespace
         }
         if (const std::optional<std::string> n = Normalise(p.bootLevel)) { p.bootLevel = *n; }
         return p;
+    }
+
+    // A field of the wrong type ("levels": "a.json" where a list is read, "version": 1.0) throws out of the JSON library:
+    // an error with the profile's name, as every other fault of a profile is -- not the cook's crash report.
+    std::optional<Profile> ReadProfile(const std::string& file, std::string& error)
+    {
+        try
+        {
+            return ReadProfileUnguarded(file, error);
+        }
+        catch (const Json::exception& e)
+        {
+            error = "the profile " + file + " has a field of the wrong type -- " + e.what();
+            return std::nullopt;
+        }
     }
 } // namespace
 

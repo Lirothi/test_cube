@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "core/JsonField.h" // a profile and the history are read field by field, never with value(): it throws
 #include "third_party/json/json.hpp"
 
 namespace dist { struct BuildRequest; }
@@ -35,6 +36,10 @@ public:
     // A cook message that names a level's object ("... (named by <level>, object '<name>')", Cook.cpp Visit): its level
     // and object -- the line the window turns into a button that selects it. False for any other message.
     static bool ObjectOfMessage(const std::string& message, std::string& level, std::string& object);
+    // History "Delete": the later built entry of `history` whose `key` ("folder" or "zip") is `value` -- that build
+    // replaced the files, so they are its own now -- or 0. An entry's field of another type is not a match: the script
+    // writes `"zip": null` for a build without an archive, and value() on it threw out of the frame (review 10.14).
+    static int LaterOwnerOf(const nlohmann::json& history, int build, const char* key, const std::string& value);
     // "--build-dist=<profile>[,override-licences][,delete=<build>]": the window opens on that profile (the licence override
     // ticked, a build's delete confirmation open) -- for a --shot.
     void OpenOn(const std::string& spec) { openOn_ = spec; }
@@ -86,7 +91,7 @@ private:
     // without a known licence (--override-licences). Never written into the profile; a profile loaded clears it.
     bool overrideLicences_ = false;
     std::string openOn_; // OpenOn's spec, taken by the first Draw after the profiles are listed
-    [[nodiscard]] bool LicencesOverridden() const { return overrideLicences_ && profile_.value("strictLicences", false); }
+    [[nodiscard]] bool LicencesOverridden() const { return overrideLicences_ && jsonfield::Get(profile_, "strictLicences", false); }
     nlohmann::json profile_;
     nlohmann::json saved_;
     char saveAsName_[64] = {};
@@ -103,6 +108,7 @@ private:
     std::vector<std::string> gitChanged_;
     bool gitKnown_ = false;
     nlohmann::json history_ = nlohmann::json::array();
+    bool historyDamaged_ = false;           // build_history.json is there and is not a list (build_dist.py refuses then)
     int handledJobId_ = 0;                  // the last finished job whose result was read
     bool sizesRequested_ = false;
     bool sizesStarted_ = false;

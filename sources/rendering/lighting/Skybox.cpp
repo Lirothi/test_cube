@@ -201,7 +201,11 @@ void Skybox::Init(Renderer* renderer,
 
     // If the texture has not been loaded via LoadDDS yet, we can optionally try it here
     if (!cube_.GetResource() && !path_.empty()) {
-        (void)cube_.CreateFromDDS(renderer, uploadCmdList, path_, uploadKeepAlive);
+        // The result was thrown away, and a refused file left a cube with no resource that was bound all the same.
+        if (!cube_.CreateFromDDS(renderer, uploadCmdList, path_, uploadKeepAlive)) {
+            LOG_ERROR(logging::LogCategory::Render, "skybox: the sky file was not loaded ({}): this level has no file sky "
+                      "-- its readers get a null cube", path_);
+        }
     }
 
     // F8: pick up the F7 IBL siblings, if this sky was imported with them. Discovery is by NAME
@@ -268,7 +272,7 @@ void Skybox::Init(Renderer* renderer,
 
     // Type-correct null descriptors keep the HDRI/editor path valid without atmosphere resources.
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2; // [0] a 2D null, [1] a cube null
     if (FAILED(gpu::CreateDescriptorHeap(renderer->GetDevice(), &hd, MemTag::Sky, L"Skybox.NullSkyViewHeap", IID_PPV_ARGS(&nullSkyViewHeap_))))
     {
         LOG_ERROR(logging::LogCategory::Render, "skybox null atmosphere descriptor allocation failed");
@@ -279,6 +283,14 @@ void Skybox::Init(Renderer* renderer,
     sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
     renderer->GetDevice()->CreateShaderResourceView(nullptr, &sd, nullSkyViewSrv_);
+    // The same for the file sky's own slot (t0 here, and every table EnvironmentSrv goes into): a null of the CUBE's
+    // dimension -- the 2D one above in a TextureCube slot would be the wrong-type descriptor GBV reports as 939 / 940.
+    nullCubeSrv_ = nullSkyViewSrv_;
+    nullCubeSrv_.ptr += renderer->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    D3D12_SHADER_RESOURCE_VIEW_DESC cubeDesc{};
+    cubeDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; cubeDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    cubeDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; cubeDesc.TextureCube.MipLevels = 1;
+    renderer->GetDevice()->CreateShaderResourceView(nullptr, &cubeDesc, nullCubeSrv_);
 
     // Build the cube geometry
     BuildCubeMesh_(renderer, uploadCmdList, uploadKeepAlive);
@@ -298,7 +310,7 @@ bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, R
     const bool moonTexture = skyViewFrame_.planet[3] != 0 && skyViewFrame_.moonDisc2[1] != 0.0f && moonSrv_.ptr != 0;
     // t4 (N2): the Milky Way's map, read only when night.layers[1] says it exists.
     const bool nightMap = skyViewFrame_.planet[3] != 0 && nightSky_.layers[1] > 0.0f && nightMapSrv_.ptr != 0;
-    ctx.srvTable[0] = renderer->StageSrvUavTable({cube_.GetSRVCPU(),
+    ctx.srvTable[0] = renderer->StageSrvUavTable({FileCubeSrv(),
         skyViewFrame_.planet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
         skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_,
         moonTexture ? moonSrv_ : nullSkyViewSrv_,

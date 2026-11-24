@@ -72,6 +72,101 @@ namespace
         // Older llama-server builds, which said it this way instead.
         return ReadBoolOr(reply, "stopped_limit", false);
     }
+
+    float ReadFloatOr(const nlohmann::json& object, const char* key, float fallback)
+    {
+        const auto it = object.find(key);
+        return (it != object.end() && it->is_number()) ? it->get<float>() : fallback;
+    }
+
+    // The prompt's size as the server counted it: `timings.prompt_n`, or `tokens_evaluated`
+    // from builds that say it that way. 0 when the reply says neither.
+    int ReadPromptTokens(const nlohmann::json& reply)
+    {
+        if (!reply.is_object())
+        {
+            return 0;
+        }
+        int prompt = 0;
+        const auto timings = reply.find("timings");
+        if (timings != reply.end() && timings->is_object())
+        {
+            prompt = ReadIntOr(*timings, "prompt_n", 0);
+        }
+        if (prompt <= 0)
+        {
+            prompt = ReadIntOr(reply, "tokens_evaluated", 0);
+        }
+        return prompt;
+    }
+
+    // A REQUEST'S WORKER, with whatever it throws turned into a failed request.
+    //
+    // Every request runs on a detached thread -- it has to, a tracked task would be joined
+    // at the top of the next frame and hand the stall straight back. Nothing is above a
+    // detached thread to catch: an exception out of it is std::terminate, which in the
+    // editor is the level gone. The readers below no longer throw on a reply of the wrong
+    // shape (llmreply), and this is the net under them: a bad_alloc on a huge body, or a
+    // reader somebody adds later.
+    template <class RequestT, class Work>
+    void RunRequestWorker(const std::shared_ptr<RequestT>& request, const Work& work) noexcept
+    {
+        const auto fail = [&request](const char* what)
+        {
+            LOG_ERROR(logging::LogCategory::Editor,
+                "intent model: a request's worker threw -- {}", what);
+            if (!request->abandoned.load())
+            {
+                request->error = std::string("the local model's reply could not be read: ") + what;
+                request->state.store(static_cast<int>(IntentParseState::Failed));
+            }
+        };
+        try
+        {
+            work();
+        }
+        catch (const std::exception& e)
+        {
+            fail(e.what());
+        }
+        catch (...)
+        {
+            fail("an unknown exception");
+        }
+    }
+}
+
+namespace llmreply
+{
+    bool Read(const std::string& body, Completion& out)
+    {
+        const nlohmann::json reply = nlohmann::json::parse(body, nullptr, false);
+        if (reply.is_discarded() || !reply.is_object())
+        {
+            return false;
+        }
+        const auto content = reply.find("content");
+        if (content == reply.end() || !content->is_string())
+        {
+            return false;
+        }
+        out.content = content->get<std::string>();
+        out.promptTokens = ReadPromptTokens(reply);
+        out.truncated = HitTheTokenLimit(reply);
+        out.tokensPerSecond = 0.0f;
+        const auto timings = reply.find("timings");
+        if (timings != reply.end() && timings->is_object())
+        {
+            out.tokensPerSecond = ReadFloatOr(*timings, "predicted_per_second", 0.0f);
+        }
+        return true;
+    }
+
+    int PromptTokens(const std::string& body)
+    {
+        const nlohmann::json reply = nlohmann::json::parse(body, nullptr, false);
+        return reply.is_discarded() ? 0 : ReadPromptTokens(reply);
+    }
 }
 
 LlmIntentSource::LlmIntentSource(LlmIntentSettings settings)
@@ -263,8 +358,17 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
         std::thread([probe = healthProbe_, endpoint = settings_.endpoint]()
         {
             MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
-            const llmclient::Response health = llmclient::Get(endpoint, "/health", 2);
-            probe->ok.store(health.ok, std::memory_order_relaxed);
+            // Detached: nothing above it catches. Whatever happens the probe ANSWERS -- a probe
+            // that never does leaves the editor "looking for a server" for good.
+            bool ok = false;
+            try
+            {
+                ok = llmclient::Get(endpoint, "/health", 2).ok;
+            }
+            catch (...)
+            {
+            }
+            probe->ok.store(ok, std::memory_order_relaxed);
             probe->done.store(true, std::memory_order_release);
         }).detach();
     }
@@ -483,7 +587,7 @@ void LlmIntentSource::SendPending()
 
     // Detached, and outside the engine's task system on purpose: a tracked task is joined
     // at the top of the next frame, which would give the stall straight back.
-    std::thread([request, endpoint, timeout, payload]()
+    const auto work = [request, endpoint, timeout, payload]()
     {
         MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
@@ -500,30 +604,23 @@ void LlmIntentSource::SendPending()
             return;
         }
 
-        const nlohmann::json parsed = nlohmann::json::parse(response.body, nullptr, false);
-        if (parsed.is_discarded() || !parsed.contains("content"))
+        llmreply::Completion reply;
+        if (!llmreply::Read(response.body, reply))
         {
             request->error = "unexpected reply shape from llama-server";
             request->state.store(static_cast<int>(IntentParseState::Failed));
             return;
         }
-        request->answer = parsed["content"].get<std::string>();
+        request->answer = std::move(reply.content);
         // How much context this actually cost, counted by the server. It belongs HERE, on
         // the command path: this is the request that carries the system prompt, the grammar
         // and the remembered session, and it is the one whose growth decides when the
         // context runs out. The first version of this read it on the chat path instead, so
         // the stats line went on saying "nothing asked yet" after every command.
-        const auto timings = parsed.find("timings");
-        if (timings != parsed.end() && timings->is_object())
-        {
-            request->promptTokens = timings->value("prompt_n", 0);
-        }
-        if (request->promptTokens <= 0)
-        {
-            request->promptTokens = parsed.value("tokens_evaluated", 0);
-        }
+        request->promptTokens = reply.promptTokens;
         request->state.store(static_cast<int>(IntentParseState::Ready));
-    }).detach();
+    };
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
 }
 
 IntentParseState LlmIntentSource::Poll(EditorIntent& outIntent, std::string& outWhyNot)
@@ -575,9 +672,9 @@ IntentParseState LlmIntentSource::Poll(EditorIntent& outIntent, std::string& out
     // The cold request measures the whole prompt, so the maximum is the honest figure. It
     // can only err LOW, which is the safe direction: it compacts early rather than letting
     // a request overflow.
-    if (request_->promptTokens > lastPromptTokens_.load(std::memory_order_relaxed))
+    if (request_->promptTokens > lastPromptTokens_->load(std::memory_order_relaxed))
     {
-        lastPromptTokens_.store(request_->promptTokens, std::memory_order_relaxed);
+        lastPromptTokens_->store(request_->promptTokens, std::memory_order_relaxed);
     }
     const std::string answer = request_->answer;
     request_.reset();
@@ -698,31 +795,19 @@ bool LlmIntentSource::BeginWarmup(const EditorIntentWorld& world)
     // hundred tokens -- the rest are still in the KV cache and still occupying the context,
     // they simply were not recomputed. Without recording it here the status line read
     // "context 1%" on a window that was a third full.
-    std::thread([request, endpoint, timeout, payload, started, tokens = &lastPromptTokens_]()
+    // `tokens` is the shared counter itself, not this object's address: the answer lands up to
+    // twenty seconds from now, and the editor may be gone by then (LlmIntentSource.h).
+    const auto work = [request, endpoint, timeout, payload, started, tokens = lastPromptTokens_]()
     {
         MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
             llmclient::PostJson(endpoint, "/completion", payload, timeout);
         if (response.ok)
         {
-            const nlohmann::json parsed =
-                nlohmann::json::parse(response.body, nullptr, false);
-            if (!parsed.is_discarded() && parsed.is_object())
+            const int prompt = llmreply::PromptTokens(response.body);
+            if (prompt > tokens->load(std::memory_order_relaxed))
             {
-                int prompt = 0;
-                const auto timings = parsed.find("timings");
-                if (timings != parsed.end() && timings->is_object())
-                {
-                    prompt = timings->value("prompt_n", 0);
-                }
-                if (prompt <= 0)
-                {
-                    prompt = parsed.value("tokens_evaluated", 0);
-                }
-                if (prompt > tokens->load(std::memory_order_relaxed))
-                {
-                    tokens->store(prompt, std::memory_order_relaxed);
-                }
+                tokens->store(prompt, std::memory_order_relaxed);
             }
         }
         request->state.store(static_cast<int>(
@@ -730,7 +815,8 @@ bool LlmIntentSource::BeginWarmup(const EditorIntentWorld& world)
         LOG_INFO(logging::LogCategory::Editor, "intent model: prompt warmed in {:.1f}s{}",
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(),
             response.ok ? "" : " (FAILED -- the first phrase will pay for the prefill)");
-    }).detach();
+    };
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
     return true;
 }
 
@@ -939,7 +1025,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
     const int timeout = settings_.timeoutSeconds;
     const std::string payload = body.dump();
 
-    std::thread([request, endpoint, timeout, payload]()
+    const auto work = [request, endpoint, timeout, payload]()
     {
         MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         // llama-server speaks server-sent events: "data: {json}\n\n" per token. Reads do
@@ -996,7 +1082,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
             const auto timings = event.find("timings");
             if (timings != event.end() && timings->is_object())
             {
-                rate = timings->value("predicted_per_second", rate);
+                rate = ReadFloatOr(*timings, "predicted_per_second", rate);
             }
         };
 
@@ -1048,33 +1134,25 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
             // Not an SSE body after all -- an older server, or an error page. Fall back to
             // reading it as the single object the non-streaming path would have returned,
             // so a server that ignores "stream" still works.
-            const nlohmann::json parsed =
-                nlohmann::json::parse(response.body, nullptr, false);
-            if (parsed.is_discarded() || !parsed.contains("content"))
+            llmreply::Completion reply;
+            if (!llmreply::Read(response.body, reply))
             {
                 request->error = "unexpected reply shape from llama-server";
                 request->state.store(static_cast<int>(IntentParseState::Failed));
                 return;
             }
-            answer = parsed["content"].get<std::string>();
-            truncated = HitTheTokenLimit(parsed);
-            const auto timings = parsed.find("timings");
-            if (timings != parsed.end() && timings->is_object())
-            {
-                rate = timings->value("predicted_per_second", 0.0f);
-                promptTokens = timings->value("prompt_n", 0);
-            }
-            if (promptTokens <= 0)
-            {
-                promptTokens = parsed.value("tokens_evaluated", 0);
-            }
+            answer = std::move(reply.content);
+            truncated = reply.truncated;
+            rate = reply.tokensPerSecond;
+            promptTokens = reply.promptTokens;
         }
         request->answer = answer;
         request->truncated = truncated;
         request->tokensPerSecond = rate;
         request->promptTokens = promptTokens;
         request->state.store(static_cast<int>(IntentParseState::Ready));
-    }).detach();
+    };
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
 }
 
 std::string LlmIntentSource::FreeformPartial() const
@@ -1188,7 +1266,7 @@ void LlmIntentSource::RequestDeveloperNote(const std::string& phrase, const Edit
     const EditorIntent refusalCopy = refusal;
     const std::string phraseCopy = phrase;
 
-    std::thread([request, endpoint, timeout, payload, path, levelPath, refusalCopy, phraseCopy]()
+    const auto work = [request, endpoint, timeout, payload, path, levelPath, refusalCopy, phraseCopy]()
     {
         MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
@@ -1201,10 +1279,10 @@ void LlmIntentSource::RequestDeveloperNote(const std::string& phrase, const Edit
         std::string prose;
         if (response.ok)
         {
-            const nlohmann::json parsed = nlohmann::json::parse(response.body, nullptr, false);
-            if (!parsed.is_discarded() && parsed.contains("content"))
+            llmreply::Completion reply;
+            if (llmreply::Read(response.body, reply))
             {
-                prose = parsed["content"].get<std::string>();
+                prose = std::move(reply.content);
                 // A thinking model may still emit a reasoning block here; the note is what
                 // comes after it.
                 const std::size_t endThink = prose.find("</think>");
@@ -1230,7 +1308,8 @@ void LlmIntentSource::RequestDeveloperNote(const std::string& phrase, const Edit
             LOG_INFO(logging::LogCategory::Editor,
                 "intent model: API request noted in {}", path);
         }
-    }).detach();
+    };
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
 }
 
 std::string LlmIntentSource::StatusLine() const

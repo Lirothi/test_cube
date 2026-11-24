@@ -105,7 +105,7 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
                     act.digitals.push_back(d);
                 }
             }
-            if (a.contains("mouseButton")) {
+            if (a.contains("mouseButton") && a["mouseButton"].is_string()) { // the one field here that was read unchecked
                 Digital d;
                 int mb = MouseButtonFromString(a["mouseButton"].get<std::string>());
                 if (mb >= 0) { d.mouseButtons.push_back(mb); }

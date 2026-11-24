@@ -431,6 +431,39 @@ foreach ($f in $files) {
 
 - If a touched source file has mixed endings, normalize it to CRLF before the final response.
 
+## A Field of Another Type, a File That Is Not There -- an Error, Not a Crash
+
+2026-11-24 (the code review's second reading, docs/architecture_review_plan.md 10.13-10.18). nlohmann's
+`object.value(key, fallback)` returns the fallback only when the key is ABSENT. A key that is there with another type --
+`"zip": null`, `"version": 1.0` where a string is read, `"levels": "a.json"` where a list is -- throws `type_error 302`
+(probed on the tree's `json.hpp`: five of five), and so does `value()` on anything that is not an object. Out of a frame
+or a thread of its own that is `std::terminate`: in the editor, the level gone. There were 770 such calls in 53 files;
+the ones a hand-edited or foreign file reaches in a frame are done, the levels' own are plan step R9.6.
+
+- **`core/JsonField.h` `jsonfield::Get(object, key, fallback)`**: the field as its type, or the fallback -- never throws
+  (bool, an integer, a float, a string, a list of strings, the json as it is). For a file another program writes or
+  somebody edits by hand, read in a frame or on a thread: the Build Distribution window, `DistBuildJob`'s event lines,
+  the player's `display.mode` (`"mode": 1` threw before the window was made, at every start), `config/boot.json`.
+- **Where a wrong type must be an ERROR that names the file**, keep `value()` and catch `nlohmann::json::exception`
+  around the read: a level (`JsonLevel::Load`), a cook profile (`Cook.cpp ReadProfile`), the scalability table, and a
+  material -- `MaterialDataManager` `TryParseMaterialPreset` names the file, leaves that material out and loads the
+  rest. One `"alphaCutoff": "0.5"` in any file of `data/materials` used to end the program before its first frame with
+  no file named (the startup scan reads them all), and a preset loaded later took the editor down.
+- **A sky file that is refused** -- not on the disk, cut short, a damaged header -- is an Error and a level without sky
+  light. `TextureCube::CreateFromDDS` checks the header's numbers and the file's size against the layout BEFORE it
+  creates or copies anything (a truncated file was read past its end), and `Skybox::Init` no longer throws its result
+  away: every reader of the cube comes through `Skybox::FileCubeSrv()` / `EnvironmentSrv()`, which hand a null descriptor
+  of the cube's own dimension (a second slot of the skybox's null heap; the 2D null there would be the wrong type).
+  Until then a level that named a sky file that was simply not there died in the driver (`nvwgf2umx.dll`) a second
+  after the "failed to read" line. **A loader that refuses is half the fix**: find who gets its `false` and what they
+  bind instead -- the live run says, not the loader's code. GBV (`Skybox,Lighting,Compose,GBuffer,Transparent,
+  Transparent.Water,Translucent` + the Skybox self-test, a level that names a sky file that is not there, Debug): only
+  id=935, nothing alive at exit; `RTTrace` and `GlassReflections` were not in that run, and the editor on such a level
+  opens, draws its panels and bakes thumbnails. That list patches Lighting, Compose and the G-buffer: 5 minutes to the
+  first frame on a warm cache, 8 cold -- give such a run 20 minutes.
+- Gates: `intent_regression` `TestJsonFieldsAreReadWithoutThrowing` (it also asserts that the library DOES throw, so
+  nobody "simplifies" the readers back), `TestAMaterialOfTheWrongTypeIsAnErrorNotACrash`.
+
 ## Session Log
 
 Every process (the app, every `--*` harness) writes one event log:
@@ -825,6 +858,22 @@ distribution: packages, our file system over packages and direct paths, encrypti
   manifest.json is read first), its symbols (`dist_symbols/<a.b.c+build>`); only under the output folder and
   dist_symbols/; a published build is refused. `--build-dist=<profile>,delete=<build>` opens the confirmation for a
   `--shot`.
+  **One run never touches another's files** (2026-11-24, the code review, docs/architecture_review_plan.md 10.14 / 10.18).
+  Each run stages in a folder of its own under `.dist_tmp` and holds `owner.lock` open in it; a run clears only the
+  folders nobody holds (a killed run's). Until then EVERY run began by deleting `.dist_tmp` whole -- the check the
+  window starts when it opens included, under a build from the console. A content / full build, `--delete-build` and
+  `--mark-published` hold `.dist_tmp/writer.lock`: a second writer of the same output folder is refused ("another build
+  is writing ..."). An open file is the claim (Windows will not delete it while its process lives, and frees it when the
+  process is killed): no pid to be reused. **`build_history.json` that is there and is not a list of builds is DAMAGED,
+  not empty**: content / full / delete / mark refuse and change nothing (read as empty, the next build was numbered 1,
+  laid its symbols over the real first build's and replaced the file, the published marks with it); a check warns; the
+  window says so in red over the History. **Symbols live BESIDE the output folder** (`symbols_root`:
+  `<out>/../dist_symbols` -- the repository's own for `dist`): they were the repository's whatever `--out` said, and a
+  probe of `--delete-build` with `--out` in a temp folder deleted the real `dist_symbols/0.1.0+1`. So: a tool that deletes
+  is run on a copy, and first read for the paths it takes from somewhere else than its `--out`. Delete never takes a root
+  itself (an entry whose folder IS the output folder). Probe: scratchpad-style `dist_probe.py` (the history in five
+  states, a live / dead / lockless staging folder, two writers, a killed writer, the script refusing over a damaged
+  history, a delete beside a scratch output with the repository's `dist_symbols` listed before and after).
   **`--override-licences`** (2026-11-16, owner: "a checkbox to override the licences when building the release config";
   the window's "Override the licences for this build" under "Every licence known", MCP `build_dist {overrideLicences:
   true}`): ONE build ships what a profile's `strictLicences` refuses -- the cook makes each such asset a warning
@@ -841,7 +890,12 @@ distribution: packages, our file system over packages and direct paths, encrypti
   only when the person asked. A check message that names a level's object -- the cook says `(named by <level>, object
   '<name>')` for a path an object of a level's objects / pointLights / spotLights names -- is a button: a click selects it
   in the open level (`BuildDistributionPanel::ObjectOfMessage`, the hook `selectObject`; another level is named, not
-  opened). `BuildJob::Status(maxEvents)` copies only the newest events asked for (the window 200, MCP 12).
+  opened). `BuildJob::Status(maxEvents)` copies only the newest events asked for (the window 200, MCP 12). The window
+  reads its profile and the history field by field through `jsonfield::Get` (below, "A Field of Another Type"), never
+  `value()`: the script writes `"zip": null` for a build without an archive (the test profile), History > Delete walks
+  the LATER builds for who replaced a folder or a zip, and `value("zip", std::string())` on that null threw out of the
+  frame -- a release build, then a test build, then Delete of the first took the editor down
+  (`BuildDistributionPanel::LaterOwnerOf`, gate `TestJsonFieldsAreReadWithoutThrowing`).
 - **The check mode's gate**: `python tools/dist/check_gate.py` (its first arm brings x64/Cook up to date): the test
   profile's walk passes; three
   control arms FAIL and must say why -- a missing include (`missing file ... (named by profile include)`), a level whose
@@ -1130,6 +1184,27 @@ the same rule applies and nothing enforces it for you:
 
 Learned the hard way on 2026-09-15: a probe server was left running after the checks were
 done, holding 35.4 GB of working set until it was noticed.
+
+**The watchdog HOLDS its server** (2026-11-24, the code review 10.15): one handle, opened when the watch starts
+(`LlmReaper.cpp WatchedProcess`) -- "alive" is a wait on it, and the kill goes to it. It used to open "pid N" anew every
+second and again before every kill: once the last editor has closed nothing holds that number, so a server that died by
+itself could be replaced under it by any process (during a build, within the second), which then did not answer
+`/metrics` and was terminated as "the server". **And the project links again**: `Log.cpp`'s writer thread tags its
+memory (M3) and `tools/model_reaper.vcxproj` does not compile the tracker, so it had not linked since -- nobody rebuilt
+it, the editor went on starting the exe an older build had left, and the first rebuild failed with two unresolved
+externals and took that exe away. `model_reaper_main.cpp` gives `mem::PushTag` / `PopTag` empty bodies. Probe:
+scratchpad-style `reaper_probe.py` -- stand-in servers, never a real one: one dies (the watch ends within seconds and
+ends nothing), one stops answering (the HELD process is terminated), one gone before the watch began beside a bystander
+(the bystander lives).
+
+**The model's replies and paths are not trusted** (same day). A request's worker is a detached thread with nothing above
+it to catch: its body runs under `RunRequestWorker` (an exception = a failed request with a line in the log, not
+`std::terminate`), and llama-server's reply is read by `llmreply::Read` -- `content` must be a STRING (a `contains()`
+was the whole check before `get<std::string>()`), the timings are read by type. The warmup's worker holds the prompt
+counter by `shared_ptr`, not this object's address: its answer lands up to twenty seconds later, by which time the editor
+may be gone. `TOOL: read` / `ls` paths are proven inside the repository by COMPONENTS (`EditorRepoSearch.cpp InsideRepo`,
+`lexically_relative`): compared as text, `../test_cube_backups` and every worktree `test_cube_<name>` passed. Gates:
+`intent_regression` `TestModelRepliesOfAnyShape`, `TestAToolPathCannotLeaveTheRepository`.
 
 **Talking to the model directly.** `intent_regression --dump <level> <gbnf> <prompt>` writes
 the exact grammar and system prompt the editor would send, so a conversation exercises the

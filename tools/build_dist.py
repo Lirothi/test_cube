@@ -31,7 +31,8 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
     --skip-build            take the exes as they are: check/content do not bring x64/Cook up to date (an incremental
                             MSBuild, 0.5 s when nothing changed), full builds neither Cook nor the game's exe
     --key=<key.json>        the package key (default %USERPROFILE%\.test_cube\pak_key.json; made there if missing)
-    --out=<folder>          instead of the profile's "out" (dist)
+    --out=<folder>          instead of the profile's "out" (dist); its symbols are kept beside it
+                            (<folder>/../dist_symbols), never in the repository's when the folder is elsewhere
     --progress=json         one JSON object a line on stdout: {"stage", "fraction", "message", "level", ...}
     --keep-temp             leave the staging folder (debugging)
 
@@ -283,14 +284,95 @@ def history_path(out_dir):
     return out_dir / "build_history.json"
 
 
-def load_history(out_dir):
+def load_history(out_dir, strict=True):
+    """The builds of this output folder, oldest first; [] when there is no file yet. A file that is there and is not a
+    list of builds is DAMAGED, not empty: read as [] (as it was until 2026-11-18) the next build was numbered 1, laid its
+    symbols over the real first build's (dist_symbols/<version>+1) and replaced the file, the published marks with it.
+    `strict` False (a check: it writes nothing of it) returns None for a damaged file instead of refusing."""
     path = history_path(out_dir)
-    if path.exists():
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
+    if not path.exists():
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+        if not text.strip():
             return []
-    return []
+        history = json.loads(text)
+        if isinstance(history, list) and all(isinstance(h, dict) for h in history):
+            return history
+        why = "not a list of builds"
+    except (ValueError, OSError) as e:
+        why = str(e)
+    if strict:
+        raise BuildError(f"{path} is damaged ({why}): repair it or move it away -- it holds the build numbers and what "
+                         f"was published. Nothing was built or changed")
+    return None
+
+
+def symbols_root(out_dir):
+    """Where the builds of an output folder keep their symbols: dist_symbols/ BESIDE it -- for the profiles' own
+    <repo>/dist that is <repo>/dist_symbols, as it always was. It used to be <repo>/dist_symbols whatever --out said, so
+    a run against another output folder read and DELETED the repository's symbols: on 2026-11-24 a probe of
+    --delete-build with --out in a temp folder took the real dist_symbols/0.1.0+1 with it."""
+    return out_dir.parent / "dist_symbols"
+
+
+# ---- who is working beside this run ----
+# An open file is a process's claim. Windows refuses to delete a file somebody holds open (Python opens without
+# FILE_SHARE_DELETE) and lets it go the moment that process is gone, killed included -- no pid to be reused, nothing to
+# clean after a crash. Until 2026-11-18 every run began by deleting <out>/../.dist_tmp whole, the check the Build
+# Distribution window starts when it opens included: a build from the console lost its staging to it.
+
+WORK_LOCK = "owner.lock"    # in a run's own folder under .dist_tmp: the run is alive
+WRITER_LOCK = "writer.lock"  # in .dist_tmp: somebody is writing the output folder (its history, folders, zips)
+
+
+def held_by_a_live_process(path):
+    try:
+        path.unlink()
+        return False  # nobody held it (it is gone now: a stale claim)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def clear_stale_work(tmp_root, progress):
+    """The staging folders of runs that are gone (killed, cancelled: nothing of them is a distribution); a live run's
+    folder is left alone."""
+    for entry in tmp_root.iterdir():
+        if not entry.is_dir():
+            continue
+        if held_by_a_live_process(entry / WORK_LOCK):
+            progress.emit(f"another build is at work in {entry}: left alone")
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+
+
+def acquire_writer(out_dir):
+    """One writer of an output folder at a time: two would give their builds the same number and the later save would
+    drop the earlier's entry. Returns what release_writer takes."""
+    tmp_root = out_dir.parent / ".dist_tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    path = tmp_root / WRITER_LOCK
+    busy = BuildError(f"another build is writing {out_dir} (its lock: {path}): wait for it or cancel it")
+    if held_by_a_live_process(path):
+        raise busy
+    try:
+        return os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY), path
+    except FileExistsError:
+        raise busy
+
+
+def release_writer(writer):
+    if writer is None:
+        return
+    fd, path = writer
+    os.close(fd)
+    try:
+        path.unlink()
+        path.parent.rmdir()  # .dist_tmp, when nothing else is in it
+    except OSError:
+        pass
 
 
 def version_key(version):
@@ -318,24 +400,28 @@ def mark_published(args, progress):
     out_dir = pathlib.Path(args.out) if args.out else ROOT / load_profile(args.profile).get("out", "dist")
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
-    history = load_history(out_dir)
     try:
         builds = [int(b) for b in spec.split(",") if b.strip()]
     except ValueError:
         raise BuildError(f"build numbers, comma-separated: {spec!r}")
-    for number in builds:
-        entry = next((h for h in history if h.get("build") == number and h.get("result") == "built"), None)
-        if entry is None:
-            raise BuildError(f"no built build {number} in {history_path(out_dir)}")
-        if on:
-            entry["published"] = True
-            entry["publishedDate"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-        else:
-            entry.pop("published", None)
-            entry.pop("publishedDate", None)
-        progress.emit(f"build {number} ({entry.get('versionString', entry.get('version'))}, {entry.get('profile')}): "
-                      f"{'published' if on else 'not published'}")
-    save_history(out_dir, history)
+    writer = acquire_writer(out_dir)
+    try:
+        history = load_history(out_dir)
+        for number in builds:
+            entry = next((h for h in history if h.get("build") == number and h.get("result") == "built"), None)
+            if entry is None:
+                raise BuildError(f"no built build {number} in {history_path(out_dir)}")
+            if on:
+                entry["published"] = True
+                entry["publishedDate"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            else:
+                entry.pop("published", None)
+                entry.pop("publishedDate", None)
+            progress.emit(f"build {number} ({entry.get('versionString', entry.get('version'))}, {entry.get('profile')}): "
+                          f"{'published' if on else 'not published'}")
+        save_history(out_dir, history)
+    finally:
+        release_writer(writer)
     progress.emit("done", event="done")
     return 0
 
@@ -345,8 +431,16 @@ def delete_builds(args, progress):
     out_dir = pathlib.Path(args.out) if args.out else ROOT / load_profile(args.profile).get("out", "dist")
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
+    writer = acquire_writer(out_dir)
+    try:
+        return delete_builds_locked(args, progress, out_dir)
+    finally:
+        release_writer(writer)
+
+
+def delete_builds_locked(args, progress, out_dir):
     out_root = out_dir.resolve()
-    symbols_root = (ROOT / "dist_symbols").resolve()
+    symbols_dir = symbols_root(out_dir).resolve()  # beside THIS output folder, never the repository's by default
     history = load_history(out_dir)
     try:
         numbers = [int(b) for b in args.delete_build.split(",") if b.strip()]
@@ -354,9 +448,10 @@ def delete_builds(args, progress):
         raise BuildError(f"build numbers, comma-separated: {args.delete_build!r}")
 
     def inside(path, parent):
+        # Strictly inside: the root itself is not a build's file (an entry whose folder is the output folder, or whose
+        # versionString starts with a space -- its symbols would be dist_symbols/ whole -- deletes nothing).
         try:
-            path.resolve().relative_to(parent)
-            return True
+            return path.resolve().relative_to(parent) != pathlib.Path(".")
         except ValueError:
             return False
 
@@ -411,8 +506,8 @@ def delete_builds(args, progress):
                 targets.append(path)
         version_text = entry.get("versionString", "")
         if version_text:
-            symbols = symbols_root / (version_text.split(" ")[0] + ("" if entry.get("flavour", "shipping") == "shipping" else "-dev"))
-            if symbols.exists() and inside(symbols, symbols_root):
+            symbols = symbols_dir / (version_text.split(" ")[0] + ("" if entry.get("flavour", "shipping") == "shipping" else "-dev"))
+            if symbols.exists() and inside(symbols, symbols_dir):
                 targets.append(symbols)
         for path in targets:
             try:
@@ -659,11 +754,13 @@ def build(args, progress):
             progress.emit("--override-licences: the profile does not require every licence -- nothing to override")
     # The staging beside the output (the same volume: the folder is renamed into place whole). A killed build left one:
     # nothing of it is a distribution.
+    # A build that writes the output folder is the only one that does (a check or a record beside it is fine).
+    writer = acquire_writer(out_dir) if args.mode in ("content", "full") else None
     tmp_root = out_dir.parent / ".dist_tmp"
-    if tmp_root.exists():
-        shutil.rmtree(tmp_root, ignore_errors=True)
-    tmp_root.mkdir(parents=True)
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    clear_stale_work(tmp_root, progress)  # only the folders of runs that are gone: a live run keeps its staging
     work = pathlib.Path(tempfile.mkdtemp(prefix="build_", dir=tmp_root))
+    work_lock = open(work / WORK_LOCK, "w")  # held open to the end: this run is alive (clear_stale_work)
     logs = work / "logs"
     logs.mkdir()
     cook_exe = ROOT / "x64" / "Cook" / EXE_NAME
@@ -695,7 +792,11 @@ def build(args, progress):
         if dirty:
             progress.emit(f"uncommitted changes ({len(changed)}: {', '.join(changed[:5])}{'...' if len(changed) > 5 else ''})"
                           f" -- the version says -dirty", level="warning")
-        history = load_history(out_dir)
+        history = load_history(out_dir, strict=args.mode in ("content", "full"))
+        if history is None:  # a check writes nothing of it: say so and go on
+            progress.emit(f"{history_path(out_dir)} is damaged: a content or full build is refused until it is repaired "
+                          f"or moved away", level="warning")
+            history = []
         build_number = 1 + max([h.get("build", 0) for h in history] + [0])
         if profile.get("versionMustGrow") and args.mode in ("content", "full"):
             # Above every PUBLISHED build of the profile; each flavour its own (a Development build of 1.2.0 does not use
@@ -894,7 +995,7 @@ def build(args, progress):
         symbols = None
         if profile.get("symbols", False):
             progress.begin("symbols", "the PDB and the cook report into dist_symbols/")
-            symbols = ROOT / "dist_symbols" / (version_text.split(" ")[0] + ("" if flavour == "shipping" else "-dev"))
+            symbols = symbols_root(out_dir) / (version_text.split(" ")[0] + ("" if flavour == "shipping" else "-dev"))
             symbols.mkdir(parents=True, exist_ok=True)
             for name in (EXE_NAME, "test_cube.pdb"):
                 if (ship_dir / name).exists():
@@ -925,8 +1026,11 @@ def build(args, progress):
                       version=version_text, warnings=len(report.get("warnings", [])))
         return 0
     finally:
+        work_lock.close()
         if not args.keep_temp:
             shutil.rmtree(work, ignore_errors=True)
+        release_writer(writer)
+        if not args.keep_temp:
             try:
                 tmp_root.rmdir()
             except OSError:

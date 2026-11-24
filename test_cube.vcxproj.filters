@@ -1349,6 +1349,9 @@
     <ClInclude Include="sources/core/Helpers.h">
       <Filter>sources\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/JsonField.h">
+      <Filter>sources\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/StringMatch.h">
       <Filter>sources\core</Filter>
     </ClInclude>

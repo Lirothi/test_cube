@@ -10,6 +10,28 @@
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/LlmClient.h"
 
+// llama-server's /completion reply, read WITHOUT trusting its shape. The server is another
+// program -- and "the server" is whatever answered 200 on /health at the endpoint -- while the
+// readers run on detached threads, where an exception out of the JSON library has nothing
+// above it: std::terminate, the editor gone with the level in it. `content` was read with
+// get<std::string>() after a contains() and the timings with value(), both of which throw on
+// a field of another type (docs/architecture_review_plan.md 10.15). Gate: intent_regression
+// TestModelRepliesOfAnyShape.
+namespace llmreply
+{
+    struct Completion
+    {
+        std::string content;
+        int promptTokens = 0;        // timings.prompt_n, else tokens_evaluated; 0 = not said
+        float tokensPerSecond = 0.0f; // timings.predicted_per_second; 0 = not said
+        bool truncated = false;      // the answer stopped at the token limit
+    };
+    // False: the body is not a JSON object that holds a string `content`. Never throws.
+    bool Read(const std::string& body, Completion& out);
+    // The same numbers when only they are wanted (the warmup); 0 for any other body.
+    int PromptTokens(const std::string& body);
+}
+
 // Settings, persisted in editor_state.json under levelEditor.intentModel. The model is a
 // PARAMETER, not an architectural decision (docs/editor_llm_plan.md): swapping it is a
 // path change, not a rebuild, and neither the model nor the runtime lives in the repo.
@@ -183,7 +205,7 @@ public:
     // system prompt, the grammar and the remembered session together. It is the CONTEXT
     // OCCUPANCY, and it is a maximum rather than a last-value because prompt caching makes
     // a warm request report only what it recomputed -- see where it is stored.
-    int PromptTokens() const { return lastPromptTokens_.load(std::memory_order_relaxed); }
+    int PromptTokens() const { return lastPromptTokens_->load(std::memory_order_relaxed); }
     int ContextTokens() const { return settings_.contextTokens; }
     void SetSettings(LlmIntentSettings settings);
 
@@ -351,7 +373,11 @@ private:
     // healthy is what the model took.
     std::uint64_t vramBeforeServerBytes_ = 0;
     std::uint64_t modelVramBytes_ = 0;
-    std::atomic<int> lastPromptTokens_{ 0 };
+    // SHARED, because the warmup's detached thread writes it when the server answers -- up to
+    // twenty seconds later, by which time the editor may have closed and taken this object
+    // with it. It was a plain member captured by address: the one thing a worker reached that
+    // was not passed by value or held by a shared_ptr.
+    std::shared_ptr<std::atomic<int>> lastPromptTokens_ = std::make_shared<std::atomic<int>>(0);
     // One outstanding /health request, answered on a detached thread. Shared rather than
     // owned so the thread can outlive a settings change without writing into freed memory.
     struct HealthProbe

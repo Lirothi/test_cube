@@ -8,8 +8,20 @@
 #include <windows.h>
 
 #include "core/logging/Log.h"
+#include "core/memory/MemScope.h"
 #include "editor/intent/LlmReaper.h"
 #include "model_reaper_tray.h"
+
+// The watchdog links the engine's logger and NOT its memory profiler (core/memory/MemNew.cpp replaces operator new
+// and brings the tracker with it). The logger's writer thread tags what it allocates (MEM_SCOPE, memory profiling M3)
+// -- and since that line went in, this project had not linked: nobody rebuilt it, the editor went on starting the exe
+// an older build had left, and the first rebuild (2026-11-24) failed with two unresolved externals and took that exe
+// away. Nothing here counts memory by tag, so the two calls do nothing.
+namespace mem
+{
+void PushTag(MemTag) noexcept {}
+void PopTag() noexcept {}
+} // namespace mem
 
 int WINAPI wWinMain(
     _In_ HINSTANCE,

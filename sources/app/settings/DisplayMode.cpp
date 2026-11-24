@@ -8,6 +8,7 @@
 #include <mutex>
 
 #include "app/settings/UserSettings.h"
+#include "core/JsonField.h" // the player's file: "mode": 1 threw before the window was made, at every start
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
@@ -195,7 +196,7 @@ DisplaySettings Load()
     DisplaySettings s;
     const json d = json::parse(settings::ReadUserSection("display"), nullptr, false);
     if (!d.is_object()) { return s; }
-    const std::string mode = d.value("mode", std::string());
+    const std::string mode = jsonfield::Get(d, "mode", std::string());
     if (mode == "borderless" || mode == "windowed")
     {
         s.mode = mode == "borderless" ? WindowMode::Borderless : WindowMode::Windowed;

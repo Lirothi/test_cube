@@ -2,6 +2,7 @@
 
 #if WITH_EDITOR
 
+#include "core/JsonField.h" // an event line is another program's output, read on a thread of its own: never value()
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
@@ -101,12 +102,12 @@ struct BuildJob::State
         const nlohmann::json json = nlohmann::json::parse(line, nullptr, false);
         if (json.is_object())
         {
-            event.stage = json.value("stage", std::string());
-            event.message = json.value("message", std::string());
-            event.level = json.value("level", std::string("info"));
-            event.event = json.value("event", std::string());
-            event.fraction = json.value("fraction", 0.0);
-            event.seconds = json.value("seconds", 0.0);
+            event.stage = jsonfield::Get(json, "stage", std::string());
+            event.message = jsonfield::Get(json, "message", std::string());
+            event.level = jsonfield::Get(json, "level", std::string("info"));
+            event.event = jsonfield::Get(json, "event", std::string());
+            event.fraction = jsonfield::Get(json, "fraction", 0.0);
+            event.seconds = jsonfield::Get(json, "seconds", 0.0);
         }
         else
         {

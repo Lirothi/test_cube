@@ -55,6 +55,8 @@
 #include "editor/dist/DistBuildJob.h"
 #include "editor/ui/BuildDistributionPanel.h"
 #include "editor/intent/LlmIntentSource.h"
+#include "core/JsonField.h"                     // TestJsonFieldsAreReadWithoutThrowing
+#include "materials/MaterialDataManager.h"      // TestAMaterialOfTheWrongTypeIsAnErrorNotACrash
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
@@ -3179,6 +3181,176 @@ void TestModelAnswersAreRead()
         "an answer with no kind is refused");
 }
 
+// ----------------------------------------------------------------- files and replies of any shape
+//
+// The code review of 2026-11-18 (docs/architecture_review_plan.md 10.13-10.17): nlohmann's value() returns its
+// fallback only when the key is ABSENT. A key that is there with another type throws -- out of a frame or a detached
+// thread that is std::terminate, the editor gone with the level in it. Each test below is one place where that was so.
+
+void TestJsonFieldsAreReadWithoutThrowing()
+{
+    const Json h = Json::parse(R"({"build": 4, "zip": null, "version": 1.5, "published": 1, "levels": "a.json",
+                                   "names": ["a", 7, "b"], "bytes": 123, "result": "built"})");
+
+    // The trap itself, so that nobody "simplifies" the readers back: the library throws on each of these.
+    const auto throws = [](const auto& read)
+    {
+        try { read(); }
+        catch (const Json::exception&) { return true; }
+        return false;
+    };
+    Check(throws([&] { (void)h.value("zip", std::string()); }), "nlohmann's value() throws on a null where a string is read");
+    Check(throws([&] { (void)h.value("version", std::string()); }), "... and on a number where a string is read");
+    Check(throws([&] { (void)h.value("levels", std::vector<std::string>{}); }), "... and on a string where a list is read");
+
+    Check(jsonfield::Get(h, "zip", std::string("none")) == "none", "a null reads as the fallback");
+    Check(jsonfield::Get(h, "version", std::string("0.0.0")) == "0.0.0", "a number where a string is read: the fallback");
+    Check(jsonfield::Get(h, "published", false) == false, "a number where a flag is read: the fallback");
+    Check(jsonfield::Get(h, "result", 0) == 0, "a string where a number is read: the fallback");
+    Check(jsonfield::Get(h, "version", 0) == 0, "1.5 is not an integer");
+    Check(Near(jsonfield::Get(h, "version", 0.0f), 1.5f) && Near(jsonfield::Get(h, "build", 0.0f), 4.0f),
+          "a float reads any number");
+    Check(jsonfield::Get(h, "build", 0) == 4 && jsonfield::Get(h, "bytes", 0ull) == 123ull, "an integer is read");
+    Check(jsonfield::Get(h, "result", "?") == "built" && jsonfield::Get(h, "absent", "?") == "?",
+          "a string is read; a literal fallback reads a string");
+    Check(jsonfield::Get(h, "levels", std::vector<std::string>{ "x" }) == std::vector<std::string>{ "x" },
+          "a string where a list is read: the fallback");
+    Check(jsonfield::Get(h, "names", std::vector<std::string>{}) == (std::vector<std::string>{ "a", "b" }),
+          "a list keeps its strings and leaves the rest out");
+    Check(jsonfield::Get(h, "zip", Json(1)).is_null() && jsonfield::Get(h, "absent", Json(1)) == Json(1),
+          "the field as it is, whatever it holds");
+    Check(jsonfield::Get(Json(5), "build", 9) == 9 && jsonfield::Get(Json::array(), "x", std::string("f")) == "f",
+          "what is not an object has no fields");
+
+    // The Build Distribution window's History > Delete. tools/build_dist.py writes "zip": null for a build without an
+    // archive (the test profile), and the walk over the LATER builds read every entry's zip as a string: a release
+    // build, then a test build, then Delete of the first -- the editor went down.
+    const Json history = Json::parse(R"([
+        {"build": 1, "result": "built", "folder": "d/a-0.1.0", "zip": "d/a-0.1.0.zip"},
+        {"build": 2, "result": "built", "folder": "d/b-0.1.0", "zip": null},
+        7,
+        {"build": 3, "result": "failed", "folder": "d/a-0.1.0", "zip": "d/a-0.1.0.zip"},
+        {"build": 4, "result": "built", "folder": "d/a-0.1.0", "zip": 12}
+    ])");
+    Check(!throws([&] { (void)BuildDistributionPanel::LaterOwnerOf(history, 1, "zip", "d/a-0.1.0.zip"); }),
+          "a later build without an archive does not throw out of the delete confirmation");
+    Check(BuildDistributionPanel::LaterOwnerOf(history, 1, "zip", "d/a-0.1.0.zip") == 0,
+          "nobody replaced build 1's archive: a null, a failed build and a number are not owners");
+    Check(BuildDistributionPanel::LaterOwnerOf(history, 1, "folder", "d/a-0.1.0") == 4,
+          "build 4 replaced build 1's folder");
+    Check(BuildDistributionPanel::LaterOwnerOf(history, 4, "folder", "d/a-0.1.0") == 0, "nothing is later than the last");
+    Check(BuildDistributionPanel::LaterOwnerOf(Json::object(), 1, "zip", "x") == 0 &&
+              BuildDistributionPanel::LaterOwnerOf(history, 1, "zip", "") == 0,
+          "a history that is no list, or no path at all, has no owner");
+}
+
+void TestModelRepliesOfAnyShape()
+{
+    llmreply::Completion reply;
+    Check(llmreply::Read(
+              R"({"content":"hi","timings":{"prompt_n":120,"predicted_per_second":31.5},"stop_type":"limit"})", reply),
+          "a reply as llama-server sends it is read");
+    Check(reply.content == "hi" && reply.promptTokens == 120 && Near(reply.tokensPerSecond, 31.5f) && reply.truncated,
+          "its content, its prompt size, its rate and its verdict");
+
+    Check(llmreply::Read(R"({"content":"x","tokens_evaluated":77,"timings":"soon"})", reply) && reply.promptTokens == 77 &&
+              reply.tokensPerSecond == 0.0f && !reply.truncated,
+          "timings that are no object are skipped; the older spelling of the prompt size is read");
+    Check(llmreply::Read(R"({"content":"","timings":{"prompt_n":"many","predicted_per_second":null}})", reply) &&
+              reply.promptTokens == 0 && reply.tokensPerSecond == 0.0f,
+          "numbers of another type read as not said");
+
+    // Each of these threw on the worker's thread: contains("content") was the whole check before get<std::string>().
+    for (const char* body : { R"({"content":5})", R"({"content":null})", R"({"content":["a","b"]})", R"({"answer":"x"})",
+                              R"(["content"])", R"("content")", "42", "", "<html>502 Bad Gateway</html>" })
+    {
+        Check(!llmreply::Read(body, reply), std::string("a reply of another shape is refused, not thrown at: ") + body);
+    }
+    Check(llmreply::PromptTokens(R"({"timings":{"prompt_n":9}})") == 9 && llmreply::PromptTokens("[1,2]") == 0 &&
+              llmreply::PromptTokens("not json") == 0 && llmreply::PromptTokens(R"({"timings":[1]})") == 0,
+          "the warmup's reader: the number, or nothing");
+}
+
+void TestAToolPathCannotLeaveTheRepository()
+{
+    // The check compared TEXT -- "does the path begin with the repository's" -- and a folder beside the repository
+    // whose name begins with the repository's own passed: test_cube_backups, every worktree test_cube_<name>. The
+    // sibling below need not exist: refused is "not a path inside this repository"; let through, it read "no such file".
+    const std::string name = std::filesystem::current_path().filename().string();
+    const std::string outside[] = {
+        "../" + name + "_backups/notes.txt",
+        "../" + name + "_/x",
+        "sources/../../" + name + "x/y.cpp",
+        "..",
+        "../",
+        "C:/Windows/win.ini",
+    };
+    for (const std::string& path : outside)
+    {
+        std::string report;
+        Check(reposearch::RunRequestedTools("TOOL: read " + path + " 1 5", {}, report), "a read line runs: " + path);
+        Check(report.find("is not a path inside this repository") != std::string::npos,
+              "a read outside the repository is refused: " + path + " -- " + report.substr(0, 160));
+        std::string listed;
+        Check(reposearch::RunRequestedTools("TOOL: ls " + path, {}, listed), "an ls line runs: " + path);
+        Check(listed.find("is not a path inside this repository") != std::string::npos,
+              "an ls outside the repository is refused: " + path + " -- " + listed.substr(0, 160));
+    }
+    // And what is inside still is, however it is spelled.
+    for (const char* path : { "tools/intent_regression.vcxproj", "sources/../tools/intent_regression.vcxproj",
+                              "./tools/intent_regression.vcxproj" })
+    {
+        std::string report;
+        Check(reposearch::RunRequestedTools(std::string("TOOL: read ") + path + " 1 3", {}, report),
+              "a read inside runs");
+        Check(report.find("is not a path inside") == std::string::npos && report.find("lines 1-3 of ") != std::string::npos,
+              std::string("a path inside the repository is read: ") + path + " -- " + report.substr(0, 160));
+    }
+}
+
+void TestAMaterialOfTheWrongTypeIsAnErrorNotACrash()
+{
+    // The startup scan reads every file of data/materials; "alphaCutoff": "0.5" in any one of them threw with nothing to
+    // catch it. A temp folder of three: the two bad ones are named in the log and left out, the good one loads.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_materials_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const auto write = [&dir](const char* file, const char* text)
+    {
+        std::ofstream out(dir / file, std::ios::binary | std::ios::trunc);
+        out << text;
+    };
+    write("probe_good.json", R"({"albedo": "a.dds", "alphaTest": true, "alphaCutoff": 0.3, "tint": [1, 0.5, 0.25, 1]})");
+    write("probe_cutoff.json", R"({"albedo": "a.dds", "alphaCutoff": "0.5"})");
+    write("probe_tint.json", R"({"albedo": "a.dds", "tint": [1, "x", 0, 1]})");
+
+    bool threw = false;
+    try
+    {
+        MaterialDataManager one;
+        Check(!one.LoadPresetFromFile((dir / "probe_cutoff.json").wstring(), "probe_cutoff") && !one.HasPreset("probe_cutoff"),
+              "a number written as a string: the material is refused");
+        Check(!one.LoadPresetFromFile((dir / "probe_tint.json").wstring(), "probe_tint") && !one.HasPreset("probe_tint"),
+              "a string inside a colour: the material is refused");
+        Check(one.LoadPresetFromFile((dir / "probe_good.json").wstring(), "probe_good"), "a good material loads");
+        const MaterialPreset* good = one.FindPreset("probe_good");
+        Check(good && good->alphaTest && Near(good->alphaCutoff, 0.3f) && good->hasParams, "with its numbers");
+
+        MaterialDataManager scan;
+        Check(scan.LoadPresetsFromDirectory(dir.wstring()), "the scan of a folder with two bad files still loads");
+        Check(scan.HasPreset("probe_good") && !scan.HasPreset("probe_cutoff") && !scan.HasPreset("probe_tint"),
+              "the good one is there, the two bad ones are left out");
+    }
+    catch (const Json::exception&)
+    {
+        threw = true;
+    }
+    fs::remove_all(dir, ec);
+    Check(!threw, "a material's field of the wrong type does not throw out of the loader");
+}
+
 void TestModelSettingsRoundTrip()
 {
     // Off unless somebody turns it on: since Claude Code drives the editor over MCP the local
@@ -5648,6 +5820,10 @@ int main(int argc, char** argv)
 
         TestGeneratedGrammar(document, assets);
         TestModelAnswersAreRead();
+        TestJsonFieldsAreReadWithoutThrowing();
+        TestModelRepliesOfAnyShape();
+        TestAToolPathCannotLeaveTheRepository();
+        TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
         TestOnlyOrganisingActionsMayTakeTheWholeLevel();

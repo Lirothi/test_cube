@@ -57,21 +57,60 @@ namespace
         return counters;
     }
 
-    bool ProcessAlive(unsigned long pid)
+    // THE SERVER, HELD -- not looked up by its number each time it is asked about.
+    //
+    // A process id is free the moment its process is gone and nobody holds a handle to it,
+    // and Windows gives it to the next process started. The watch used to open "pid N" anew
+    // every second and again before every kill. While an editor lives its own handle keeps
+    // the number; once the last editor has closed nothing does -- so a server that died by
+    // itself could be replaced under that number by anything at all (during a build, within
+    // the second), which then did not answer /metrics and was terminated as "the server".
+    //
+    // One handle, opened when the watch starts: the number cannot be reused while it is
+    // open, "alive" is a wait on the process itself, and the kill goes to that process and
+    // no other (docs/architecture_review_plan.md 10.15).
+    class WatchedProcess
     {
-        if (pid == 0)
+    public:
+        explicit WatchedProcess(unsigned long pid)
         {
-            return false;
+            if (pid == 0)
+            {
+                return;
+            }
+            handle_ = ::OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, pid);
+            if (!handle_)
+            {
+                // May be watched and not ended (another user's, a protected one): still worth
+                // knowing when it goes, and Terminate says so when it cannot.
+                handle_ = ::OpenProcess(SYNCHRONIZE, FALSE, pid);
+            }
         }
-        HANDLE handle = ::OpenProcess(SYNCHRONIZE, FALSE, pid);
-        if (!handle)
+        ~WatchedProcess()
         {
-            return false;
+            if (handle_)
+            {
+                ::CloseHandle(handle_);
+            }
         }
-        const DWORD wait = ::WaitForSingleObject(handle, 0);
-        ::CloseHandle(handle);
-        return wait == WAIT_TIMEOUT;
-    }
+        WatchedProcess(const WatchedProcess&) = delete;
+        WatchedProcess& operator=(const WatchedProcess&) = delete;
+
+        // False for a process that has ended -- and for one that was already gone when the
+        // watch began (no handle).
+        bool Alive() const
+        {
+            return handle_ && ::WaitForSingleObject(handle_, 0) == WAIT_TIMEOUT;
+        }
+
+        bool Terminate() const
+        {
+            return handle_ && ::TerminateProcess(handle_, 0) != FALSE;
+        }
+
+    private:
+        HANDLE handle_ = nullptr;
+    };
 
     // Signalled by RequestStop; waited on instead of sleeping between polls. Manual-reset,
     // so a stop asked for before the loop reaches the wait is still there when it does --
@@ -83,18 +122,6 @@ namespace
     }
 
     std::atomic<bool> g_retireOnStop{false};
-
-    bool KillProcessTree(unsigned long pid)
-    {
-        HANDLE handle = ::OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-        if (!handle)
-        {
-            return false;
-        }
-        const BOOL ok = ::TerminateProcess(handle, 0);
-        ::CloseHandle(handle);
-        return ok != FALSE;
-    }
 }
 
 namespace llmreaper
@@ -194,6 +221,20 @@ namespace llmreaper
         unsigned long long quietSince = startedAt;
         unsigned long long nextMetricsAt = startedAt;   // the first poll is immediate
 
+        // Opened once, held to the end of the watch (WatchedProcess says why).
+        const WatchedProcess server(options.serverPid);
+        // The one place the server is ended. A kill that did not happen is said out loud:
+        // the watch is about to walk away believing the memory is free.
+        const auto retireServer = [&]()
+        {
+            if (options.serverPid != 0 && !server.Terminate() && server.Alive())
+            {
+                LOG_ERROR(logging::LogCategory::Editor,
+                    "model reaper: could not stop llama-server pid={} (error {}); it keeps "
+                    "running", options.serverPid, ::GetLastError());
+            }
+        };
+
         Status status;
         status.serverPid = options.serverPid;
         bool published = false;
@@ -224,7 +265,7 @@ namespace llmreaper
             {
                 LOG_INFO(logging::LogCategory::Editor,
                     "model reaper: asked to stop llama-server pid={} now", options.serverPid);
-                KillProcessTree(options.serverPid);
+                retireServer();
                 publish(Status::Phase::Retired, 0);
             }
             else
@@ -246,7 +287,7 @@ namespace llmreaper
             // The server going away on its own -- crash, Task Manager, a second editor
             // retiring it -- ends the watch. A reaper outliving what it watches would be the
             // orphan it exists to prevent.
-            if (options.serverPid != 0 && !ProcessAlive(options.serverPid))
+            if (options.serverPid != 0 && !server.Alive())
             {
                 LOG_INFO(logging::LogCategory::Editor,
                     "model reaper: server is already gone; nothing to retire");
@@ -309,10 +350,11 @@ namespace llmreaper
                 {
                     // It answered before and does not now: treat it as gone rather than as
                     // idle, because killing something unreachable is the one case where being
-                    // wrong costs nothing.
+                    // wrong costs nothing -- as long as it is the process this watch HOLDS, and
+                    // not whoever has its number now (WatchedProcess).
                     LOG_INFO(logging::LogCategory::Editor,
                         "model reaper: server stopped answering; retiring it");
-                    KillProcessTree(options.serverPid);
+                    retireServer();
                     publish(Status::Phase::Retired, 0);
                     return 0;
                 }
@@ -343,7 +385,7 @@ namespace llmreaper
                     LOG_INFO(logging::LogCategory::Editor,
                         "model reaper: no editor and no requests for {}s, stopping "
                         "llama-server pid={}", options.idleSeconds, options.serverPid);
-                    KillProcessTree(options.serverPid);
+                    retireServer();
                     publish(Status::Phase::Retired, 0);
                     return 0;
                 }

@@ -1,5 +1,6 @@
 #include "app/Shipping.h"
 
+#include "core/JsonField.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
 
@@ -148,10 +149,10 @@ bool ReadBootConfig(BootConfig& out, std::string& error)
         error = "config/boot.json is not a JSON object";
         return false;
     }
-    out.product = json.value("product", std::string());
-    out.version = json.value("version", std::string());
-    out.bootLevel = json.value("bootLevel", std::string());
-    out.startMode = json.value("startMode", std::string("play"));
+    out.product = jsonfield::Get(json, "product", std::string());
+    out.version = jsonfield::Get(json, "version", std::string());
+    out.bootLevel = jsonfield::Get(json, "bootLevel", std::string());
+    out.startMode = jsonfield::Get(json, "startMode", std::string("play"));
     return true;
 }
 }

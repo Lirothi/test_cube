@@ -769,6 +769,7 @@
     <ClInclude Include="sources/app/scene/SkyOcclusionMap.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
+    <ClInclude Include="sources/core/JsonField.h" />
     <ClInclude Include="sources/core/StringMatch.h" />
     <ClInclude Include="sources/core/math/Frustum.h" />
     <ClInclude Include="sources/core/math/Math.h" />
