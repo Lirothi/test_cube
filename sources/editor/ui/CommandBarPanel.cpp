@@ -13,6 +13,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/intent/EditorIntentSource.h"
 #include "editor/intent/EditorRepoSearch.h"
+#include "core/task/TaskSystem.h"
 #include "rendering/core/MemoryReport.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/GrammarIntentSource.h"
@@ -820,6 +821,7 @@ void CommandBarPanel::Begin(const EditorActionContext& actionCtx, float buryDept
     assistRounds_ = 0;
     inConversation_ = false;
     conversationTools_ = 0;
+    toolJob_.reset(); // a lookup still running for the last question is dropped; its task finishes on its own
     verdictRetries_ = 0;
     lastPartialSize_ = 0;
     if (phrase_.find_first_not_of(" \t\r\n") == std::string::npos)
@@ -1185,6 +1187,18 @@ void CommandBarPanel::BeginConversationTurn(const EditorActionContext& actionCtx
 
 void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
 {
+    if (toolJob_)
+    {
+        if (!toolJob_->done.load(std::memory_order_acquire))
+        {
+            return; // the lookup is still reading files
+        }
+        const std::string toolReport = std::move(toolJob_->report);
+        toolJob_.reset();
+        FinishToolRound(actionCtx, toolReport.empty() ? std::string("(the lookup failed)") : toolReport,
+                        toolAnswer_);
+        return;
+    }
     if (!inConversation_)
     {
         return;
@@ -1246,57 +1260,25 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
     {
         return editorquery::AnswerChatLine(actionCtx, rest);
     };
-    std::string toolReport;
+    reposearch::PlannedTools planned;
     if (model_->Settings().chatSearch && conversationTools_ < kMaxConversationTools &&
-        reposearch::RunRequestedTools(answer, askScene, toolReport))
+        reposearch::PlanRequestedTools(answer, askScene, planned))
     {
         ++conversationTools_;
-        // THE COMMANDS, not just how much came back. A byte count cannot tell you whether
-        // an answer was grounded: the one time this mattered, the model described four
-        // level files it had never opened, and the log said only "2438 characters back" --
-        // enough to know it looked something up, not enough to know what. The bodies stay
-        // out; they are kilobytes and they are what the answer is made of anyway.
-        for (std::size_t lineStart = 0; lineStart < toolReport.size();)
+        // The files are read on a worker (docs/architecture_review_plan.md M9): a broad grep walks thousands of them,
+        // and it ran here, inside the panel's draw. `scene` was answered by the plan, in this frame. The round goes on
+        // in FinishToolRound once the job lands (PollConversation). The job never throws and always lands.
+        toolAnswer_ = answer;
+        auto job = std::make_shared<ToolJob>();
+        toolJob_ = job;
+        waiting_ = true;
+        waitingSinceSec_ = ImGui::GetTime();
+        TaskSystem::Get().SubmitDetach([job, planned = std::move(planned)]() mutable
         {
-            const std::size_t eol = toolReport.find('\n', lineStart);
-            if (toolReport.compare(lineStart, 2, "$ ") == 0)
-            {
-                LOG_INFO(logging::LogCategory::Editor, "command bar: chat ran  {}",
-                    toolReport.substr(lineStart + 2,
-                        eol == std::string::npos ? eol : eol - lineStart - 2));
-            }
-            if (eol == std::string::npos)
-            {
-                break;
-            }
-            lineStart = eol + 1;
-        }
-        LOG_INFO(logging::LogCategory::Editor,
-            "command bar: chat searched (round {}/{}), {} characters back",
-            conversationTools_, kMaxConversationTools, toolReport.size());
-        // Through RememberTurn like everything else, so a search round is compacted and
-        // persisted on the same rules. It matters most here: `sendPhrase_` on a later round
-        // IS the tool output, kilobytes of it, and a push straight into the vector would put
-        // that on disk and keep it there past the point where anything still needed it.
-        RememberTurn(sendPhrase_, answer, std::string{});
-        // HOW MANY LOOKUPS ARE LEFT, said every round. A budget the model cannot see is a
-        // budget it walks into: on the last round it asked for two more greps, they were
-        // never run, and those `TOOL:` lines became the visible answer -- the person got a
-        // request for a shell command instead of a reply. Told the count, it spends the
-        // last one on the answer instead.
-        const int left = kMaxConversationTools - conversationTools_;
-        sendPhrase_ = "Tool output:\n\n```\n" + toolReport + "\n```\n\n";
-        sendPhrase_ += left > 0
-            ? "Now answer using what it says. You may look up " + std::to_string(left) +
-                  " more time" + (left == 1 ? "" : "s") + " for this question if you must."
-            : "THAT WAS THE LAST LOOKUP for this question -- no further TOOL: line will be "
-              "run. Answer now with what you have, and say plainly what you could not "
-              "check rather than guessing at it.";
-        RecordOutcome("looked it up -- " + std::to_string(toolReport.size()) +
-            " characters back", Exchange::Kind::Asked);
-        transcript_.push_back({ phrase_, "...", Exchange::Kind::Said });
-        transcriptScrollToBottom_ = true;
-        BeginConversationTurn(actionCtx);
+            try { job->report = reposearch::RunPlannedTools(std::move(planned)); }
+            catch (...) { job->report.clear(); }
+            job->done.store(true, std::memory_order_release);
+        });
         return;
     }
 
@@ -1401,6 +1383,57 @@ void CommandBarPanel::PollConversation(const EditorActionContext& actionCtx)
     {
         LOG_INFO(logging::LogCategory::Editor, "command bar: offered to run \"{}\"", offer);
     }
+}
+
+void CommandBarPanel::FinishToolRound(const EditorActionContext& actionCtx, const std::string& toolReport,
+                                     const std::string& answer)
+{
+    // THE COMMANDS, not just how much came back. A byte count cannot tell you whether
+    // an answer was grounded: the one time this mattered, the model described four
+    // level files it had never opened, and the log said only "2438 characters back" --
+    // enough to know it looked something up, not enough to know what. The bodies stay
+    // out; they are kilobytes and they are what the answer is made of anyway.
+    for (std::size_t lineStart = 0; lineStart < toolReport.size();)
+    {
+        const std::size_t eol = toolReport.find('\n', lineStart);
+        if (toolReport.compare(lineStart, 2, "$ ") == 0)
+        {
+            LOG_INFO(logging::LogCategory::Editor, "command bar: chat ran  {}",
+                toolReport.substr(lineStart + 2,
+                    eol == std::string::npos ? eol : eol - lineStart - 2));
+        }
+        if (eol == std::string::npos)
+        {
+            break;
+        }
+        lineStart = eol + 1;
+    }
+    LOG_INFO(logging::LogCategory::Editor,
+        "command bar: chat searched (round {}/{}), {} characters back",
+        conversationTools_, kMaxConversationTools, toolReport.size());
+    // Through RememberTurn like everything else, so a search round is compacted and
+    // persisted on the same rules. It matters most here: `sendPhrase_` on a later round
+    // IS the tool output, kilobytes of it, and a push straight into the vector would put
+    // that on disk and keep it there past the point where anything still needed it.
+    RememberTurn(sendPhrase_, answer, std::string{});
+    // HOW MANY LOOKUPS ARE LEFT, said every round. A budget the model cannot see is a
+    // budget it walks into: on the last round it asked for two more greps, they were
+    // never run, and those `TOOL:` lines became the visible answer -- the person got a
+    // request for a shell command instead of a reply. Told the count, it spends the
+    // last one on the answer instead.
+    const int left = kMaxConversationTools - conversationTools_;
+    sendPhrase_ = "Tool output:\n\n```\n" + toolReport + "\n```\n\n";
+    sendPhrase_ += left > 0
+        ? "Now answer using what it says. You may look up " + std::to_string(left) +
+              " more time" + (left == 1 ? "" : "s") + " for this question if you must."
+        : "THAT WAS THE LAST LOOKUP for this question -- no further TOOL: line will be "
+          "run. Answer now with what you have, and say plainly what you could not "
+          "check rather than guessing at it.";
+    RecordOutcome("looked it up -- " + std::to_string(toolReport.size()) +
+        " characters back", Exchange::Kind::Asked);
+    transcript_.push_back({ phrase_, "...", Exchange::Kind::Said });
+    transcriptScrollToBottom_ = true;
+    BeginConversationTurn(actionCtx);
 }
 
 void CommandBarPanel::BeginHeadless(const EditorActionContext& actionCtx,

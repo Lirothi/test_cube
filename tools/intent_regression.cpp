@@ -3274,6 +3274,52 @@ void TestModelRepliesOfAnyShape()
           "the warmup's reader: the number, or nothing");
 }
 
+void TestTheModelReadsOnlyTheSearchRootsAndACostlyPatternIsAnAnswer()
+{
+    // `read` and `ls` reached the whole repository -- .git, the person's settings -- while grep walks five roots; and
+    // regex_search's own throw on a pattern that backtracks without end (MSVC: error_complexity / error_stack) left the
+    // editor's frame (docs/architecture_review_plan.md M9).
+    std::string gitRead, rootList, goodRead;
+    reposearch::RunRequestedTools("TOOL: read .git/config 1 3", {}, gitRead);
+    reposearch::RunRequestedTools("TOOL: ls .", {}, rootList);
+    reposearch::RunRequestedTools("TOOL: read tools/intent_regression.vcxproj 1 2", {}, goodRead);
+    const bool gitRefused = gitRead.find("is not under") != std::string::npos && gitRead.find("lines 1-") == std::string::npos;
+    const bool rootsOnly = rootList.find("sources/") != std::string::npos && rootList.find(".git") == std::string::npos;
+    std::string report;
+
+    // A docs/ folder of its own in a temp directory made the current one for the grep (it walks the roots from there).
+    namespace fs = std::filesystem;
+    const fs::path repo = fs::current_path();
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_regex_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "docs", ec);
+    {
+        std::ofstream out(dir / "docs" / "long.md", std::ios::binary | std::ios::trunc);
+        out << std::string(30000, 'a') << "!\n";
+    }
+    std::string threw;
+    report.clear();
+    bool ran = false;
+    fs::current_path(dir, ec);
+    try
+    {
+        ran = reposearch::RunRequestedTools("TOOL: grep (a+)+$", {}, report);
+    }
+    catch (const std::exception& e)
+    {
+        threw = e.what();
+    }
+    fs::current_path(repo, ec);
+    fs::remove_all(dir, ec);
+    const bool costlyAnswered = threw.empty() && ran && report.find("too costly") != std::string::npos;
+    Check(gitRefused && rootsOnly && costlyAnswered,
+          "the model reads the search roots alone, and a costly pattern is an answer: read .git/config -> " +
+          gitRead.substr(0, 120) + " || ls . -> " + rootList.substr(0, 80) + " || grep (a+)+$ over 30000 characters -> " +
+          (threw.empty() ? report.substr(0, 160) : "threw " + threw));
+    Check(goodRead.find("lines 1-2 of ") != std::string::npos, "a file under a root still reads: " + goodRead.substr(0, 160));
+}
+
 void TestAToolPathCannotLeaveTheRepository()
 {
     // The check compared TEXT -- "does the path begin with the repository's" -- and a folder beside the repository
@@ -6011,6 +6057,7 @@ int main(int argc, char** argv)
         TestJsonFieldsAreReadWithoutThrowing();
         TestModelRepliesOfAnyShape();
         TestAToolPathCannotLeaveTheRepository();
+        TestTheModelReadsOnlyTheSearchRootsAndACostlyPatternIsAnAnswer();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
         TestAMaterialMapNamedInCyrillicKeepsItsName();
         TestAMeshBinThatLiesIsAnErrorNotACrash();

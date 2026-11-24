@@ -5,14 +5,52 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <regex>
 #include <string>
 #include <vector>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
 namespace
 {
+    // std::regex of the v143 toolset (MSVC 14.44) matches by RECURSION, up to 600 frames before it throws error_stack,
+    // and a Debug frame (/RTC1, /JMC) is large enough that 600 of them overflow a 1 MB stack first: (a+)+$ over a
+    // 30000-character line ended the process with 0xC00000FD, a try or not (docs/architecture_review_plan.md M9). The
+    // search runs on a thread of its own with 64 MB of stack RESERVED (committed as it is used); what it throws is
+    // rethrown here.
+    template <class F>
+    void OnLargeStack(F& work)
+    {
+        struct Call
+        {
+            F* work;
+            std::exception_ptr error;
+        };
+        Call call{ &work, nullptr };
+        const auto entry = [](void* p) -> DWORD
+        {
+            Call* c = static_cast<Call*>(p);
+            try { (*c->work)(); }
+            catch (...) { c->error = std::current_exception(); }
+            return 0;
+        };
+        const HANDLE thread = ::CreateThread(nullptr, 64u << 20, entry, &call, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
+        if (!thread)
+        {
+            work(); // no thread to be had: on this one, as before
+            return;
+        }
+        ::WaitForSingleObject(thread, INFINITE);
+        ::CloseHandle(thread);
+        if (call.error) { std::rethrow_exception(call.error); }
+    }
+
     // Where a search may look. Weights, build output, traces and third-party trees are
     // excluded: they are enormous and none of them answers a question about how THIS engine
     // is put together.
@@ -101,6 +139,29 @@ namespace
         }
         outPath = full;
         return true;
+    }
+
+    // Under one of the roots `grep` walks (docs/architecture_review_plan.md M9): `read` and `ls` reached the whole
+    // repository, .git and the person's own settings files included, while the protocol tells the model it can read the
+    // searchable roots. The repository root itself is not under one (`ls` of it lists the roots).
+    bool UnderSearchRoot(const std::filesystem::path& full)
+    {
+        std::error_code ec;
+        const std::filesystem::path root = std::filesystem::weakly_canonical(RepoRoot(), ec);
+        const std::filesystem::path toTarget = full.lexically_relative(root);
+        if (ec || toTarget.empty() || toTarget == ".")
+        {
+            return false;
+        }
+        const std::string first = toTarget.begin()->generic_string();
+        return std::any_of(std::begin(kRoots), std::end(kRoots), [&first](const char* r) { return first == r; });
+    }
+
+    bool IsRepoRoot(const std::filesystem::path& full)
+    {
+        std::error_code ec;
+        const std::filesystem::path toTarget = full.lexically_relative(std::filesystem::weakly_canonical(RepoRoot(), ec));
+        return !ec && toTarget == ".";
     }
 
     // LINE BY LINE, matched with ^...$ anchors on each -- not one multiline regex over the
@@ -252,72 +313,86 @@ namespace
         std::vector<FileHits> perFile;
         std::size_t visited = 0;
 
-        for (const char* rootName : kRoots)
+        // The SEARCH under the same try as the compile (docs/architecture_review_plan.md M9): a pattern like (a+)+$ over a
+        // long line throws regex_error (error_complexity / error_stack) out of regex_search, and nothing above caught it.
+        try
         {
-            std::error_code ec;
-            const std::filesystem::path base = root / rootName;
-            if (!std::filesystem::is_directory(base, ec))
+            auto walk = [&]()
             {
-                continue;
-            }
-            for (std::filesystem::recursive_directory_iterator it(base, ec), end;
-                 it != end && visited < kMaxFilesVisited; it.increment(ec))
-            {
-                if (ec || !it->is_regular_file(ec) || !HasSearchableExtension(it->path()))
+                for (const char* rootName : kRoots)
                 {
-                    continue;
-                }
-                const std::string relative = Relative(it->path(), root);
-                if (!scopes.empty())
-                {
-                    const bool inScope = std::any_of(scopes.begin(), scopes.end(),
-                        [&relative](const std::string& scope)
-                        {
-                            return relative == scope ||
-                                relative.compare(0, scope.size() + 1, scope + "/") == 0;
-                        });
-                    if (!inScope)
+                    std::error_code ec;
+                    const std::filesystem::path base = root / rootName;
+                    if (!std::filesystem::is_directory(base, ec))
                     {
                         continue;
                     }
-                }
-                ++visited;
-
-                std::ifstream file(it->path(), std::ios::binary);
-                if (!file)
-                {
-                    continue;
-                }
-                FileHits hits;
-                hits.path = relative;
-                std::string line;
-                std::size_t number = 0;
-                while (std::getline(file, line))
-                {
-                    ++number;
-                    if (!std::regex_search(line, expression))
+                    for (std::filesystem::recursive_directory_iterator it(base, ec), end;
+                         it != end && visited < kMaxFilesVisited; it.increment(ec))
                     {
-                        continue;
-                    }
-                    ++hits.count;
-                    if (hits.lines.size() < kHitsPerFile)
-                    {
-                        const std::size_t from = line.find_first_not_of(" \t");
-                        std::string trimmed =
-                            from == std::string::npos ? std::string{} : line.substr(from);
-                        if (trimmed.size() > kMaxLine)
+                        if (ec || !it->is_regular_file(ec) || !HasSearchableExtension(it->path()))
                         {
-                            trimmed.resize(kMaxLine);
+                            continue;
                         }
-                        hits.lines.push_back(
-                            relative + ":" + std::to_string(number) + ": " + trimmed);
+                        const std::string relative = Relative(it->path(), root);
+                        if (!scopes.empty())
+                        {
+                            const bool inScope = std::any_of(scopes.begin(), scopes.end(),
+                                [&relative](const std::string& scope)
+                                {
+                                    return relative == scope ||
+                                        relative.compare(0, scope.size() + 1, scope + "/") == 0;
+                                });
+                            if (!inScope)
+                            {
+                                continue;
+                            }
+                        }
+                        ++visited;
+
+                        std::ifstream file(it->path(), std::ios::binary);
+                        if (!file)
+                        {
+                            continue;
+                        }
+                        FileHits hits;
+                        hits.path = relative;
+                        std::string line;
+                        std::size_t number = 0;
+                        while (std::getline(file, line))
+                        {
+                            ++number;
+                            if (!std::regex_search(line, expression))
+                            {
+                                continue;
+                            }
+                            ++hits.count;
+                            if (hits.lines.size() < kHitsPerFile)
+                            {
+                                const std::size_t from = line.find_first_not_of(" \t");
+                                std::string trimmed =
+                                    from == std::string::npos ? std::string{} : line.substr(from);
+                                if (trimmed.size() > kMaxLine)
+                                {
+                                    trimmed.resize(kMaxLine);
+                                }
+                                hits.lines.push_back(
+                                    relative + ":" + std::to_string(number) + ": " + trimmed);
+                            }
+                        }
+                        if (hits.count != 0)
+                        {
+                            perFile.push_back(std::move(hits));
+                        }
                     }
                 }
-                if (hits.count != 0)
-                {
-                    perFile.push_back(std::move(hits));
-                }
-            }
+            };
+            OnLargeStack(walk);
+        }
+        catch (const std::regex_error& e)
+        {
+            return std::string("grep: the pattern is too costly to run (") + e.what() +
+                   "); write it without nested repetition, or narrow it";
         }
 
         if (perFile.empty())
@@ -433,6 +508,10 @@ namespace
         {
             return "read: '" + path + "' is not a path inside this repository";
         }
+        if (!UnderSearchRoot(full))
+        {
+            return "read: '" + path + "' is not under sources, shaders, tools, docs or data";
+        }
         std::error_code ec;
         if (!std::filesystem::is_regular_file(full, ec))
         {
@@ -488,6 +567,20 @@ namespace
             return "ls: '" + rest + "' is not a path inside this repository";
         }
         std::error_code ec;
+        if (IsRepoRoot(full))
+        {
+            // The root's own files (.git, the person's settings) are not the model's to read: the roots it may are.
+            std::string out;
+            for (const char* r : kRoots)
+            {
+                if (std::filesystem::is_directory(full / r, ec)) { out += (out.empty() ? "" : "\n") + std::string(r) + "/"; }
+            }
+            return out.empty() ? "(empty)" : out;
+        }
+        if (!UnderSearchRoot(full))
+        {
+            return "ls: '" + rest + "' is not under sources, shaders, tools, docs or data";
+        }
         if (!std::filesystem::is_directory(full, ec))
         {
             return "ls: not a directory: " + rest;
@@ -553,9 +646,19 @@ namespace reposearch
         const SceneQueryFn& scene,
         std::string& outReport)
     {
-        const std::regex& call = ToolCallPattern();
+        PlannedTools planned;
+        if (!PlanRequestedTools(answer, scene, planned))
+        {
+            return false;
+        }
+        outReport = RunPlannedTools(std::move(planned));
+        return true;
+    }
 
-        std::string report;
+    bool PlanRequestedTools(const std::string& answer, const SceneQueryFn& scene, PlannedTools& out)
+    {
+        const std::regex& call = ToolCallPattern();
+        out = PlannedTools{};
         std::size_t used = 0;
         std::size_t lineStart = 0;
         while (lineStart <= answer.size())
@@ -576,35 +679,54 @@ namespace reposearch
             }
             if (used >= kMaxToolsPerTurn)
             {
-                report += "\n\n(tool budget for this turn is " +
-                    std::to_string(kMaxToolsPerTurn) + " calls; the rest were not run)";
+                out.overBudget = true;
                 break;
             }
             ++used;
-            std::string verb = match[1].str();
-            std::transform(verb.begin(), verb.end(), verb.begin(),
+            PlannedTool tool;
+            tool.verb = match[1].str();
+            std::transform(tool.verb.begin(), tool.verb.end(), tool.verb.begin(),
                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            std::string rest = match[2].str();
-
-            std::string body;
-            if (verb == "grep")      { body = Grep(rest); }
-            else if (verb == "read") { body = Read(rest); }
-            else if (verb == "ls")   { body = List(rest); }
-            else if (scene)          { body = scene(rest); }
-            else
+            tool.rest = match[2].str();
+            if (tool.verb == "scene")
             {
+                // Answered HERE, on the caller's thread: the open level is the editor's live document.
                 // Asked about the level with no editor behind this call. Saying so is the
                 // honest answer; pretending the query does not exist would send the model
                 // looking for the fact in the source, where it is not.
-                body = "there is no level open to ask about";
+                tool.body = scene ? scene(tool.rest) : std::string("there is no level open to ask about");
+                tool.answered = true;
             }
-
-            report += (report.empty() ? "" : "\n\n") + ("$ " + verb + " " + rest + "\n") + body;
+            out.calls.push_back(std::move(tool));
         }
+        return used != 0;
+    }
 
-        if (used == 0)
+    std::string RunPlannedTools(PlannedTools planned)
+    {
+        std::string report;
+        for (PlannedTool& tool : planned.calls)
         {
-            return false;
+            if (!tool.answered)
+            {
+                // Files only, so any thread. Nothing escapes: a worker that threw would leave the conversation waiting.
+                try
+                {
+                    if (tool.verb == "grep")      { tool.body = Grep(tool.rest); }
+                    else if (tool.verb == "read") { tool.body = Read(tool.rest); }
+                    else                          { tool.body = List(tool.rest); }
+                }
+                catch (const std::exception& e)
+                {
+                    tool.body = tool.verb + ": failed: " + e.what();
+                }
+            }
+            report += (report.empty() ? "" : "\n\n") + ("$ " + tool.verb + " " + tool.rest + "\n") + tool.body;
+        }
+        if (planned.overBudget)
+        {
+            report += "\n\n(tool budget for this turn is " +
+                std::to_string(kMaxToolsPerTurn) + " calls; the rest were not run)";
         }
         // THE EDGE OF THE EVIDENCE, stated. Asked what was in the other levels, the model
         // ran `ls data/levels`, ran `scene sceneSummary`, and then described four files it
@@ -617,8 +739,7 @@ namespace reposearch
                   "and do not describe its contents. In particular, `scene` describes the "
                   "OPEN level and nothing else -- never carry its counts or its assets over "
                   "to another level's file.";
-        outReport = std::move(report);
-        return true;
+        return report;
     }
 
     void StripToolLines(std::string& text)

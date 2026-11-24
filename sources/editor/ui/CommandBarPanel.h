@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <string>
@@ -190,6 +191,8 @@ private:
     // arrive in one place and leave in one transcript.
     void PollConversation(const EditorActionContext& actionCtx);
     void BeginConversationTurn(const EditorActionContext& actionCtx);
+    // A lookup round's end, once its files were read (toolJob_): logged, remembered, and the next turn asked.
+    void FinishToolRound(const EditorActionContext& actionCtx, const std::string& toolReport, const std::string& answer);
 
     // True while a prose answer is streaming in.
     bool inConversation_ = false;
@@ -294,6 +297,16 @@ private:
     double waitingSinceSec_ = 0.0;
     int conversationTools_ = 0;
     static constexpr int kMaxConversationTools = 3;
+    // A round of the chat's lookups running on a worker (docs/architecture_review_plan.md M9): the TOOL lines were planned
+    // and `scene` answered in the frame, grep / read / ls run off it. Shared with the task, so a panel reset or a closed
+    // editor only drops its end; `toolAnswer_` is the model's answer that asked for them, remembered when they land.
+    struct ToolJob
+    {
+        std::atomic<bool> done{ false };
+        std::string report;
+    };
+    std::shared_ptr<ToolJob> toolJob_;
+    std::string toolAnswer_;
     std::size_t lastPartialSize_ = 0;
     // An offer the person pressed, waiting to be submitted at the top of the next frame.
     std::string pendingOffer_;

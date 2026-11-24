@@ -45,6 +45,25 @@ namespace reposearch
         const SceneQueryFn& scene,
         std::string& outReport);
 
+    // The same in two halves, so the files are read OFF the frame (docs/architecture_review_plan.md M9): a broad grep
+    // walks thousands of files, and the panel ran it inside its draw. Plan, on the editor's thread: the TOOL lines read
+    // and budgeted, `scene` answered now (the live document). Run, on any thread: grep / read / ls, the report written
+    // as RunRequestedTools writes it. Never throws.
+    struct PlannedTool
+    {
+        std::string verb;
+        std::string rest;
+        std::string body;
+        bool answered = false; // `scene`: answered by the plan
+    };
+    struct PlannedTools
+    {
+        std::vector<PlannedTool> calls;
+        bool overBudget = false;
+    };
+    bool PlanRequestedTools(const std::string& answer, const SceneQueryFn& scene, PlannedTools& out);
+    std::string RunPlannedTools(PlannedTools planned);
+
     // Remove any `TOOL:` line from text that is about to be SHOWN. They are a protocol
     // between the model and the panel, and one that was never run is not a sentence: when
     // the lookup budget ran out mid-question the model's next request became the visible
