@@ -4,11 +4,14 @@
 #include <DirectXMath.h>
 #include <wrl/client.h>
 #include <array>
+#include <atomic>
 #include <span>
+#include <memory>
 #include <vector>
 
 #include "third_party/robin_hood.h"
 #include "rendering/core/RenderConstants.h" // render::kFrameCount
+#include "rendering/core/DeferredRelease.h" // R16.4: retired buffers
 
 class Mesh;
 
@@ -136,28 +139,26 @@ public:
     ID3D12Resource* WindStreamResource(UINT slot) const;
     ID3D12Resource* WindBlasResource(UINT slot, UINT frameIndex) const;
 
-    // ---- Fence-guarded retire bin ------------------------------------------------------------
+    // ---- Retired buffers ------------------------------------------------------------------------
     // Buffers the GPU may still be reading -- one-time BLAS scratch, an evicted wind slot's
-    // stream / BLAS / scratch -- are RETIRED here instead of destroyed. Each entry carries the
-    // frame it may be freed at: the retirer (GetOrBuildBlas, PrepareWindSlot) does not know the
-    // frame number, so entries start unstamped and StampRetired() gives every unstamped one its
-    // frame at the end of the build; ReleaseRetired(frameNo) frees the entries whose frame has
-    // come (kFrameCount frames later, when that slot's fence has surely been waited on).
+    // stream / BLAS / scratch -- are RETIRED instead of destroyed: since R16.4 through the
+    // deferred-release service (rendering/core/DeferredRelease.h), released once the GPU has
+    // finished the frame NUMBER they were retired in. Until then this class kept its own bin,
+    // stamped at the end of the build and freed kFrameCount frames later.
     //
-    // Until 2026-09-03 this was one flat vector, released ALL AT ONCE when a single deadline
+    // Until 2026-09-03 that bin was one flat vector, released ALL AT ONCE when a single deadline
     // passed -- and the deadline was re-armed every frame the vector was non-empty, so it never
     // came: every buffer ever retired stayed alive for the rest of the session. A fly-through of
     // a palm grove evicts wind slots continuously, seven buffers each, which is how it surfaced:
-    // memory growing by gigabytes while circling the atoll.
-    void StampRetired(uint64_t retireFrame);
-    void ReleaseRetired(uint64_t frameNo);
-    // GPU idle only (Reset, the smoke harness): frees everything regardless of stamps.
-    void ReleaseAllRetired() { retireBin_.clear(); }
-    uint64_t RetireBinBytes() const;
-    size_t RetireBinCount() const { return retireBin_.size(); }
-    // Bytes ever handed to the bin this session. Against RetireBinBytes() it says whether the
-    // bin drains: a total that climbs by gigabytes while the bin stays at a few MB is the
-    // fly-through working as designed; a bin that tracks the total is the leak coming back.
+    // memory growing by gigabytes while circling the atoll. The two numbers below keep that
+    // visible on the mem: line (rt.as.bin, rt.as.retired).
+    //
+    // What this class retired and the GPU still holds (counted down by the service's release
+    // steps -- a shared counter, so a step that runs after this class is gone writes nothing of it).
+    uint64_t RetireBinBytes() const { return binBytes_->load(std::memory_order_relaxed); }
+    // Bytes ever retired this session. Against RetireBinBytes() it says whether the buffers
+    // drain: a total that climbs by gigabytes while the waiting bytes stay at a few MB is the
+    // fly-through working as designed; waiting bytes that track the total are the leak coming back.
     uint64_t RetiredTotalBytes() const { return retiredTotalBytes_; }
 
     // Drop every cached BLAS/TLAS, retained scratch, and the SRV heap.
@@ -252,17 +253,17 @@ private:
     // every build and keeps its capacity: as a local it was one allocation per wind slot per
     // frame (24 a frame on wind_test, memtrace churn).
     std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomScratch_;
-    struct Retired {
-        Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-        uint64_t retireFrame = kUnstamped; // free once the build's frame number reaches this
-    };
-    static constexpr uint64_t kUnstamped = ~0ull;
-    std::vector<Retired> retireBin_;
+    std::shared_ptr<std::atomic<uint64_t>> binBytes_ = std::make_shared<std::atomic<uint64_t>>(0u);
     void Retire(Microsoft::WRL::ComPtr<ID3D12Resource>&& buffer)
     {
         if (!buffer) { return; }
-        retiredTotalBytes_ += buffer->GetDesc().Width;
-        retireBin_.push_back(Retired{ std::move(buffer), kUnstamped });
+        const uint64_t bytes = buffer->GetDesc().Width;
+        retiredTotalBytes_ += bytes;
+        binBytes_->fetch_add(bytes, std::memory_order_relaxed);
+        render::deferred::Retire([buffer = std::move(buffer), waiting = binBytes_, bytes]() mutable {
+            buffer.Reset();
+            waiting->fetch_sub(bytes, std::memory_order_relaxed);
+        }, bytes, "rt.as");
     }
     uint64_t retiredTotalBytes_ = 0;
     bool buildFailed_ = false; // sticky: an AS allocation failed (see BuildFailed())

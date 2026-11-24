@@ -140,12 +140,8 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         return;
     }
 
-    // Free the retired buffers whose frame has come: an entry stamped `N + kFrameCount` below is
-    // released here in frame N + kFrameCount, after BeginFrame waited on frame N's fence. Per
-    // entry, not one deadline for the whole bin -- see AccelerationStructureManager's retire
-    // bin comment for the leak the single deadline was.
+    // The retired AS buffers go by themselves (render::deferred, R16.4: once their frame number completed).
     const uint64_t frameNo = renderer->GetTotalFrameNumber();
-    asManager_.ReleaseRetired(frameNo);
     bindless_.BeginFrame(frameNo); // A2: descriptor sets retired by a texture swap return to the pool
 
     // Gather opaque, single-mesh, CPU-placed instances. Ocean (GPU-displaced) is
@@ -577,10 +573,6 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
             // frame slot from exposing a previous frame's TLAS after the last
             // visible RT instance is disabled.
             asManager_.BuildTlas(rtInstances_, cl4, renderer->GetCurrentFrameIndex());
-            // Everything retired during this frame's build (one-time BLAS scratch inside
-            // BuildTlas, evicted wind slots in PrepareWindSlot above) may go once this frame's
-            // fence has been waited on.
-            asManager_.StampRetired(frameNo + render::kFrameCount);
             // S13: one-time AS VRAM accounting for visibility/budgeting.
             if (!rtInstances_.empty() && !asVramLogged_ && !asManager_.BuildFailed())
             {

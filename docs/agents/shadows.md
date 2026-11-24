@@ -93,7 +93,10 @@ those on a separate `bCastContactShadow`).
 - Only casters count for `HasWindCasters()`: grass with its shadow off does not keep VSM redrawing for the wind.
 - **A caster-set change mid-session waits for the GPU before it rebuilds** (`ShadowGpuData::UpdateForFrame`, as
   `Scene::RebuildShadowCasters` always did): `Rebuild` re-creates every ring it outgrows and `EnsureRing` /
-  `EnsureUavRing` release the old buffer AT ONCE, while the frames in flight on both queues still read it. Switching
+  `EnsureUavRing` released the old buffer AT ONCE, while the frames in flight on both queues still read it. Since
+  R16.9 (2026-11-24) the old buffer goes to `render::deferred`, but the wait stays: a ring that still fits is written
+  in place (`instances_`, `bounds_`, `casterMeta_` in every region; four tables in their static region 0) and
+  `Scene::RebuildShadowMegaBuffer` re-makes the mega VB/IB on the strength of it. Switching
   wind_test's 104 "Lamps" bulbs on early in a session hung the GPU about one launch in three (DRED, `--dred`: a page
   fault on the freed `ShadowGpuData.Bounds`; frames of 400-800 ms, then DEVICE_HUNG; never with
   `--no-async-compute`). After: 15 of 15 launches clean. The per-frame rings that grow with it (`RefreshVirtualGroups`,

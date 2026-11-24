@@ -178,7 +178,6 @@ private:
     void ResetGpuResources(Renderer* renderer, bool resetMaterials);
     void RetireGpuResources(Renderer* renderer);
     void RetireUploadResources(Renderer* renderer, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> resources);
-    void CollectRetiredResources(Renderer* renderer);
     float ComputeCascadeContribution(float kLength, UINT cascade) const;
     void InitializeFromConfig(const std::wstring& configPath);
     void ApplyConfigInternal(Renderer* renderer, const OceanSimulationConfig& config, bool resetResources);
@@ -221,22 +220,6 @@ private:
 
     std::vector<Math::float4> h0Data_;
     std::vector<Math::float4> waveData_;
-
-    struct RetiredGpuResources
-    {
-        uint64_t retireFrame = 0;
-        Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer;
-        Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer;
-        GpuResource displacement;
-        GpuResource prevDisplacement;
-        GpuResource foamTurbulence;
-    };
-
-    struct RetiredUploadResources
-    {
-        uint64_t retireFrame = 0;
-        std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> resources;
-    };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> h0Buffer_;
     Microsoft::WRL::ComPtr<ID3D12Resource> waveDataBuffer_;
@@ -312,16 +295,5 @@ private:
     bool hasDisplacementHistory_ = false;
     bool prevDisplacementValid_ = false;
     bool shouldRenderShoreDepth_ = true;
-    std::vector<RetiredGpuResources> retiredGpuResources_;
-
-    // Upload batches from EnsureFrameResources, kept alive until their GPU work has certainly
-    // finished (drained in CollectRetiredResources by the same rule as the resources above).
-    struct PendingInitBatch
-    {
-        std::unique_ptr<UploadBatch> batch;
-        uint64_t submitFrame = 0;
-    };
-    std::vector<PendingInitBatch> pendingInitBatches_;
-    std::vector<RetiredUploadResources> retiredUploadResources_;
 };
 

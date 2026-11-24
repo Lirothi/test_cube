@@ -38,6 +38,7 @@
     <ClCompile Include="..\sources\core\memory\MemTrace.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\CrashHandler.cpp" />
+    <ClCompile Include="..\sources\core\diagnostics\InvariantFailure.cpp" />
     <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
     <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
     <ClCompile Include="..\sources\rendering\core\BarrierTranslation.cpp" />

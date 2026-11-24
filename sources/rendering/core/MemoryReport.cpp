@@ -36,6 +36,7 @@ namespace
         const char* name;
         MemoryProviderFn fn;
         const void* self;
+        MemoryCountFn count = nullptr; // entries beside the bytes, or none
     };
 
     std::vector<Provider>& Providers()
@@ -346,8 +347,13 @@ void GpuMemoryTotals(std::uint64_t& outUsedBytes, std::uint64_t& outTotalBytes)
 
 void RegisterMemoryProvider(const char* name, MemoryProviderFn fn, const void* self)
 {
+    RegisterMemoryProvider(name, fn, self, nullptr);
+}
+
+void RegisterMemoryProvider(const char* name, MemoryProviderFn fn, const void* self, MemoryCountFn count)
+{
     if (!name || !fn) { return; }
-    Providers().push_back(Provider{ name, fn, self });
+    Providers().push_back(Provider{ name, fn, self, count });
 }
 
 void UnregisterMemoryProvider(const void* self)
@@ -965,6 +971,11 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     {
         if (n >= static_cast<int>(sizeof(line)) - 40) { break; }
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | %s %.1f MB", p.name, Mb(p.fn(p.self)));
+        if (p.count && n < static_cast<int>(sizeof(line)) - 24)
+        {
+            n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " (%llu)",
+                               static_cast<unsigned long long>(p.count(p.self)));
+        }
     }
     s.prevPrivate = privateBytes;
     s.prevLocal = plat.vramLocalBytes;

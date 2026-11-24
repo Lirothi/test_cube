@@ -174,7 +174,6 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
         {
             flareBokehSlot_ = static_cast<std::uint32_t>(flareBokehPending_);
             flareBokehPending_ = -1;
-            flareBokehUpload_.reset(); // intermediates + allocator, now provably consumed
             flareBokehReady_ = true;
             // The slot that just stopped being sampled needs its own ring before the next
             // bake may overwrite it.
@@ -1966,19 +1965,18 @@ void BloomRenderer::BakeFlareBokeh(Renderer* renderer, uint32_t blades)
     }
 
     const std::uint32_t slot = 1u - flareBokehSlot_;
-    auto batch = std::make_unique<UploadBatch>();
-    if (!batch->Begin(renderer))
+    UploadBatch batch; // R16.8: its list, allocator and intermediates go to render::deferred at Submit
+    if (!batch.Begin(renderer))
     {
         return;
     }
     flareBokeh_[slot].SetMemTag(MemTag::Bloom);
-    flareBokeh_[slot].CreateFromRGBA8(renderer, batch->CommandList(), pixels.data(), kSize, kSize,
-                                      batch->KeepAlive(), L"FlareBokeh");
-    if (!batch->Submit(renderer))
+    flareBokeh_[slot].CreateFromRGBA8(renderer, batch.CommandList(), pixels.data(), kSize, kSize,
+                                      batch.KeepAlive(), L"FlareBokeh");
+    if (!batch.Submit(renderer))
     {
         return;
     }
-    flareBokehUpload_ = std::move(batch);
     flareBokehPending_ = static_cast<std::int32_t>(slot);
     flareBokehSafeFrame_ = renderer->GetTotalFrameNumber() + render::kFrameCount + 1u;
     flareBokehBlades_ = blades;

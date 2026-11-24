@@ -17,6 +17,7 @@
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/DeferredRelease.h" // R16.10: the preview sky's old cubes
 #include "rendering/core/UploadBatch.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
@@ -2105,13 +2106,16 @@ const TextureCube* MeshEditorPanel::ResolvePreviewSky(EditorContext& ctx, float&
     }
     if (previewSkyCubePath_ != previewLight_.sky)
     {
-        // A different cube. The old one may still be read by a frame in flight, so the GPU is
-        // drained before it goes: one stall on a click, instead of a texture freed under a
-        // command list that still points at it.
-        ctx.renderer.WaitForPreviousFrame();
-        previewSkyCube_.reset();
-        previewSkySpec_.reset();
-        previewSkyIrradiance_.reset();
+        // A different cube. The old one may still be read by a frame in flight: it goes to render::deferred (R16.10),
+        // not under a GPU idle, and the new one uploads without one (Submit: the batch's list goes before the preview's
+        // own, on the same queue, and the service keeps the batch until its frame is done).
+        render::deferred::Retire([cube = std::shared_ptr<TextureCube>(std::move(previewSkyCube_)),
+                                  spec = std::shared_ptr<TextureCube>(std::move(previewSkySpec_)),
+                                  irradiance = std::shared_ptr<TextureCube>(std::move(previewSkyIrradiance_))]() mutable {
+            cube.reset();
+            spec.reset();
+            irradiance.reset();
+        }, 0, "mesh editor preview sky");
         previewSkyUpIlluminance_ = 0.0f;
         previewSkyError_.clear();
         previewSkyCubePath_ = previewLight_.sky;
@@ -2142,7 +2146,7 @@ const TextureCube* MeshEditorPanel::ResolvePreviewSky(EditorContext& ctx, float&
                     previewSkyUpIlluminance_ = Skybox::MeasureUpIlluminance(diffusePath);
                 }
             }
-            batch.SubmitAndWait(&ctx.renderer);
+            batch.Submit(&ctx.renderer);
             previewSkyCube_ = std::move(cube);
         }
         else

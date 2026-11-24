@@ -150,14 +150,14 @@ namespace
             wind.gustSeed = JF(*gustIt, "seed", wind.gustSeed);
         }
 
-        // Direction/strength are also the ocean's source of truth. ResetInitialSpectrum retires
-        // GPU resources, so make the same edit-time GPU-idle guarantee used by other rebuilds.
-        // Gust/sway-only edits avoid touching the FFT and apply on the next Scene::Tick.
+        // Direction/strength are also the ocean's source of truth. ResetInitialSpectrum retires the simulation's GPU
+        // resources -- to render::deferred since R16.7 -- and Apply parked the render half first (the simulation is its
+        // object): no GPU idle (R16.10). Gust/sway-only edits avoid touching the FFT and apply on the next Scene::Tick.
         if (oceanDriveChanged)
         {
             if (OceanSimulation* ocean = Systems::GetOceanSimulation())
             {
-                ctx.renderer.WaitForPreviousFrame();
+                threading::WaitRenderForGame("EnvironmentRuntime: the ocean's wind"); // Apply's park; this says why
                 ocean->SetSceneVariables(
                     &ctx.renderer,
                     wind.directionDeg,

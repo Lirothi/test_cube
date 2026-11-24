@@ -60,13 +60,11 @@ public:
     // Texture slots. Copies `src` into a fresh slot and returns its absolute index, or
     // kInvalidIndex when the region is exhausted (logged once).
     UINT AllocateSlot(D3D12_CPU_DESCRIPTOR_HANDLE src);
-    // Hands the slot back kFrameCount frames from now. Safe with kInvalidIndex.
+    // Hands the slot back once the GPU has finished every frame that may index it -- through the
+    // deferred-release service (rendering/core/DeferredRelease.h, R16.2). Safe with kInvalidIndex.
     void RetireSlot(UINT index);
     // The exhaustion fallback ONLY: overwrites a live slot under frames that may still read it.
     void RewriteSlot(UINT index, D3D12_CPU_DESCRIPTOR_HANDLE src);
-    // Frame boundary, after the frame slot's fence wait: retired slots whose frame came return to
-    // the free list.
-    void BeginFrame(uint64_t frameNo);
 
     struct Stats
     {
@@ -90,9 +88,7 @@ private:
     UINT nextSlot_ = kTextureBase + 1; // slot kTextureBase is the null SRV
     UINT live_ = 0;
     std::vector<UINT> free_;
-    struct Retired { UINT index; uint64_t frame; };
-    std::vector<Retired> retired_;
-    uint64_t frameNo_ = 0;
+    UINT retired_ = 0; // slots with render::deferred, not back on free_ yet
 };
 
 } // namespace render

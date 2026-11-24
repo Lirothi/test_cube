@@ -61,6 +61,8 @@
     <ClCompile Include="$(Repo)sources\core\logging\Log.cpp" />
     <ClCompile Include="$(Repo)sources\core\logging\LogQueue.cpp" />
     <ClCompile Include="$(Repo)sources\core\logging\LogSinks.cpp" />
+    <ClCompile Include="$(Repo)sources\core\diagnostics\InvariantFailure.cpp" />
+    <ClCompile Include="$(Repo)sources\core\diagnostics\ArtifactWriter.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -314,7 +314,6 @@ private:
     RegionLine* AcquireRegionLine(size_t glyphReserveHint);
     void       RecycleRegionLines();
     void       EnsureTextIndexCapacity(Renderer* r, size_t quadCount);
-    void       CollectRetiredTextIndexBuffers(Renderer* r);
     void       RetireTextIndexBuffer(Renderer* r);
 
 private:
@@ -328,8 +327,6 @@ private:
     D3D12_VERTEX_BUFFER_VIEW vbv_{};
     D3D12_INDEX_BUFFER_VIEW  textIBV_{};
     Microsoft::WRL::ComPtr<ID3D12Resource> textIndexBuffer_;
-    std::array<std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>, render::kFrameCount> retiredTextIndexBuffers_;
-    uint32_t retiredTextIndexFrameMask_ = 0;
     size_t textIndexQuadCapacity_ = 0;
 
     GrowOnlyArray<Vertex>    rectVerts_;

@@ -11,6 +11,7 @@
 #include "materials/Texture2D.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/core/RenderGraph.h"
@@ -249,6 +250,20 @@ void VolumetricCloud::Reset()
     std::memset(profileGenKey_, 0, sizeof(profileGenKey_)); formationGenSeed_ = 0; formationGenRoughness_ = 0.0f;
     shadowBuilt_ = false; shadowViewProj_ = {}; shadowFarKm_ = 1.0f;
     shadowHistoryValid_ = false; shadowSlicePhase_ = 0;
+}
+
+void VolumetricCloud::Retire()
+{
+    for (GpuResource* r : { &weather_, &shadowRaw_, &shadowFiltered_, &profile_, &formation_, &cells_, &profileGen_,
+                            &formationGen_, &cellsGen_, &blueNoise_ })
+    {
+        render::deferred::Retire(std::move(*r), "volumetric clouds");
+    }
+    if (heap_)
+    {
+        render::deferred::Retire([heap = std::move(heap_)]() mutable { heap.Reset(); }, 0, "volumetric clouds views");
+    }
+    Reset(); // what is left: the (empty) views, the materials' references, the state
 }
 
 // Fixed-size resources, allocated once the level asks for clouds and kept until Reset.

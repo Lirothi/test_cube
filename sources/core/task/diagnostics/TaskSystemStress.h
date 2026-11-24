@@ -10,8 +10,13 @@
 // logs/tasksystem_stress.log artifact retains its summaries. Returns failed checks
 // (0 = success, 98 = watchdog timeout).
 //
-// overflowDeathTest: instead of the scenarios, intentionally exceeds the
-// dependents_ capacity — the process is EXPECTED to abort (validates the
-// fail-fast overflow handling). Run via "--tasksystem-stress --stress-overflow";
-// the caller must treat a non-zero/abnormal exit as the passing outcome.
+// overflowDeathTest: instead of the scenarios, fills one task's dependents to TaskSystem::kDependentCapacity
+// and adds one more — the process is EXPECTED to end there through the fan-out invariant (its Fatal line in the
+// session log, abort, exit 3). Run via "--tasksystem-stress --stress-overflow"; returning (100) is the failure.
 int RunTaskSystemStress(bool overflowDeathTest);
+
+// --crash-selftest arms for the task system's dependency contract (docs/architecture_review_plan.md R15.2): each
+// breaks it once and is expected to end the process through InvariantFailure; returning is the failure.
+// taskdep: a dependency given to an already submitted task. taskdep-scheduled: a dependency on a task that ran.
+void CrashSelfTestTaskDependencyAfterSubmit();
+void CrashSelfTestTaskDependencyOnScheduled();

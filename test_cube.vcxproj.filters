@@ -570,6 +570,9 @@
     <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/diagnostics/InvariantFailure.cpp">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/diagnostics/CrashHandler.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
@@ -741,6 +744,9 @@
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/DeferredRelease.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -774,10 +780,13 @@
     <ClCompile Include="sources/rendering/core/Screenshot.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp">
-      <Filter>sources\rendering\core</Filter>
-    </ClCompile>
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp">
+      <Filter>sources\rendering\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/diagnostics/GraphSelfTest.cpp">
+      <Filter>sources\rendering\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/diagnostics/RetireSelfTest.cpp">
       <Filter>sources\rendering\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/visibility/HzbCullSelfTest.cpp">
@@ -820,9 +829,6 @@
       <Filter>sources\rendering\rt</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/streaming/TextureUploadRing.cpp">
-      <Filter>sources\rendering\streaming</Filter>
-    </ClCompile>
-    <ClCompile Include="sources/rendering/streaming/TextureRetireBin.cpp">
       <Filter>sources\rendering\streaming</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/streaming/TextureStreamingIo.cpp">
@@ -1367,6 +1373,9 @@
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/diagnostics/InvariantFailure.h">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/diagnostics/CrashHandler.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
@@ -1574,9 +1583,6 @@
     <ClInclude Include="sources/rendering/streaming/TextureUploadRing.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h">
-      <Filter>sources\rendering\streaming</Filter>
-    </ClInclude>
     <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
@@ -1643,6 +1649,9 @@
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/core/DeferredRelease.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
@@ -1674,6 +1683,12 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h">
+      <Filter>sources\rendering\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/diagnostics/GraphSelfTest.h">
+      <Filter>sources\rendering\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/diagnostics/RetireSelfTest.h">
       <Filter>sources\rendering\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/visibility/HzbCull.h">

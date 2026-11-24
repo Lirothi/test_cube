@@ -1,6 +1,7 @@
 #include "ocean/OceanSimulation.h"
 #include "core/memory/MemScope.h"
 #include "core/vfs/Vfs.h" // the ocean's Save goes where the game keeps what it saves
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/TextureCreate.h"
 
 #include <cassert>
@@ -94,7 +95,6 @@ void OceanSimulation::ResetInitialSpectrum(Renderer* renderer)
 
 void OceanSimulation::ResetGpuResources(Renderer* renderer, bool resetMaterials)
 {
-    CollectRetiredResources(renderer);
     RetireGpuResources(renderer);
 
     initialized_ = false;
@@ -134,9 +134,6 @@ void OceanSimulation::ResetGpuResources(Renderer* renderer, bool resetMaterials)
 
 void OceanSimulation::RetireGpuResources(Renderer* renderer)
 {
-    RetiredGpuResources retired{};
-    retired.retireFrame = renderer ? renderer->GetTotalFrameNumber() : 0u;
-
     auto clearState = [renderer](const ComPtr<ID3D12Resource>& resource)
     {
         if (renderer && resource)
@@ -151,79 +148,21 @@ void OceanSimulation::RetireGpuResources(Renderer* renderer)
     clearState(h0Buffer_);
     clearState(waveDataBuffer_);
 
-    retired.h0Buffer = std::move(h0Buffer_);
-    retired.waveDataBuffer = std::move(waveDataBuffer_);
-    retired.displacement = std::move(displacement_);
-    retired.prevDisplacement = std::move(prevDisplacement_);
-    retired.foamTurbulence = std::move(foamTurbulence_);
-
-    if (retired.h0Buffer || retired.waveDataBuffer || retired.displacement ||
-        retired.prevDisplacement || retired.foamTurbulence)
-    {
-        retiredGpuResources_.push_back(std::move(retired));
-    }
+    // R16.7: released once the GPU has finished the frames that read them (render::deferred, by frame number).
+    // Until then a container here held them, emptied by the next Update / reset (kFrameCount + 1 frames counted).
+    render::deferred::Retire(std::move(h0Buffer_), "ocean.sim");
+    render::deferred::Retire(std::move(waveDataBuffer_), "ocean.sim");
+    render::deferred::Retire(std::move(displacement_), "ocean.sim");
+    render::deferred::Retire(std::move(prevDisplacement_), "ocean.sim");
+    render::deferred::Retire(std::move(foamTurbulence_), "ocean.sim");
 }
 
-void OceanSimulation::RetireUploadResources(Renderer* renderer, std::vector<ComPtr<ID3D12Resource>> resources)
+void OceanSimulation::RetireUploadResources(Renderer* /*renderer*/, std::vector<ComPtr<ID3D12Resource>> resources)
 {
-    if (resources.empty())
+    // R16.7: the upload intermediates of a runtime upload, until the GPU has finished its frame (render::deferred).
+    for (ComPtr<ID3D12Resource>& resource : resources)
     {
-        return;
-    }
-
-    RetiredUploadResources retired{};
-    retired.retireFrame = renderer ? renderer->GetTotalFrameNumber() : 0u;
-    retired.resources = std::move(resources);
-    retiredUploadResources_.push_back(std::move(retired));
-}
-
-void OceanSimulation::CollectRetiredResources(Renderer* renderer)
-{
-    if (!renderer)
-    {
-        return;
-    }
-
-    constexpr uint64_t kKeepAliveFrames = render::kFrameCount + 1u;
-    const uint64_t frameNumber = renderer->GetTotalFrameNumber();
-    const auto canRelease = [frameNumber](uint64_t retireFrame)
-    {
-        return frameNumber > retireFrame + kKeepAliveFrames;
-    };
-
-    // Upload batches from EnsureFrameResources: the intermediates and the command allocator must
-    // outlive the GPU work, and this is the one place that already knows the retirement rule.
-    auto batchIt = pendingInitBatches_.begin();
-    while (batchIt != pendingInitBatches_.end())
-    {
-        batchIt = canRelease(batchIt->submitFrame) ? pendingInitBatches_.erase(batchIt)
-                                                   : std::next(batchIt);
-    }
-
-    auto gpuIt = retiredGpuResources_.begin();
-    while (gpuIt != retiredGpuResources_.end())
-    {
-        if (canRelease(gpuIt->retireFrame))
-        {
-            gpuIt = retiredGpuResources_.erase(gpuIt);
-        }
-        else
-        {
-            ++gpuIt;
-        }
-    }
-
-    auto uploadIt = retiredUploadResources_.begin();
-    while (uploadIt != retiredUploadResources_.end())
-    {
-        if (canRelease(uploadIt->retireFrame))
-        {
-            uploadIt = retiredUploadResources_.erase(uploadIt);
-        }
-        else
-        {
-            ++uploadIt;
-        }
+        render::deferred::Retire(std::move(resource), "ocean.upload");
     }
 }
 
@@ -469,19 +408,16 @@ void OceanSimulation::EnsureFrameResources(Renderer* renderer)
     //
     // Submitted WITHOUT waiting. It used to be SubmitAndWait, on the reasoning that re-init only
     // happens on a user action — but dragging a slider IS a user action, once per frame, so that
-    // stalled the GPU every frame of the drag and made the inspector unusable. The batch is instead
-    // retained until its work has certainly completed, which is the same rule the retired-resource
-    // list here already uses.
-    auto batch = std::make_unique<UploadBatch>();
-    if (!batch->Begin(renderer))
+    // stalled the GPU every frame of the drag and made the inspector unusable. Since R16.8 the deferred-release
+    // service keeps the submitted batch (list, allocator, intermediates) until its frame has completed; until then a
+    // list here did, emptied kFrameCount + 1 frames later.
+    UploadBatch batch;
+    if (!batch.Begin(renderer))
     {
         return;
     }
-    Initialize(renderer, batch->CommandList(), nullptr);
-    if (batch->Submit(renderer))
-    {
-        pendingInitBatches_.push_back({ std::move(batch), renderer->GetTotalFrameNumber() });
-    }
+    Initialize(renderer, batch.CommandList(), nullptr);
+    batch.Submit(renderer);
 }
 
 void OceanSimulation::OnHotReload(Renderer* renderer)
@@ -1302,8 +1238,6 @@ void OceanSimulation::Update(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
     {
         return;
     }
-
-    CollectRetiredResources(renderer);
 
     if (!initialized_)
     {

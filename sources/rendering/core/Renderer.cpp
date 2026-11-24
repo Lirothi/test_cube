@@ -10,12 +10,16 @@
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/core/DeferredRelease.h"
+#include "rendering/core/MemoryReport.h"
 #include "rendering/core/DeviceRemovalWatch.h"
 #include "rendering/core/GpuAlloc.h"
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <format>      // R16.10: the idle waits' line
+#include <string_view>
 #include <cstdlib>   // std::abort, for the terminate handler that reports a device removal
 #include <exception> // std::set_terminate
 #include <vector>
@@ -94,6 +98,9 @@ ID3D12GraphicsCommandList4* Renderer::AsCmdList4(ID3D12GraphicsCommandList* cl) 
     return nullptr;
 }
 
+// The key of the mem: line's "retire" provider (R16.1): any unique address.
+static const int g_retireProviderKey = 0;
+
 void Renderer::Shutdown()
 {
     if (shutdown_) {
@@ -111,6 +118,9 @@ void Renderer::Shutdown()
         WaitForPreviousFrame(); // your full-synchronization helper :contentReference[oaicite:2]{index=2}
     }
     rhi_.SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
+    // R16.1: the GPU is idle -- what still waits for its frame goes now, and what the teardown below retires goes at once.
+    render::deferred::Shutdown();
+    render::UnregisterMemoryProvider(&g_retireProviderKey);
     render::StopDeviceRemovalWatch();
     render::ShutdownUploadRingCheck(); // --upload-ring-check: its readback released, its verdict logged
 
@@ -335,6 +345,9 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
         BOOT_SCOPE("BindlessHeap::Init");
         bindlessHeap_.Init(GetDevice());
     }
+    // R16.1: what the deferred-release service holds, on the mem: line.
+    render::RegisterMemoryProvider("retire", &render::deferred::WaitingBytes, &g_retireProviderKey,
+                                   &render::deferred::WaitingCount);
 
     // Texture streaming A2: registry + IO worker; the upload ring is created on first use.
     textureStreaming_ = std::make_unique<streaming::TextureStreaming>();
@@ -879,9 +892,12 @@ void Renderer::BeginFrame() {
         fr->ResetUpload();
     }
 
-    // A6: texture slots retired kFrameCount frames ago are free again -- before the streaming
-    // boundary below renames any (a swap or a fade clamp takes a fresh slot).
-    bindlessHeap_.BeginFrame(totalFrameNumber_);
+    // R16.1: what was retired for the frames in flight goes once the GPU has finished their frame numbers -- among it
+    // the texture slots (A6, R16.2), free again before the streaming boundary below renames any (a swap or a fade
+    // clamp takes a fresh slot).
+    render::deferred::BeginFrame(totalFrameNumber_, [](const void* self, std::uint64_t frameNumber) {
+        return static_cast<const Renderer*>(self)->IsFrameNumberComplete(frameNumber);
+    }, this);
 
     // Texture streaming A2: frame boundary -- release what this slot's fence just retired, adopt
     // last frame's copies, hand out new requests. Before any descriptor of this frame is staged.
@@ -2045,7 +2061,96 @@ ID3D12CommandList* Renderer::RecordEmptyComputeWork()
     return cl;
 }
 
-void Renderer::WaitForPreviousFrame() {
+namespace
+{
+// R16.10: WaitForPreviousFrame by call site. Rare (idle points), so a mutex and a short vector.
+struct GpuIdleSite
+{
+    const char* file = nullptr;
+    std::uint32_t line = 0;
+    std::uint32_t count = 0;
+    std::uint32_t fromGame = 0; // of them, from the game half (a park as well as the idle)
+    double ms = 0.0;
+};
+std::mutex g_gpuIdleMutex;
+std::vector<GpuIdleSite> g_gpuIdleSites;
+std::uint64_t g_gpuIdleSessionCount = 0;
+double g_gpuIdleSessionMs = 0.0;
+
+// "sources/editor/commands/SpawnMeshCommand.cpp" -> "editor/commands/SpawnMeshCommand.cpp" (the compiler's full path).
+std::string_view ShortSourcePath(const char* file)
+{
+    std::string_view p(file ? file : "?");
+    for (const std::string_view root : { std::string_view("sources\\"), std::string_view("sources/") })
+    {
+        const size_t at = p.rfind(root);
+        if (at != std::string_view::npos) { return p.substr(at + root.size()); }
+    }
+    return p;
+}
+
+void NoteGpuIdleWait(const std::source_location& where, bool fromGame, double ms)
+{
+    std::lock_guard<std::mutex> lock(g_gpuIdleMutex);
+    ++g_gpuIdleSessionCount;
+    g_gpuIdleSessionMs += ms;
+    auto it = std::find_if(g_gpuIdleSites.begin(), g_gpuIdleSites.end(), [&](const GpuIdleSite& s) {
+        return s.line == where.line() && std::strcmp(s.file, where.file_name()) == 0;
+    });
+    if (it == g_gpuIdleSites.end())
+    {
+        g_gpuIdleSites.push_back(GpuIdleSite{ where.file_name(), where.line(), 0u, 0u, 0.0 });
+        it = g_gpuIdleSites.end() - 1;
+    }
+    ++it->count;
+    if (fromGame) { ++it->fromGame; }
+    it->ms += ms;
+}
+} // namespace
+
+void Renderer::LogGpuIdleWaits(double seconds)
+{
+    std::vector<GpuIdleSite> sites;
+    std::uint64_t sessionCount = 0;
+    double sessionMs = 0.0;
+    {
+        std::lock_guard<std::mutex> lock(g_gpuIdleMutex);
+        sites.swap(g_gpuIdleSites);
+        sessionCount = g_gpuIdleSessionCount;
+        sessionMs = g_gpuIdleSessionMs;
+    }
+    if (sites.empty()) { return; }
+    std::sort(sites.begin(), sites.end(), [](const GpuIdleSite& a, const GpuIdleSite& b) { return a.ms > b.ms; });
+    std::uint32_t total = 0;
+    double totalMs = 0.0;
+    std::string list;
+    for (const GpuIdleSite& s : sites)
+    {
+        total += s.count;
+        totalMs += s.ms;
+        if (!list.empty()) { list += ", "; }
+        list += std::format("{}:{} x{}{} ({:.1f} ms)", ShortSourcePath(s.file), s.line, s.count,
+                            s.fromGame != 0u ? std::format(" ({} game)", s.fromGame) : std::string(), s.ms);
+    }
+    LOG_INFO(logging::LogCategory::RenderRhi, "gpu idle waits: {} in {:.0f} s, {:.1f} ms (session: {}, {:.1f} ms): {}", total,
+             seconds, totalMs, sessionCount, sessionMs, list);
+}
+
+void Renderer::WaitForPreviousFrame(std::source_location where) {
+    // R16.10: counted and timed by its caller (LogGpuIdleWaits), whatever it waits for.
+    CPU_SCOPE(ProfilerScopes::kGpuIdleWait);
+    const auto waitStart = std::chrono::steady_clock::now();
+    struct Note
+    {
+        const std::source_location& where;
+        bool fromGame;
+        std::chrono::steady_clock::time_point start;
+        ~Note()
+        {
+            NoteGpuIdleWait(where, fromGame,
+                            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        }
+    } note{ where, threading::CurrentRole() == threading::ThreadRole::Game, waitStart };
     // Fully wait for the GPU (for resize/destructor) — step 2: BOTH queues.
     //
     // This is the ONE function every idle path in the engine funnels through: ~50 call sites across

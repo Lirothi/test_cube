@@ -24,6 +24,7 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
+#include "rendering/core/DeferredRelease.h" // R16.10: the water mask's old crossings
 #include "core/logging/Log.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
@@ -1494,8 +1495,9 @@ void OceanRenderable::EnsureWaterMaskLids(Renderer* renderer)
     if (width == 0u || height == 0u) { return; }
     if (waterMaskCrossings_.Get())
     {
-        renderer->WaitForPreviousFrame(); // the frames in flight read the old one
-        waterMaskCrossings_.Reset();
+        // R16.10: the frames in flight read the old one -- to render::deferred, not a GPU idle. Its views are rewritten
+        // in place below: they live in a CPU heap and each frame stages its own copy (StageSrvUavTable).
+        render::deferred::Retire(std::move(waterMaskCrossings_), "water mask crossings");
     }
     D3D12_HEAP_PROPERTIES heap{};
     heap.Type = D3D12_HEAP_TYPE_DEFAULT;

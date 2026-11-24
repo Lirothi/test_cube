@@ -103,6 +103,9 @@ public:
     // The fixed resources are allocated (Prepare made them; Reset frees them).
     bool Held() const { return heap_ != nullptr; }
     void Reset(); // caller has drained the GPU on level/device teardown
+    // R16.10: Reset with no drain -- the textures and the views go to render::deferred (the frames in flight still read
+    // them); the materials are the material manager's.
+    void Retire();
 
     // C1: the generated textures -- the weather map when the seed changes, the formation and cells
     // volumes when the seed or the roughness does (unless files replaced them), the profile LUT when

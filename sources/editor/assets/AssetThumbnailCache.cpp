@@ -1,6 +1,7 @@
 #include "editor/assets/AssetThumbnailCache.h"
 #include "core/vfs/Vfs.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/DeferredRelease.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -746,7 +747,6 @@ namespace
 struct AssetThumbnailCache::GpuJob
 {
     PendingLoad load;
-    std::unique_ptr<UploadBatch> commands;
     Texture2D texture;
     TextureCube cube;
     std::shared_ptr<Mesh> mesh;
@@ -1516,8 +1516,10 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
 
     std::unique_ptr<GpuJob> job = std::make_unique<GpuJob>();
     job->load = std::move(load);
-    job->commands = std::make_unique<UploadBatch>();
-    const bool batchBegun = job->commands->Begin(&renderer);
+    // R16.8: StartGpuJob's own: at Submit its list, allocator and intermediates go to render::deferred, so the job
+    // does not keep it -- its fence says only when the readback is there.
+    UploadBatch commands;
+    const bool batchBegun = commands.Begin(&renderer);
     phases.Mark("batch");
     if (!batchBegun)
     {
@@ -1551,15 +1553,15 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
             : job->load.usage;
         job->texture.SetMemTag(MemTag::Editor);
         job->ok = job->texture.CreateFromFile(&renderer,
-            job->commands->CommandList(), desc, job->commands->KeepAlive());
+            commands.CommandList(), desc, commands.KeepAlive());
         break;
     }
     case PendingLoad::Kind::Mesh:
         if (job->load.meshData)
         {
             job->mesh = preview_->Meshes().CreateFromCpuData(job->load.path,
-                &renderer, *job->load.meshData, job->commands->CommandList(),
-                job->commands->KeepAlive());
+                &renderer, *job->load.meshData, commands.CommandList(),
+                commands.KeepAlive());
             std::size_t materialSlotCount = 1;
             if (job->mesh)
             {
@@ -1584,14 +1586,14 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
                 {
                     job->meshMaterials.push_back(
                         preview_->Materials().GetOrCreateFromGltf(&renderer,
-                            job->commands->CommandList(), job->commands->KeepAlive(),
+                            commands.CommandList(), commands.KeepAlive(),
                             job->load.path, static_cast<int>(slot)));
                 }
                 else
                 {
                     job->meshMaterials.push_back(preview_->Materials().GetOrCreate(
-                        &renderer, job->commands->CommandList(),
-                        job->commands->KeepAlive(), materialName));
+                        &renderer, commands.CommandList(),
+                        commands.KeepAlive(), materialName));
                 }
             }
             job->ok = job->mesh != nullptr;
@@ -1600,15 +1602,15 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         break;
     case PendingLoad::Kind::Cube:
         job->ok = job->cube.CreateFromDDS(&renderer,
-            job->commands->CommandList(), WidenUtf8(job->load.path),
-            job->commands->KeepAlive());
+            commands.CommandList(), WidenUtf8(job->load.path),
+            commands.KeepAlive());
         break;
     case PendingLoad::Kind::Material:
         touchedMaterials.push_back(job->load.presetKey);
         job->material = preview_->Materials().GetOrCreate(&renderer,
-            job->commands->CommandList(), job->commands->KeepAlive(),
+            commands.CommandList(), commands.KeepAlive(),
             job->load.presetKey);
-        job->mesh = preview_->EnsureSphere(renderer, *job->commands);
+        job->mesh = preview_->EnsureSphere(renderer, commands);
         job->ok = job->material != nullptr && job->mesh != nullptr;
         break;
     }
@@ -1631,7 +1633,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         if (job->load.kind == PendingLoad::Kind::Cube)
         {
             job->rendered = preview_->RecordCubeThumbnail(renderer,
-                job->commands->CommandList(), job->cube, kPreviewRenderSize);
+                commands.CommandList(), job->cube, kPreviewRenderSize);
         }
         else
         {
@@ -1645,7 +1647,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
                 materials.push_back(job->material);
             }
             job->rendered = preview_->RecordThumbnail(renderer,
-                job->commands->CommandList(), *job->mesh, materials,
+                commands.CommandList(), *job->mesh, materials,
                 kPreviewRenderSize, {}, 0, nullptr,
                 environment_, environmentExposure_);
             if (environment_ && environment_->GetResource())
@@ -1658,7 +1660,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         if (job->rendered && !job->load.cachePath.empty())
         {
             job->hasReadback = RecordThumbnailReadback(renderer.GetDevice(),
-                job->commands->CommandList(), job->rendered.Get(), job->readback);
+                commands.CommandList(), job->rendered.Get(), job->readback);
         }
     }
 
@@ -1666,7 +1668,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
 
     if (FAILED(renderer.GetDevice()->CreateFence(0, D3D12_FENCE_FLAG_NONE,
             IID_PPV_ARGS(&job->fence))) ||
-        !job->commands->Submit(&renderer))
+        !commands.Submit(&renderer))
     {
         entry->state = State::Failed;
         entry->failureReason = "Thumbnail GPU submission failed.";
@@ -1674,8 +1676,8 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
     }
     if (!renderer.SignalOrDefer(job->fence.Get(), job->fenceValue)) // G7: after its list, at the hand-over
     {
-        // Exceptional device/queue failure: keep upload intermediates alive until
-        // the already submitted command list is known to be finished.
+        // Exceptional device/queue failure: the job's own resources (its target, its readback) go with it on
+        // return -- the already submitted list must have finished with them first.
         renderer.WaitForPreviousFrame();
         entry->state = State::Failed;
         entry->failureReason = "Thumbnail GPU fence failed.";
@@ -1689,7 +1691,6 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
 void AssetThumbnailCache::ProcessPending(Renderer& renderer)
 {
     CPU_SCOPE(ProfilerScopes::kAssetThumbnailProcessPending);
-    FlushRetired(renderer, /*force=*/false);
     CommitPreflightResults(renderer);
     LaunchPreflightJobs();
 
@@ -1729,38 +1730,20 @@ void AssetThumbnailCache::EvictIfNeeded(Renderer& renderer)
     }
 }
 
-// A retired thumbnail is safe to free once every frame that could still hold its ImGui descriptor
-// has retired — kFrameCount frames, the same window BeginFrame waits on. `force` skips the window
-// for shutdown, where the caller has already idled the GPU.
-void AssetThumbnailCache::FlushRetired(Renderer& renderer, bool force)
-{
-    if (retired_.empty()) { return; }
-    const std::uint64_t now = renderer.GetTotalFrameNumber();
-    auto keep = retired_.begin();
-    for (auto it = retired_.begin(); it != retired_.end(); ++it)
-    {
-        if (!force && now < it->retiredAtFrame + render::kFrameCount + 1)
-        {
-            *keep++ = std::move(*it);
-            continue;
-        }
-        // Drop the descriptor BEFORE the resource dies, so the address cannot be recycled under
-        // a live ImGui preview handle.
-        renderer.ReleaseImGuiTextureDescriptors(it->resource.Get());
-        it->resource.Reset();
-    }
-    retired_.erase(keep, retired_.end());
-}
-
 void AssetThumbnailCache::ReleaseEntry(Renderer& renderer, Entry& entry)
 {
     if (entry.resource)
     {
         // An in-flight frame may still reference this through its ImGui preview descriptor, so it
-        // cannot be freed now — but it does not need a GPU idle either. Retire it and let
-        // FlushRetired drop it once its frame has certainly retired.
-        retired_.push_back({ entry.resource, renderer.GetTotalFrameNumber() });
-        entry.resource.Reset();
+        // cannot be freed now — but it does not need a GPU idle either. R16.7b: the deferred-release
+        // service drops it once the GPU has finished those frames (by frame number; it was kFrameCount
+        // frames counted here). The descriptor goes BEFORE the resource dies, so the address cannot be
+        // recycled under a live ImGui preview handle.
+        Renderer* r = &renderer;
+        render::deferred::Retire([r, resource = std::move(entry.resource)]() mutable {
+            r->ReleaseImGuiTextureDescriptors(resource.Get());
+            resource.Reset();
+        }, 0, "thumbnail");
     }
     entry.state = State::Missing;
     entry.failureReason.clear();
@@ -1773,12 +1756,7 @@ void AssetThumbnailCache::ReleaseAll(Renderer& renderer)
         renderer.WaitForPreviousFrame();
         gpuJob_.reset();
     }
-    // Shutdown: one idle already happened (or is about to), so the retire list can go now.
-    if (!retired_.empty())
-    {
-        renderer.WaitForPreviousFrame();
-        FlushRetired(renderer, /*force=*/true);
-    }
+    // What earlier evictions retired goes with render::deferred (drained at Renderer::Shutdown at the latest).
     // Anything a worker decoded for a thumbnail nobody will now ask for.
     decodeTickets_.clear();
     texdecode::Clear();

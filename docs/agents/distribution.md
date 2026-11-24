@@ -72,7 +72,13 @@ distribution: packages, our file system over packages and direct paths, encrypti
   binding tier 3, DXR 1.1 -- `gpu::CheckRequirements`, `--gpu-check` in dev), NVIDIA's signature on the delay-loaded
   `sl.interposer.dll`. Crash reports (`core/diagnostics/CrashHandler.h`): a minidump in `crashes\`, a Fatal line, a box (the engine's own long-lived threads -- the task workers, render, RHI, the physics step and Jolt's jobs, the texture streaming IO -- call `InstallThisThread`: std::terminate's handler is per thread in the MSVC CRT, and each gets the 64 KB stack guarantee);
   `--crash-selftest=av|stack|abort|terminate|throw|purecall|invalidparam|fastfail|overflow` (fastfail: no report --
-  nothing in the process runs; overflow: a `tc::inl_vector` outgrown, below). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any
+  nothing in the process runs; overflow: a `tc::inl_vector` outgrown, below), and the contracts other subsystems own,
+  each through `InvariantFailure` (`core/diagnostics/InvariantFailure.h`: a Fatal naming what broke, abort, the dump,
+  exit 3; `crash::SelfTestArm` in main.cpp): `taskdep` (a dependency given to a submitted task), `taskdep-scheduled`
+  (a dependency on a task that already ran), `graphcap` (a ninth member of a render graph's CL group: the Fatal names
+  the pass) -- docs/architecture_review_plan.md R15. `pass-throw[@<Pass>]` (default
+  Skybox) starts the game as `terminate-frame` does: the pass throws once inside its frame task, which must end the
+  process with `INVARIANT FAILURE: frame task '<Pass>' threw: ...`; a run whose frames go on ends itself with exit 1. `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any
   of the game's message boxes (the gates' way past them).
   **A dev build reports its crashes too** (2026-11-18, the code review; main.cpp, `#if !TC_PACKAGED`): Debug, Release and
   Release_Editor install the same handler -- no message box, minidumps in `logs/crashes` (the newest 10 kept,

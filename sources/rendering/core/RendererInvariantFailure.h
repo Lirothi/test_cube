@@ -1,7 +1,5 @@
 #pragma once
 
-// Shared fail-fast for renderer invariant violations that would lose,
-// duplicate, corrupt, or mis-order GPU work. Active in EVERY build config —
-// never assert-only, never a silent drop. Safe to call from render-pass worker
-// tasks: it does not throw (the task system swallows task exceptions).
-[[noreturn]] void RendererInvariantFailure(const char* msg);
+// Moved to core/diagnostics/InvariantFailure.h (docs/architecture_review_plan.md R15.1); this forwarder goes when the
+// callers include the new header.
+#include "core/diagnostics/InvariantFailure.h"

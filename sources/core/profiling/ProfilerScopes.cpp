@@ -75,6 +75,7 @@ const Profiler::ScopeNameKey kGameHandOver = Profiler::RegisterTraceLiteral(L"Ga
 const Profiler::ScopeNameKey kRhiThreadOp = Profiler::RegisterTraceLiteral(L"RHIThread Op");
 const Profiler::ScopeNameKey kRhiThreadWait = Profiler::RegisterTraceLiteral(L"Wait RHI Thread");
 const Profiler::ScopeNameKey kGameParkRender = Profiler::RegisterTraceLiteral(L"Game: Park Render");
+const Profiler::ScopeNameKey kGpuIdleWait = Profiler::RegisterTraceLiteral(L"Renderer: GPU idle wait");
 const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral(L"Pass_PrologueClear");
 const Profiler::ScopeNameKey kPassTextureStreaming = Profiler::RegisterTraceLiteral(L"Pass_TextureStreaming");
 const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral(L"Pass_ObjectCompute");

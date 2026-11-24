@@ -370,7 +370,7 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
             }
             probe->ok.store(ok, std::memory_order_relaxed);
             probe->done.store(true, std::memory_order_release);
-        }).detach();
+        }).detach(); // detached-ok: the try around llmclient::Get above; the rest does not throw
     }
 
 
@@ -620,7 +620,7 @@ void LlmIntentSource::SendPending()
         request->promptTokens = reply.promptTokens;
         request->state.store(static_cast<int>(IntentParseState::Ready));
     };
-    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach(); // detached-ok: RunRequestWorker catches
 }
 
 IntentParseState LlmIntentSource::Poll(EditorIntent& outIntent, std::string& outWhyNot)
@@ -816,7 +816,7 @@ bool LlmIntentSource::BeginWarmup(const EditorIntentWorld& world)
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(),
             response.ok ? "" : " (FAILED -- the first phrase will pay for the prefill)");
     };
-    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach(); // detached-ok: RunRequestWorker catches
     return true;
 }
 
@@ -1152,7 +1152,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
         request->promptTokens = promptTokens;
         request->state.store(static_cast<int>(IntentParseState::Ready));
     };
-    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach(); // detached-ok: RunRequestWorker catches
 }
 
 std::string LlmIntentSource::FreeformPartial() const
@@ -1309,7 +1309,7 @@ void LlmIntentSource::RequestDeveloperNote(const std::string& phrase, const Edit
                 "intent model: API request noted in {}", path);
         }
     };
-    std::thread([request, work]() { RunRequestWorker(request, work); }).detach();
+    std::thread([request, work]() { RunRequestWorker(request, work); }).detach(); // detached-ok: RunRequestWorker catches
 }
 
 std::string LlmIntentSource::StatusLine() const

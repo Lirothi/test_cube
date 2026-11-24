@@ -1,6 +1,7 @@
 #include "rendering/descriptors/BindlessHeap.h"
 
 #include "core/logging/Log.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
 
 #include <algorithm>
@@ -60,17 +61,16 @@ void BindlessHeap::Shutdown()
     if (heap_)
     {
         LOG_INFO(logging::LogCategory::Render, "[bindless] shutdown: {} texture slots live, {} free, {} retired, high water {}",
-                 live_, free_.size(), retired_.size(), nextSlot_ - kTextureBase - 1u);
+                 live_, free_.size(), retired_, nextSlot_ - kTextureBase - 1u);
     }
     instance_ = nullptr;
     heap_.Reset();
     device_ = nullptr;
     incr_ = 0;
     free_.clear();
-    retired_.clear();
+    retired_ = 0;
     nextSlot_ = kTextureBase + 1;
     live_ = 0;
-    frameNo_ = 0;
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE BindlessHeap::Cpu(UINT index) const
@@ -106,7 +106,7 @@ UINT BindlessHeap::AllocateSlot(D3D12_CPU_DESCRIPTOR_HANDLE src)
         if (!exhaustedLogged_)
         {
             LOG_ERROR(logging::LogCategory::Render, "[bindless] texture slots exhausted ({} live, {} retired); textures now rewrite their slot in place",
-                      live_, retired_.size());
+                      live_, retired_);
             exhaustedLogged_ = true;
         }
         return kInvalidIndex;
@@ -118,10 +118,20 @@ UINT BindlessHeap::AllocateSlot(D3D12_CPU_DESCRIPTOR_HANDLE src)
 
 void BindlessHeap::RetireSlot(UINT index)
 {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (!heap_ || index == kInvalidIndex || index <= kTextureBase || index >= kCapacity) { return; }
-    retired_.push_back(Retired{ index, frameNo_ + kFrameCount });
-    if (live_ > 0) { --live_; }
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (!heap_ || index == kInvalidIndex || index <= kTextureBase || index >= kCapacity) { return; }
+        if (live_ > 0) { --live_; }
+        ++retired_;
+    }
+    // R16.2: back on the free list once the GPU has finished every frame that may index it -- by frame NUMBER, through
+    // the deferred-release service (it was kFrameCount frames counted here). Outside mtx_: at shutdown the service
+    // runs the step at once, and the step takes mtx_.
+    deferred::Retire([this, index]() {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (retired_ > 0) { --retired_; }
+        if (heap_) { free_.push_back(index); }
+    }, 0, "bindless slot");
 }
 
 void BindlessHeap::RewriteSlot(UINT index, D3D12_CPU_DESCRIPTOR_HANDLE src)
@@ -131,21 +141,13 @@ void BindlessHeap::RewriteSlot(UINT index, D3D12_CPU_DESCRIPTOR_HANDLE src)
     device_->CopyDescriptorsSimple(1, Cpu(index), src, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
-void BindlessHeap::BeginFrame(uint64_t frameNo)
-{
-    std::lock_guard<std::mutex> lock(mtx_);
-    frameNo_ = frameNo;
-    for (const Retired& r : retired_) { if (r.frame <= frameNo) { free_.push_back(r.index); } }
-    std::erase_if(retired_, [frameNo](const Retired& r) { return r.frame <= frameNo; });
-}
-
 BindlessHeap::Stats BindlessHeap::GetStats() const
 {
     std::lock_guard<std::mutex> lock(mtx_);
     Stats s;
     s.slotsUsed = live_;
     s.slotsFree = static_cast<UINT>(free_.size());
-    s.slotsRetired = static_cast<UINT>(retired_.size());
+    s.slotsRetired = retired_;
     s.slotsCapacity = kCapacity - kTextureBase - 1u;
     return s;
 }

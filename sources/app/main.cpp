@@ -30,6 +30,7 @@
 #include "core/memory/MemTrace.h"
 #include "rendering/core/MemGates.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
+#include "core/threading/ThreadRole.h" // --thread-check-selftest (R15.5)
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/core/BarrierTranslation.h"
@@ -39,6 +40,8 @@
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
+#include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (R15.3), graphcap (R15.4)
+#include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (R16.1)
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "rendering/meshes/LodSwitchReport.h" // --lod-report
 #include "rendering/streaming/TextureStreamingIo.h" // --texstream-selftest
@@ -388,11 +391,23 @@ int WINAPI WinMain(
             // No early exit: the game starts as always (and installs the handlers as always), and its first frame throws
             // after the renderer's BeginFrame (crash::SelfTestFrame, App.cpp) -- through the renderer's terminate handler.
             crash::ArmSelfTestInFrame();
+        } else if (arm == "pass-throw" || arm.rfind("pass-throw@", 0) == 0) {
+            // No early exit either: a render pass throws once inside its frame task (R15.3) -- a Fatal naming the pass
+            // and the dump; render::PassThrowSelfTestFrame (App.cpp) ends a run that goes on instead.
+            if (!render::ArmPassThrowSelfTest(arm.size() > 11 ? std::string_view(arm).substr(11) : std::string_view())) {
+                return 2;
+            }
         } else if (!arm.empty()) {
             crash::Options options;
             options.dumpFolder = build::Packaged() ? L"crashes" : L"logs/crashes";
             options.messageBox = build::Packaged();
-            return crash::SelfTest(arm, options);
+            // Contracts other subsystems own, each broken once (docs/architecture_review_plan.md R15).
+            static constexpr crash::SelfTestArm kMoreArms[] = {
+                { "taskdep", &CrashSelfTestTaskDependencyAfterSubmit },
+                { "taskdep-scheduled", &CrashSelfTestTaskDependencyOnScheduled },
+                { "graphcap", &render::CrashSelfTestGraphCap },
+            };
+            return crash::SelfTest(arm, options, kMoreArms);
         }
     }
 #if !TC_PACKAGED
@@ -551,9 +566,23 @@ int WINAPI WinMain(
     }
 #endif
 
+    // "--thread-check-selftest" (docs/architecture_review_plan.md R15.5): one thread-role violation planted on purpose -- a
+    // render-half check made from the game role. Exit 0 when this build's checks are compiled in (Debug, or
+    // /p:TcThreadChecks=true) and reported it: a "thread role:" Error and "thread roles: 1 violations"; exit 1 when they
+    // are compiled out (Release_Editor without the switch -- the switch's control arm) or missed it.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--thread-check-selftest") != nullptr) {
+        threading::RoleScope gameRole(threading::ThreadRole::Game);
+        TC_CHECK_RENDER("--thread-check-selftest: a render-half call planted on the game role");
+        threading::LogRoleCheckSummary();
+        const bool reported = threading::RoleViolationCount() == 1u;
+        LOG_INFO(logging::LogCategory::Core, "thread-check self-test: checks {}, the planted violation {}",
+                 TC_THREAD_CHECKS_ON ? "compiled in" : "compiled out", reported ? "reported" : "NOT reported");
+        return reported ? 0 : 1;
+    }
+
     // "--tasksystem-stress" runs the task-system stress harness instead of the
     // app; exit code is the number of failed checks. With "--stress-overflow"
-    // the process is expected to abort (dependents_ overflow death test).
+    // the process is expected to end through the dependents_ fan-out invariant (exit 3).
     if (lpCmdLine && std::strstr(lpCmdLine, "--tasksystem-stress") != nullptr) {
         const bool overflow = std::strstr(lpCmdLine, "--stress-overflow") != nullptr;
         return RunTaskSystemStress(overflow);
@@ -692,6 +721,15 @@ int WINAPI WinMain(
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
     ParseTimeOfDayArgs(lpCmdLine);
+    // "--retire-selftest[=control|upload]" (docs/architecture_review_plan.md R16.1, R16.8): the deferred-release
+    // service's own proof --
+    // the game starts as always, a buffer is retired on its 20th frame, the verdict is the exit code
+    // (rendering/diagnostics/RetireSelfTest.h).
+    if (lpCmdLine && std::strstr(lpCmdLine, "--retire-selftest") != nullptr) {
+        const std::string arm = ExtractArgValue(lpCmdLine, "--retire-selftest");
+        render::ArmRetireSelfTest(arm == "control" ? render::RetireSelfTestMode::Control
+                                  : arm == "upload" ? render::RetireSelfTestMode::Upload : render::RetireSelfTestMode::Retire);
+    }
     // "--rt-audit[=<seconds>]" and "--rt-audit-selftest": the render thread's audit (app/diagnostics/RtAudit.h). Above
     // the scene-stress branch: the audit rides the harness's level churn too (its verdict at the harness's end).
     if (lpCmdLine && std::strstr(lpCmdLine, "--rt-audit")) {
@@ -1955,6 +1993,7 @@ int WINAPI WinMain(
     // A --mem-readout's failing series, else an --rt-audit's moved fields; 0 otherwise.
     const int memExit = memgate::ExitCode();
     if (memExit != 0) { return memExit; }
+    if (const int retireExit = render::RetireSelfTestExitCode(); retireExit >= 0) { return retireExit; } // --retire-selftest
     if (g_scalabilityCheckExit != 0) { return g_scalabilityCheckExit; } // --scalability-check's failed reads
     return rtaudit::ExitCode();
 }

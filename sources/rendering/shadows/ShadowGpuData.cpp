@@ -25,6 +25,7 @@
 #include "rendering/core/RasterSettings.h"       // A6: raster.bindless gates the merged path
 #include "rendering/core/GraphicsDevice.h"       // GbvEnabled: GBV takes the per-group path (id=1044)
 #include "rendering/core/GpuAlloc.h"
+#include "rendering/core/DeferredRelease.h"      // R16.9: an outgrown ring, the old mega buffers
 #include <chrono>                                // A6: the throttled readout
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
@@ -54,16 +55,24 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::Ring::Srv(UINT f) const
 
 void ShadowGpuData::ReleaseRing(Renderer* renderer, Ring& ring)
 {
+    (void)renderer;
     if (ring.buffer)
     {
-        (void)renderer; // the wrapper unregisters itself
+        // R16.9: all kFrameCount regions live in one buffer, and the frames in flight read theirs -- an outgrown ring
+        // goes to the deferred-release service (released, and unregistered, once their frames are done), never at once.
+        // Today the rings grow in a caster-set rebuild's frame, after UpdateForFrame's wait; a growth without that wait
+        // is now safe as well.
         ring.buffer->Unmap(0, nullptr);
-        ring.buffer.Reset();
+        render::deferred::Retire(std::move(ring.buffer), "shadow ring");
     }
     ring.mapped = nullptr;
     ring.capacity = 0;
     ring.stride = 0;
-    ring.srvHeap.Reset();
+    if (ring.srvHeap)
+    {
+        // A CPU-only heap (its views are copied into the frame's table when recorded); it goes with its buffer anyway.
+        render::deferred::Retire([heap = std::move(ring.srvHeap)]() mutable { heap.Reset(); }, 0, "shadow ring views");
+    }
     ring.srvHandles.fill({});
 }
 
@@ -169,11 +178,9 @@ bool ShadowGpuData::EnsureRing(Renderer* renderer, Ring& ring, size_t elements, 
 
 void ShadowGpuData::ReleaseUavRing(Renderer* renderer, UavRing& ring)
 {
-    if (ring.buffer)
-    {
-        (void)renderer; // the wrapper unregisters itself
-        ring.buffer.Reset();
-    }
+    (void)renderer;
+    // R16.9: as ReleaseRing -- the frames in flight write and read their regions of the outgrown buffer.
+    render::deferred::Retire(std::move(ring.buffer), "shadow uav ring");
     ring.regionBytes = 0;
 }
 
@@ -2741,11 +2748,16 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         newGiInstances != giFoldableInstances_ ||
         newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
-        // Rebuild re-creates the rings it outgrows (EnsureRing / EnsureUavRing release the old buffer AT ONCE), and
-        // all kFrameCount regions live in one buffer: the frames still in flight -- on either queue -- read the old
-        // one. Wait for them first, as Scene::RebuildShadowCasters does. Without it, switching the 104 bulbs of
-        // wind_test's "Lamps" group on mid-session freed ShadowGpuData.Bounds under the GPU: a DRED page fault on
-        // the freed buffer, DEVICE_HUNG about 1 time in 3 early in a session with async compute (2026-10-27).
+        // Rebuild re-creates the rings it outgrows, and all kFrameCount regions live in one buffer: the frames still
+        // in flight -- on either queue -- read the old one. Wait for them first, as Scene::RebuildShadowCasters does.
+        // Without it, switching the 104 bulbs of wind_test's "Lamps" group on mid-session freed ShadowGpuData.Bounds
+        // under the GPU: a DRED page fault on the freed buffer, DEVICE_HUNG about 1 time in 3 early in a session with
+        // async compute (2026-10-27). Since R16.9 an outgrown ring goes to render::deferred, but the wait stays: a ring
+        // that still FITS is written in place -- instances_, bounds_ and casterMeta_ in every region (the priming),
+        // casterGroup_, perGroup_, groupMask_ and groupLodMegaBuf_ in their static region 0 -- under the frames that
+        // read it, and Scene::RebuildShadowMegaBuffer re-makes the mega buffers right after on the strength of this
+        // wait (its copies take the mesh buffers' implicit promotion). Dropping it needs fresh buffers for those
+        // writes first (R16.10's table).
         // Mid-session caster-set changes are editor edits; the first build has nothing in flight to wait for.
         // The Rebuild drops the mega buffers too, and only an upload batch makes them: Scene takes the request right
         // after this call (TakeMegaRebuildRequest). Until 2026-10-30 nothing did -- after the owner's "Lamps" switch-on
@@ -4846,7 +4858,9 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         // Reset now unregisters as well as frees — the previous ComPtr::Reset() dropped the
         // prior level's buffer while leaving its registry entry behind (measured: net 2 -> 5).
-        out.Reset(); // safe: EnsureMegaBuffer runs GPU-idle at load
+        // EnsureMegaBuffer runs GPU-idle (a load, or after UpdateForFrame's wait); the old buffer goes to the service
+        // anyway (R16.9), so a caller without that wait cannot free it under a frame in flight.
+        render::deferred::Retire(std::move(out), "shadow mega buffer");
         D3D12_HEAP_PROPERTIES heap{};
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC desc{};

@@ -56,7 +56,10 @@ inline bool GameParkedOrSync() noexcept
 // nothing -- on one thread the render half is the game thread's own next phase. May rethrow what that frame threw.
 using ParkRenderHook = void (*)();
 using RenderInFlightHook = bool (*)();
-void SetParkRenderHook(ParkRenderHook hook, RenderInFlightHook inFlight = nullptr) noexcept;
+// inFlight: the game thread's question (RenderBusyForGame; a task asking it is an Error of its own). inFlightAnyThread:
+// the same state for any thread, quietly (RenderThreadInFlight).
+void SetParkRenderHook(ParkRenderHook hook, RenderInFlightHook inFlight = nullptr,
+                       RenderInFlightHook inFlightAnyThread = nullptr) noexcept;
 void ParkRender();
 // Plan G8b: a game-half call that reaches what the render thread's frame in flight uses (a renderer setter, a
 // subsystem the editor mutates) waits for that frame first -- correct by construction, at the price of that frame's
@@ -66,6 +69,25 @@ void LogGameWaits(double seconds);
 // On the game thread: the render thread is drawing a frame now (the UI runs beside it), so a per-frame-slot resource
 // the UI picks by Renderer::GetCurrentFrameIndex may still be the GPU's. False on one thread.
 bool RenderBusyForGame();
+// The render thread is drawing a frame now, asked from any thread and any role (false with no render thread:
+// frame.renderThread 0).
+bool RenderThreadInFlight() noexcept;
+// Nothing of the frame runs beside this call (docs/architecture_review_plan.md R15.6): the hand-over (Sync), the game or
+// the render role while the render thread draws no frame (between frames, the game half with it parked, the render
+// half's upkeep, one thread), or the render thread's own body outside a task -- the frame's sanctioned pre-graph point
+// (an ocean's caustics atlas loads there). A task of a frame in flight is not. With frame.renderThread 0 the frame's own
+// workers cannot be told apart from the frame's thread: only the render-thread mode checks them.
+bool FrameQuiet() noexcept;
+// RenderThread::Main marks its thread; TaskSystem::RunTask marks a task's body (FrameQuiet tells the two apart).
+void MarkRenderThread() noexcept;
+class TaskBodyScope
+{
+public:
+    TaskBodyScope() noexcept;
+    ~TaskBodyScope();
+    TaskBodyScope(const TaskBodyScope&) = delete;
+    TaskBodyScope& operator=(const TaskBodyScope&) = delete;
+};
 
 void ReportRoleViolation(const char* expected, const char* what, const char* file, int line) noexcept;
 std::uint32_t RoleViolationCount() noexcept;
@@ -74,7 +96,15 @@ std::uint32_t RoleViolationCount() noexcept;
 void LogRoleCheckSummary() noexcept;
 } // namespace threading
 
-#if defined(_DEBUG)
+// Where the checks are compiled in: Debug always, and any configuration built with /p:TcThreadChecks=true -- the define
+// TC_THREAD_CHECKS=1 (docs/architecture_review_plan.md R15.5, the owner's answer В7: Release_Editor behind a build switch).
+#if defined(_DEBUG) || (defined(TC_THREAD_CHECKS) && TC_THREAD_CHECKS)
+#define TC_THREAD_CHECKS_ON 1
+#else
+#define TC_THREAD_CHECKS_ON 0
+#endif
+
+#if TC_THREAD_CHECKS_ON
 #define TC_CHECK_THREAD(condition, expected, what)                                                 \
     do {                                                                                           \
         if (!(condition)) {                                                                        \
@@ -94,3 +124,7 @@ void LogRoleCheckSummary() noexcept;
 // The scene's membership, the renderer's targets: the hand-over, or the game half with the render half parked.
 #define TC_CHECK_GAME_PARKED_OR_SYNC(what)                                                         \
     TC_CHECK_THREAD(::threading::GameParkedOrSync(), "sync, or game with the render half parked", what)
+// Shared state of the frame without a lock (texture streaming's registry, the mesh cache, a material's PSO): touched
+// while no frame is being drawn (FrameQuiet).
+#define TC_CHECK_FRAME_QUIET(what)                                                                 \
+    TC_CHECK_THREAD(::threading::FrameQuiet(), "sync, or game/render with no frame in flight", what)

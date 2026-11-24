@@ -5,6 +5,7 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
@@ -49,6 +50,20 @@ void DdgiVolume::Reset()
     spacing_ = 0.0f;
     tracedGeneration_ = 0;
     // The new resources start zeroed: no probe carries the valid bit, whatever the generation.
+}
+
+void DdgiVolume::Retire()
+{
+    render::deferred::Retire(std::move(rays_), "gi probe volume");
+    render::deferred::Retire(std::move(irradiance_), "gi probe volume");
+    render::deferred::Retire(std::move(depth_), "gi probe volume");
+    render::deferred::Retire(std::move(state_), "gi probe volume");
+    render::deferred::Retire(std::move(usage_), "gi probe volume");
+    if (heap_)
+    {
+        render::deferred::Retire([heap = std::move(heap_)]() mutable { heap.Reset(); }, 0, "gi probe volume views");
+    }
+    Reset(); // what is left: the (empty) handles, the materials' references, the state
 }
 
 void DdgiVolume::Prepare(Renderer* renderer)

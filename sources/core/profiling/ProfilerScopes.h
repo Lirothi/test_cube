@@ -84,6 +84,7 @@ extern const Profiler::ScopeNameKey kGameHandOver;     // G8: with a render thre
 extern const Profiler::ScopeNameKey kRhiThreadOp;      // G10b: one queue operation on the RHI thread (a frame's submit)
 extern const Profiler::ScopeNameKey kRhiThreadWait;    // G10b: a thread waiting for the RHI thread's ops
 extern const Profiler::ScopeNameKey kGameParkRender;   // G8b: threading::WaitRenderForGame parking the render thread
+extern const Profiler::ScopeNameKey kGpuIdleWait;      // R16.10: Renderer::WaitForPreviousFrame, from any thread
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassTextureStreaming;
 extern const Profiler::ScopeNameKey kPassObjectCompute;

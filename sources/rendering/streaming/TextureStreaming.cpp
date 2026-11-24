@@ -5,10 +5,12 @@
 #include <string>
 
 #include "core/logging/Log.h"
+#include "core/threading/ThreadRole.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Texture2D.h"
 #include "rendering/core/GpuAlloc.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderGraph.h"
@@ -52,7 +54,7 @@ void TextureStreaming::Init(ID3D12Device* device)
     manager_.Init();
     // Cumulative retired bytes only: what the streamed textures hold is the `tex.stream` tag of the
     // GPU census, which replaced the "tex" column (memory profiling plan M1c).
-    render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, &retire_);
+    render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, this);
     lastReadout_ = std::chrono::steady_clock::now();
     start_ = lastReadout_;
 }
@@ -70,7 +72,6 @@ void TextureStreaming::Shutdown()
     for (auto& s : swaps_) { s->newRes.Reset(); }
     swaps_.clear();
     orphanIo_.clear();
-    retire_.ReleaseAll();
     ring_.Shutdown();
     for (Entry& e : entries_)
     {
@@ -79,13 +80,16 @@ void TextureStreaming::Shutdown()
     entries_.clear();
     freeEntries_.clear();
     registered_ = 0;
-    render::UnregisterMemoryProvider(&retire_);
+    render::UnregisterMemoryProvider(this);
     device_ = nullptr;
 }
 
 int TextureStreaming::Register(Texture2D* tex)
 {
     if (!device_ || !tex) { return -1; }
+    // R15.6: entries_ / freeEntries_ have no lock -- the frame boundary (OnFrameBegin) and the manager's tick in the
+    // render half walk them. A texture joins while nothing of the frame runs beside it.
+    TC_CHECK_FRAME_QUIET("TextureStreaming::Register");
     std::uint32_t idx;
     if (!freeEntries_.empty()) { idx = freeEntries_.back(); freeEntries_.pop_back(); }
     else { idx = static_cast<std::uint32_t>(entries_.size()); entries_.emplace_back(); }
@@ -112,6 +116,7 @@ void TextureStreaming::Unregister(Texture2D* tex)
     if (idx < 0 || static_cast<std::size_t>(idx) >= entries_.size()) { return; }
     Entry& e = entries_[static_cast<std::size_t>(idx)];
     if (e.tex != tex) { return; }
+    TC_CHECK_FRAME_QUIET("TextureStreaming::Unregister"); // R15.6: as Register
     e.tex = nullptr;
     ++e.gen;      // any swap still pointing here fails Alive_ and is dropped at the next boundary
     e.swap = nullptr;
@@ -220,7 +225,6 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
         frameHadSwaps_ = false;
     }
     ring_.ReleaseCompleted(frameNo);
-    retire_.Release(frameNo);
     std::erase_if(orphanIo_, [](const std::unique_ptr<IoRequest>& r) { return r->Finished(); });
 
     for (std::size_t i = 0; i < swaps_.size();)
@@ -240,7 +244,16 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
                     const UINT64 oldBytes = tex->GetResidentBytes();
                     GpuResource old;
                     tex->AdoptResource(renderer, std::move(s->newRes), s->newResident, old);
-                    retire_.Retire(std::move(old), oldBytes, frameNo + render::kFrameCount);
+                    // R16.3: the old resource goes once the GPU has finished every frame that read it, by frame
+                    // number (the deferred-release service), not kFrameCount frames counted here.
+                    retiredBytes_.fetch_add(oldBytes, std::memory_order_relaxed);
+                    retiredCount_.fetch_add(1, std::memory_order_relaxed);
+                    auto held = std::make_shared<GpuResource>(std::move(old));
+                    render::deferred::Retire([this, held, oldBytes]() {
+                        held->Reset();
+                        retiredBytes_.fetch_sub(oldBytes, std::memory_order_relaxed);
+                        retiredCount_.fetch_sub(1, std::memory_order_relaxed);
+                    }, oldBytes, "tex.stream");
                     ++swapsDone_;
                     frameHadSwaps_ = true;
                     e.swap = nullptr;
@@ -574,7 +587,7 @@ void TextureStreaming::Readout_(std::uint64_t frameNo)
     const auto now = std::chrono::steady_clock::now();
     if (now - lastReadout_ < std::chrono::seconds(5)) { return; }
     lastReadout_ = now;
-    if (registered_ == 0 && swaps_.empty() && retire_.Count() == 0) { return; }
+    if (registered_ == 0 && swaps_.empty() && retiredCount_.load(std::memory_order_relaxed) == 0) { return; }
     std::size_t waitIo = 0, ready = 0, copied = 0;
     for (const auto& s : swaps_)
     {
@@ -587,7 +600,7 @@ void TextureStreaming::Readout_(std::uint64_t frameNo)
     LOG_INFO(logging::LogCategory::Render,
         "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} left behind {} ({} MB) | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | fading {} | calc {:.3f} ms",
         frameNo, registered_, waitIo, ready, copied, ring_.BytesInUse() >> 10, ring_.Capacity() >> 10,
-        retire_.Count(), retire_.Bytes() >> 10, swapsDone_, swapsFailed_, io_.BytesRead() >> 20,
+        retiredCount_.load(std::memory_order_relaxed), RetiredBytes() >> 10, swapsDone_, swapsFailed_, io_.BytesRead() >> 20,
         avgMs, dtMaxQuietMs_, dtMaxSwapMs_, swapFrames_,
         m.poolBytes >> 20, m.budgetBytes >> 20, m.usedBytes >> 20, m.wantedBytes >> 20,
         m.leftBehind, m.leftBehindBytes >> 20,

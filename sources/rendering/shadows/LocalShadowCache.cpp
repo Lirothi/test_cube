@@ -6,6 +6,7 @@
 
 #include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
@@ -90,9 +91,16 @@ void LocalShadowCache::EnsurePool(ID3D12Device* dev, ResourceDeclarations decls,
 {
     pages = std::min(pages, kLocalShadowCacheMaxPagesLimit);
     if (pages == pages_ && pageSize == pageSize_ && (pages == 0u || pool_.Get())) { return; }
-    pool_.Reset();
-    dsvHeap_.Reset();
-    srvHeap_.Reset();
+    // R16.9: the old pool to the deferred-release service, not at once: Scene::ReconcileShadowMode calls this at a
+    // GPU-idle point today, and a caller without one cannot free it under a frame in flight. Its views go with it.
+    render::deferred::Retire(std::move(pool_), "local shadow cache pool");
+    if (dsvHeap_ || srvHeap_)
+    {
+        render::deferred::Retire([dsv = std::move(dsvHeap_), srv = std::move(srvHeap_)]() mutable {
+            dsv.Reset();
+            srv.Reset();
+        }, 0, "local shadow cache views");
+    }
     pages_ = 0;
     pageSize_ = pageSize;
     const size_t emptied = entries_.size();

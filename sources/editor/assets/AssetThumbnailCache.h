@@ -180,8 +180,6 @@ private:
     void StartGpuJob(Renderer& renderer);
     void EvictIfNeeded(Renderer& renderer);
     void ReleaseEntry(Renderer& renderer, Entry& entry);
-    // Free thumbnails retired at least kFrameCount frames ago (force = at shutdown, after an idle).
-    void FlushRetired(Renderer& renderer, bool force);
 
     std::unordered_map<std::string, Entry> entries_;
     std::deque<PendingLoad> queue_;
@@ -190,17 +188,10 @@ private:
     std::shared_ptr<editor_thumbnail_detail::PreviewInitState> previewInitState_;
     std::unique_ptr<GpuJob> gpuJob_;
 
-    // Evicted thumbnails wait here instead of idling the GPU. ReleaseEntry used to call
-    // WaitForPreviousFrame() per victim, and once the cache is full EVERY new thumbnail evicts one
-    // — so scrolling a folder meant a full pipeline flush per icon, on the main thread. The ComPtr
-    // keeps the resource alive until its frame is provably retired, which is the same guarantee
-    // the idle was buying.
-    struct RetiredThumbnail
-    {
-        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        std::uint64_t retiredAtFrame = 0;
-    };
-    std::vector<RetiredThumbnail> retired_;
+    // Evicted thumbnails go to render::deferred (ReleaseEntry, R16.7b) instead of idling the GPU. ReleaseEntry used to
+    // call WaitForPreviousFrame() per victim, and once the cache is full EVERY new thumbnail evicts one — so scrolling a
+    // folder meant a full pipeline flush per icon, on the main thread. The service keeps the resource alive until its
+    // frame number has completed, which is the same guarantee the idle was buying.
 
     // A queued load's material textures are decoded on a WORKER; the job must not start until
     // that finishes. Without this gate the prewarm was pure decoration: the decode takes seconds

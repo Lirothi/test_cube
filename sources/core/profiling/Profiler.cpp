@@ -14,6 +14,7 @@
 #include <limits>
 #include "third_party/robin_hood.h"
 #include "core/logging/Log.h"
+#include "core/threading/ThreadRole.h"
 #include "rendering/core/GpuAlloc.h"
 #include <Windows.h>
 
@@ -372,6 +373,9 @@ Profiler::ScopedGpu::~ScopedGpu() {
 #endif
 
 void Profiler::BeginFrame(uint64_t frameNo) {
+    // R15.7 (docs/architecture_review_plan.md 10.16, item 1): the frame's boundaries are drawn while the render thread
+    // draws nothing -- otherwise its scopes of the frame before land in this one, and the GPU samples swap under it.
+    TC_CHECK_THREAD(!threading::RenderThreadInFlight(), "the render thread idle", "Profiler::BeginFrame");
     if (!GetEnabled()) { return; }
     std::lock_guard<std::mutex> lock(mtx_);
     frameNo_ = frameNo;
@@ -404,6 +408,7 @@ void Profiler::BeginFrame(uint64_t frameNo) {
 
 void Profiler::EndFrame() {
     MEM_SCOPE(MemTag::Profiler); // memory profiling M3
+    TC_CHECK_THREAD(!threading::RenderThreadInFlight(), "the render thread idle", "Profiler::EndFrame"); // R15.7
     if (!frameOpen_) { return; }
     auto& tasks = TaskSystem::Get();
     tasks.Wait(overlayTask_);

@@ -49,6 +49,9 @@ namespace
 {
 std::atomic<ParkRenderHook> g_parkRenderHook{nullptr};
 std::atomic<RenderInFlightHook> g_renderInFlightHook{nullptr};
+std::atomic<RenderInFlightHook> g_renderInFlightAnyHook{nullptr}; // RenderThreadInFlight (R15.6)
+thread_local bool t_isRenderThread = false; // MarkRenderThread
+thread_local int t_taskDepth = 0;          // TaskBodyScope: inside a task's body (helping counts too)
 
 struct GameWaitSite
 {
@@ -59,11 +62,34 @@ std::mutex g_gameWaitMutex;
 std::vector<GameWaitSite> g_gameWaits;
 } // namespace
 
-void SetParkRenderHook(ParkRenderHook hook, RenderInFlightHook inFlight) noexcept
+void SetParkRenderHook(ParkRenderHook hook, RenderInFlightHook inFlight, RenderInFlightHook inFlightAnyThread) noexcept
 {
     g_parkRenderHook.store(hook, std::memory_order_release);
     g_renderInFlightHook.store(inFlight, std::memory_order_release);
+    g_renderInFlightAnyHook.store(inFlightAnyThread, std::memory_order_release);
 }
+
+bool RenderThreadInFlight() noexcept
+{
+    const RenderInFlightHook inFlight = g_renderInFlightAnyHook.load(std::memory_order_acquire);
+    return inFlight && inFlight();
+}
+
+bool FrameQuiet() noexcept
+{
+    switch (t_role)
+    {
+    case ThreadRole::Sync: return true;
+    case ThreadRole::Game: return RenderParked() || !RenderThreadInFlight();
+    case ThreadRole::Render: return !RenderThreadInFlight() || (t_isRenderThread && t_taskDepth == 0);
+    default: return false;
+    }
+}
+
+void MarkRenderThread() noexcept { t_isRenderThread = true; }
+
+TaskBodyScope::TaskBodyScope() noexcept { ++t_taskDepth; }
+TaskBodyScope::~TaskBodyScope() { --t_taskDepth; }
 
 void ParkRender()
 {
@@ -155,7 +181,7 @@ std::uint32_t RoleViolationCount() noexcept { return g_violations.load(std::memo
 
 void LogRoleCheckSummary() noexcept
 {
-#if defined(_DEBUG)
+#if TC_THREAD_CHECKS_ON
     const std::uint32_t count = RoleViolationCount();
     std::size_t sites = 0;
     {
@@ -172,7 +198,8 @@ void LogRoleCheckSummary() noexcept
                     count, sites);
     }
 #else
-    LOG_DEBUG(logging::LogCategory::Core, "thread roles: checks compiled out (Release)");
+    // Info, not Debug (dropped outside Debug): a gate that reads "thread roles:" learns why there is no verdict.
+    LOG_INFO(logging::LogCategory::Core, "thread roles: checks compiled out (no _DEBUG, built without /p:TcThreadChecks=true)");
 #endif
 }
 } // namespace threading

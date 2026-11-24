@@ -11,6 +11,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RendererInvariantFailure.h"
@@ -101,6 +102,11 @@ inline const bool g_barrierCompileLog_knob = ::knob::Register(g_barrierCompileLo
 inline bool g_dumpBarriers = false;
 inline bool g_dumpBarriers_game = false;
 inline const bool g_dumpBarriers_knob = ::knob::Register(g_dumpBarriers_game, g_dumpBarriers, "render::g_dumpBarriers");
+// --crash-selftest=pass-throw[@<Pass>] (docs/architecture_review_plan.md R15.3): the named pass (a RenderPass value;
+// -1 = off) throws once where RunPassBody calls its body, inside its frame task -- whose failure policy ends the
+// process with a Fatal naming the pass. Set once at boot (main.cpp); not a knob.
+inline std::atomic<int> g_passThrowSelfTest{ -1 };
+inline std::atomic<bool> g_passThrowSelfTestThrown{ false };
 } // namespace render
 
 // Debug name for a pass's command list: PIX, GBV and the breadcrumb dump all read it, so the
@@ -662,7 +668,13 @@ public:
     void BeginCLGroup()
     {
         assert(currentGroup_ == kNoGroup && "nested CL groups are not supported");
-        assert(groupCount_ < MaxPasses && "CL group capacity exceeded");
+        if (groupCount_ >= MaxPasses) {
+            // In every build (R15.4): past MaxPasses the group is written past groups_.
+            char msg[192];
+            std::snprintf(msg, sizeof(msg), "RenderGraph::BeginCLGroup: %zu CL groups already, the graph's capacity "
+                          "(MaxPasses) -- one more would be written past the group array", groupCount_);
+            RendererInvariantFailure(msg);
+        }
         currentGroup_ = groupCount_++;
         groups_[currentGroup_].clear_fast();
     }
@@ -754,9 +766,11 @@ public:
             const size_t ownerIdx = n.pass;
             const size_t batch = n.batch;
             CollectNodeDeps(ownerIdx, nodeDeps);
+            // A frame task (R15.3, the owner's answer В6): the frame cannot go on without the node's list and
+            // barriers, so its exception is Fatal naming the pass (the group's owner for a CL group), with the dump.
             auto handle = tasks.CreateTask([this, renderer, ownerIdx, batch]() {
                 RunNode(renderer, ownerIdx, batch);
-            }, nodeDeps.size());
+            }, nodeDeps.size(), TaskSystem::FailurePolicy::Frame, RenderPassToWString(passes_[ownerIdx].name).data());
             passDone[ownerIdx] = handle;
         }
 
@@ -1499,6 +1513,11 @@ private:
             ~Restore() { if (on) { Renderer::SetThreadCompiledBarriers(nullptr); } }
         } restore{ flip };
 
+        if (render::g_passThrowSelfTest.load(std::memory_order_relaxed) == static_cast<int>(passes_[passIdx].name) &&
+            !render::g_passThrowSelfTestThrown.exchange(true)) {
+            throw std::runtime_error("the crash self-test's exception in a pass body (--crash-selftest=pass-throw)");
+        }
+
         if (!prepare_ || !render::g_barrierComparator || !prepare_->builders[passIdx]) {
             passes_[passIdx].exec(ctx);
             return;
@@ -1672,7 +1691,21 @@ private:
                 }
             }
         }
-        if (produced != N) { assert(false && "RenderGraph has a cycle!"); }
+        if (produced != N) {
+            // In every build (R15.4): a Release build used to leave the cycle's passes silently unrun. Name some of
+            // them -- the passes still waiting on a prereq.
+            char msg[512];
+            int used = std::snprintf(msg, sizeof(msg), "RenderGraph: a cycle -- %zu of %zu passes never became ready "
+                                     "(their prereqs wait on each other):", N - produced, N);
+            size_t named = 0;
+            for (size_t i = 0; i < N && named < 6 && used > 0 && static_cast<size_t>(used) < sizeof(msg); ++i) {
+                if (indeg[i] == 0u) { continue; }
+                used += std::snprintf(msg + used, sizeof(msg) - static_cast<size_t>(used), " '%ls'",
+                                      RenderPassToWString(passes_[i].name).data());
+                ++named;
+            }
+            RendererInvariantFailure(msg);
+        }
     }
 
 private:
@@ -1746,15 +1779,23 @@ private:
         std::initializer_list<ResourceStateDecl> declares,
         ExecFn fn)
     {
-        assert(passesNum_ < MaxPasses && "RenderGraph capacity exceeded");
+        // R15.4: these checks hold in EVERY build. Until 2026-11-24 four were asserts, and a Release build wrote past
+        // an array (a pass past MaxPasses, a ninth CL-group member), dropped declarations (their barriers never
+        // compiled) or an edge (an index out of the graph) without a word.
+        if (passesNum_ >= MaxPasses) {
+            char msg[224];
+            std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' would be pass %zu of a graph declared for "
+                          "%zu (MaxPasses) -- it would be written past the pass array", RenderPassToWString(name).data(),
+                          passesNum_ + 1, MaxPasses);
+            RendererInvariantFailure(msg);
+        }
         const size_t newIndex = passesNum_;
         ++passesNum_;
 
         Pass& p = passes_[newIndex];
         p.name = name;
-#ifndef NDEBUG
-        // CopyRange's assert says only THAT an index is out of range (a kNone handed on as a prereq, typically): name
-        // the pass and the index first, as a Fatal the session log keeps (AGENTS.md: Fatal before an assert).
+        // CopyRange drops an index out of range (a kNone handed on as a prereq, typically) -- a lost edge: name the
+        // pass and the index.
         const auto checkRange = [name](const auto& range, const char* kind) {
             for (size_t value : range) {
                 if (value >= MaxPasses) {
@@ -1768,7 +1809,6 @@ private:
         };
         checkRange(prereqs, "prereq");
         checkRange(deps, "mtDep");
-#endif
         if (!CopyRange(p.prereqs, prereqs) || !CopyRange(p.mtDeps, deps)) {
             char msg[192];
             std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' has more dependencies than "
@@ -1776,7 +1816,13 @@ private:
             RendererInvariantFailure(msg);
         }
 
-        assert(declares.size() <= p.declares.capacity() && "RenderGraph declaration list capacity exceeded");
+        if (declares.size() > p.declares.capacity()) {
+            char msg[256];
+            std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' declares %zu resource states, its list "
+                          "holds %zu -- the rest would be dropped and their barriers never compiled",
+                          RenderPassToWString(name).data(), declares.size(), p.declares.capacity());
+            RendererInvariantFailure(msg);
+        }
         p.declares.clear_fast();
         for (const ResourceStateDecl& decl : declares) {
             if (p.declares.size() >= p.declares.capacity()) { break; }
@@ -1789,8 +1835,15 @@ private:
         // the active group (declaration order = member order).
         p.groupId = currentGroup_;
         if (currentGroup_ != kNoGroup) {
-            assert(groups_[currentGroup_].size() < groups_[currentGroup_].capacity() && "CL group member capacity exceeded");
-            groups_[currentGroup_].push_back(newIndex);
+            GroupMemberList& members = groups_[currentGroup_];
+            if (members.size() >= members.capacity()) {
+                char msg[256];
+                std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' would be member %zu of CL group %zu, "
+                              "which holds %zu (kMaxGroupMembers) -- close the group sooner or raise the capacity",
+                              RenderPassToWString(name).data(), members.size() + 1, currentGroup_, members.capacity());
+                RendererInvariantFailure(msg);
+            }
+            members.push_back(newIndex);
         }
 
         for (size_t prereq : p.prereqs) {

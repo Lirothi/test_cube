@@ -4,6 +4,7 @@
 #include <wrl/client.h>
 
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -11,7 +12,6 @@
 
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/streaming/MipBiasFade.h"
-#include "rendering/streaming/TextureRetireBin.h"
 #include "rendering/streaming/TextureStreamingIo.h"
 #include "rendering/streaming/TextureStreamingManager.h"
 #include "rendering/streaming/TextureUploadRing.h"
@@ -46,7 +46,9 @@ public:
     // states, returns the body that records the copies (empty when nothing is ready).
     std::function<void(RenderGraphPassContext)> BuildPass(Renderer* renderer, RenderGraphPassContext& ctx);
 
-    UINT64 RetiredBytes() const { return retire_.Bytes(); }
+    // What this registry handed to the deferred-release service (R16.3) and the GPU still holds: old resources of
+    // finished swaps.
+    UINT64 RetiredBytes() const { return retiredBytes_.load(std::memory_order_relaxed); }
     std::size_t RegisteredCount() const { return registered_; }
     std::size_t SwapsInFlight() const { return swaps_.size(); }
 
@@ -108,7 +110,9 @@ private:
 
     ID3D12Device* device_ = nullptr;
     TextureUploadRing ring_;
-    TextureRetireBin retire_;
+    // Old resources with render::deferred, not yet released (its release steps count them down).
+    std::atomic<UINT64> retiredBytes_{ 0 };
+    std::atomic<std::uint32_t> retiredCount_{ 0 };
     TextureStreamingIo io_;
     std::vector<Entry> entries_;
     std::vector<std::uint32_t> freeEntries_;

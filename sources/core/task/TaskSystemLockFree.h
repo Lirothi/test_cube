@@ -24,7 +24,26 @@ public:
     struct TaskWithDeps;
     using TaskHandle = TaskWithDeps*;
 
+    // How many tasks may depend on one task (TaskWithDeps::dependents_). One more is a broken invariant in every build
+    // (SetDependencies); --tasksystem-stress --stress-overflow registers exactly that many and then one more.
+    // 8: the render graph's Pass_BuildAS recording task fans out to every RT pass that reads the
+    // TLAS (RTTrace, the RT resolve, the RT debug view, the glass reflections, the sky visibility,
+    // the GI probe trace) -- five of them at once overflowed 4 and aborted the first frame.
+    static constexpr std::size_t kDependentCapacity = 8;
+
     enum class TaskKind { Lambda, Range };
+
+    // What a task's exception means (docs/architecture_review_plan.md R15.3; the owner's answer В6, 2026-11-24). The
+    // creator decides (CreateTask); a task created while another task runs on this thread -- a range's chunks, a pass
+    // body's fan-out -- takes that task's policy and name. The thread's role and TrackFrameTask decide nothing here.
+    enum class FailurePolicy : std::uint8_t {
+        // Its result is optional to the process: an Error line, and the task completes as FAILED -- its waiter gets
+        // false from Wait (Failed() is true), its dependents still run. The process goes on.
+        Background,
+        // A frame cannot go on without it (a render-graph pass: its command list unclosed, its barriers never
+        // issued): a Fatal line naming the task, then abort and the minidump (InvariantFailure).
+        Frame,
+    };
 
     struct TaskWithDeps {
         TaskWithDeps(TaskSystem& owner, TaskKind kind, std::size_t depCapacity);
@@ -47,10 +66,7 @@ public:
         // The ready queue owns a reference until that consumer releases the entry.
         TaskWithDeps* nextReady_{nullptr};
         std::atomic<std::size_t> pendingDeps_{0};
-        // 8: the render graph's Pass_BuildAS recording task fans out to every RT pass that reads the
-        // TLAS (RTTrace, the RT resolve, the RT debug view, the glass reflections, the sky visibility,
-        // the GI probe trace) -- five of them at once overflowed 4 and aborted the first frame.
-        tc::inl_vector<TaskHandle, 8> dependents_;
+        tc::inl_vector<TaskHandle, kDependentCapacity> dependents_;
         // Immutable after dependency setup; owns references for targeted helping.
         std::vector<TaskHandle> prerequisites_;
         // Completion flag, waited on via C++20 atomic wait. Waiters must hold a
@@ -66,8 +82,17 @@ public:
         std::uint8_t memTag_ = 0;
         // The thread role current where it was created (game thread plan section 3.4), the same way.
         std::uint8_t role_ = 0;
+        // What an exception out of Execute means (FailurePolicy), and the name a Frame task's Fatal line gives --
+        // static storage (a render pass's name literal). Set before the task can run; inherited from the task
+        // running where it was created.
+        FailurePolicy failurePolicy_ = FailurePolicy::Background;
+        const wchar_t* name_ = nullptr;
+        // Execute threw (or, for a range, a chunk did): written by the executing thread before completed_'s release
+        // store, read by a waiter after its acquire load.
+        bool failed_ = false;
 
     protected:
+        void InheritFailurePolicy();
         void Prepare(std::size_t depCapacity);
     };
 
@@ -82,6 +107,9 @@ public:
 
     TaskHandle Submit(Task t);
     TaskHandle CreateTask(Task t, std::size_t depCount = 0);
+    // A task whose exception means `policy`; `name` (static storage, may be null) is what its Fatal or Error line
+    // calls it. The render graph creates its pass tasks this way (FailurePolicy::Frame, the pass's name).
+    TaskHandle CreateTask(Task t, std::size_t depCount, FailurePolicy policy, const wchar_t* name);
     TaskHandle CreateRangeTask(std::size_t jobCount,
                                std::function<void(std::size_t)> fn,
                                std::size_t batchSize = 1,
@@ -94,7 +122,8 @@ public:
     void DispatchTrack(std::size_t jobCount,
                        std::function<void(std::size_t)> fn,
                        std::size_t batchSize = 1);
-    void DispatchWait(std::size_t jobCount,
+    // False when a chunk threw (FailurePolicy::Background).
+    bool DispatchWait(std::size_t jobCount,
                       std::function<void(std::size_t)> fn,
                       std::size_t batchSize = 1);
 
@@ -105,7 +134,11 @@ public:
 
     // May execute this task or its explicit prerequisites, never unrelated work.
     // Callers must own the handle until Wait returns; dependency graphs are acyclic.
-    void Wait(TaskHandle handle);
+    // Returns false when the task completed as failed (its body threw; FailurePolicy::Background) -- true for a
+    // null handle and for a task that finished its work.
+    bool Wait(TaskHandle handle);
+    // After the task completed: did it fail (see Wait)? False for a null or unfinished handle.
+    [[nodiscard]] bool Failed(TaskHandle handle) const;
     void Release(TaskHandle& handle);
 
     // Transfers the caller's reference. Waiting also drains tasks registered by
@@ -115,10 +148,11 @@ public:
     void TrackFrameTask(TaskHandle handle);
     void WaitForTrackedAsyncTasks();
 
+    // False when a chunk threw (see DispatchWait).
     template<class F>
-    static void ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
+    static bool ParallelFor(std::size_t jobCount, F&& fn, std::size_t batchSize)
     {
-        Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
+        return Get().DispatchWait(jobCount, std::forward<F>(fn), batchSize);
     }
 
     void WaitForAll();
@@ -173,6 +207,7 @@ private:
     void OnDependencyComplete(TaskWithDeps* dependent);
 
     void RunTask(TaskWithDeps* task);
+    void OnTaskThrew(TaskWithDeps* task, const char* what);
     bool TryRunTask(TaskWithDeps* task);
     bool HelpTask(TaskWithDeps* task);
     void FinishTask(TaskWithDeps* task);

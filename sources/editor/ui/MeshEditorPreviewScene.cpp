@@ -118,7 +118,6 @@ struct MeshEditorPreviewScene::Impl
     std::shared_ptr<Mesh> mesh;
     std::vector<std::shared_ptr<MaterialData>> materials;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, render::kFrameCount> targets;
-    std::array<std::unique_ptr<UploadBatch>, render::kFrameCount> frameCommands;
     std::array<MeshEditorPreviewCamera, render::kFrameCount> renderedCameras{};
     std::array<MeshEditorPreviewLight, render::kFrameCount> renderedLights{};
     std::array<EditorPreviewMode, render::kFrameCount> renderedModes{};
@@ -261,9 +260,8 @@ struct MeshEditorPreviewScene::Impl
             renderer.WaitForPreviousFrame();
         }
 
-        // BeginFrame has already waited for this swapchain slot. Replacing its
-        // allocator and rewriting its private preview resources is therefore safe.
-        frameCommands[frameIndex].reset();
+        // BeginFrame has already waited for this swapchain slot: rewriting its private preview resources is safe.
+        // (The slot's batch is no longer kept here: R16.8, the service holds a submitted batch until its frame.)
         if (targets[frameIndex])
         {
             const D3D12_RESOURCE_DESC desc = targets[frameIndex]->GetDesc();
@@ -274,8 +272,8 @@ struct MeshEditorPreviewScene::Impl
                 cameraValid[frameIndex] = false;
             }
         }
-        std::unique_ptr<UploadBatch> commands = std::make_unique<UploadBatch>();
-        if (!commands->Begin(&renderer))
+        UploadBatch commands;
+        if (!commands.Begin(&renderer))
         {
             error = "Could not record the mesh preview.";
             return false;
@@ -296,7 +294,7 @@ struct MeshEditorPreviewScene::Impl
         previewLight.positionDistance = light.positionDistance;
         Microsoft::WRL::ComPtr<ID3D12Resource> target =
             previewRenderer.RecordPreview(renderer,
-                commands->CommandList(),
+                commands.CommandList(),
                 *mesh,
                 materials,
                 renderWidth,
@@ -314,7 +312,7 @@ struct MeshEditorPreviewScene::Impl
                 environmentExposure,
                 physical,
                 lines);
-        if (!target || !commands->Submit(&renderer))
+        if (!target || !commands.Submit(&renderer))
         {
             error = "Could not submit the mesh preview render.";
             return false;
@@ -324,7 +322,6 @@ struct MeshEditorPreviewScene::Impl
         renderedProj[frameIndex] = previewRenderer.LastProj();
 
         targets[frameIndex] = std::move(target);
-        frameCommands[frameIndex] = std::move(commands);
         renderedCameras[frameIndex] = camera;
         renderedLights[frameIndex] = light;
         renderedModes[frameIndex] = mode;
@@ -373,7 +370,6 @@ void MeshEditorPreviewScene::Reset(Renderer& renderer)
 
     for (std::size_t frame = 0; frame < impl_->targets.size(); ++frame)
     {
-        impl_->frameCommands[frame].reset();
         if (impl_->targets[frame])
         {
             renderer.ReleaseImGuiTextureDescriptors(impl_->targets[frame].Get());

@@ -340,6 +340,14 @@
       <AdditionalDependencies>winhttp.lib;mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <!-- docs/architecture_review_plan.md R15.5 (the owner's answer B7): /p:TcThreadChecks=true compiles the thread-role
+       checks (TC_CHECK_THREAD, core/threading/ThreadRole.h) into a configuration without _DEBUG, meant for
+       Release_Editor; Debug has them always. A define of every file: switching it rebuilds the configuration whole. -->
+  <ItemDefinitionGroup Condition="'$(TcThreadChecks)' == 'true'">
+    <ClCompile>
+      <PreprocessorDefinitions>TC_THREAD_CHECKS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="sources/pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
@@ -470,6 +478,7 @@
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp" />
     <ClCompile Include="sources/core/diagnostics/CrashHandler.cpp" />
+    <ClCompile Include="sources/core/diagnostics/InvariantFailure.cpp" />
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp" />
     <ClCompile Include="sources/core/vfs/Pak.cpp" />
     <ClCompile Include="sources/core/vfs/PakCrypto.cpp">
@@ -528,6 +537,7 @@
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp" />
     <ClCompile Include="sources/rendering/core/DlssHandler.cpp" />
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
+    <ClCompile Include="sources/rendering/core/DeferredRelease.cpp" />
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp" />
     <ClCompile Include="sources/rendering/core/GbvPassFilter.cpp" />
     <ClCompile Include="sources/rendering/core/BarrierTranslation.cpp" />
@@ -537,8 +547,9 @@
     <ClCompile Include="sources/rendering/core/StreamlineSignature.cpp" />
     <ClCompile Include="sources/rendering/core/RhiQueue.cpp" />
     <ClCompile Include="sources/rendering/core/Screenshot.cpp" />
-    <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp" />
+    <ClCompile Include="sources/rendering/diagnostics/GraphSelfTest.cpp" />
+    <ClCompile Include="sources/rendering/diagnostics/RetireSelfTest.cpp" />
     <ClCompile Include="sources/rendering/visibility/HzbCullSelfTest.cpp" />
     <ClCompile Include="sources/rendering/visibility/OcclusionHistory.cpp" />
     <ClCompile Include="sources/rendering/visibility/OcclusionQueries.cpp" />
@@ -555,7 +566,6 @@
     <ClCompile Include="sources/rendering/rt/RtSceneAs.cpp" />
     <ClCompile Include="sources/rendering/rt/RtSmoke.cpp" />
     <ClCompile Include="sources/rendering/streaming/TextureUploadRing.cpp" />
-    <ClCompile Include="sources/rendering/streaming/TextureRetireBin.cpp" />
     <ClCompile Include="sources/rendering/streaming/TextureStreamingIo.cpp" />
     <ClCompile Include="sources/rendering/streaming/TextureStreaming.cpp" />
     <ClCompile Include="sources/rendering/streaming/StreamingBounds.cpp" />
@@ -777,6 +787,7 @@
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h" />
     <ClInclude Include="sources/core/diagnostics/CrashHandler.h" />
+    <ClInclude Include="sources/core/diagnostics/InvariantFailure.h" />
     <ClInclude Include="sources/core/diagnostics/BootProfile.h" />
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h" />
     <ClInclude Include="sources/core/vfs/Pak.h" />
@@ -853,6 +864,7 @@
     <ClInclude Include="sources/rendering/core/DeviceRemovalWatch.h" />
     <ClInclude Include="sources/rendering/core/MemGates.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
+    <ClInclude Include="sources/rendering/core/DeferredRelease.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/GbvPassFilter.h" />
     <ClInclude Include="sources/rendering/core/BarrierTranslation.h" />
@@ -865,6 +877,8 @@
     <ClInclude Include="sources/rendering/core/Screenshot.h" />
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
+    <ClInclude Include="sources/rendering/diagnostics/GraphSelfTest.h" />
+    <ClInclude Include="sources/rendering/diagnostics/RetireSelfTest.h" />
     <ClInclude Include="sources/rendering/visibility/HzbCull.h" />
     <ClInclude Include="sources/rendering/visibility/HzbCullSelfTest.h" />
     <ClInclude Include="sources/rendering/visibility/OcclusionHistory.h" />
@@ -883,7 +897,6 @@
     <ClInclude Include="sources/rendering/streaming/DdsMipTable.h" />
     <ClInclude Include="sources/rendering/streaming/StreamingSettings.h" />
     <ClInclude Include="sources/rendering/streaming/TextureUploadRing.h" />
-    <ClInclude Include="sources/rendering/streaming/TextureRetireBin.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreamingIo.h" />
     <ClInclude Include="sources/rendering/streaming/TextureStreaming.h" />
     <ClInclude Include="sources/rendering/streaming/MipBiasFade.h" />

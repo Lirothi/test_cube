@@ -31,6 +31,7 @@
 #include "third_party/cgltf/cgltf.h"
 #include <Windows.h> // Win32 file/time helpers (load diagnostics now go through core/logging)
 #include "core/logging/Log.h"
+#include "core/threading/ThreadRole.h"
 #include "core/vfs/Vfs.h"
 
 using namespace DirectX;
@@ -2548,6 +2549,9 @@ std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
     const MeshLoadOptions& opt)
 {
     MEM_SCOPE(MemTag::Mesh); // memory profiling M3: the mesh's CPU data and its loader's work
+    // R15.6: cache_ is a map without a lock, and a load records into the caller's upload list -- while nothing of the
+    // frame runs beside it.
+    TC_CHECK_FRAME_QUIET("MeshManager::Load");
     // New pipeline: geometry referenced directly as our committed .mesh.bin (glTF stays in
     // import_staging/, never loaded at runtime). No hash cache + no glTF fallback — the .bin IS the
     // shipped geometry.

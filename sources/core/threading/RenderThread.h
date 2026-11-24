@@ -57,6 +57,7 @@ private:
     void Main();
     static void Park();
     static bool InFlightForGame(); // threading::WaitRenderForGame's question: a frame in flight, asked on the game thread
+    static bool InFlightAnyThread(); // threading::RenderThreadInFlight's: the same state, from any thread, without a word
 
     std::thread thread_;
     std::thread::id owner_; // the game thread: the only one that hands frames over and waits for them

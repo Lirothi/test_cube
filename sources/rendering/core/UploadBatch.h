@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <source_location>
 #include <vector>
 #include <wrl/client.h>
 
@@ -28,17 +29,22 @@ public:
     UploadBatch& operator=(const UploadBatch&) = delete;
 
     bool Begin(Renderer* renderer);
-    // Close and enqueue without waiting. The caller must keep this UploadBatch
-    // alive until its own queue fence completes so upload intermediates and the
-    // command allocator remain valid.
+    // Close and enqueue without waiting. The list, its allocator and the intermediates go to the deferred-release
+    // service (rendering/core/DeferredRelease.h, R16.8): released once the GPU has finished the frame the list
+    // executes with -- the caller may drop this batch at once, and Begin it again.
     bool Submit(Renderer* renderer);
-    void SubmitAndWait(Renderer* renderer);
+    // Close, enqueue, idle the GPU (Renderer::WaitForPreviousFrame) and release all of it at once -- not through the
+    // service: a chain of loads with no frame between them would otherwise hold every batch's intermediates together.
+    // `where` is the caller's: the idle is counted by it ("gpu idle waits:", R16.10), not by this file.
+    void SubmitAndWait(Renderer* renderer, std::source_location where = std::source_location::current());
 
     bool IsOpen() const { return open_; }
     ID3D12GraphicsCommandList* CommandList() const { return cmdList_.Get(); }
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* KeepAlive() { return &keepAlive_; }
 
 private:
+    bool CloseAndExecute(Renderer* renderer);
+
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> allocator_;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> cmdList_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> keepAlive_;

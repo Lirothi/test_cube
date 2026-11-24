@@ -23,9 +23,11 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
 - `MSBuild test_cube.vcxproj /p:Configuration=<cfg> /p:Platform=x64 /m /nologo /v:minimal > <log>` (VS 18:
   `C:/Program Files/Microsoft Visual Studio/18/Professional/MSBuild/Current/Bin/MSBuild.exe`); read the log at once.
   Every change builds Debug (strictest: debug layer), Release_Editor and Release; one touching boot, settings or VFS
-  also Shipping, Development and Cook.
-- Before a commit: `python tools/check_logging.py`, `check_render_knobs.py`, `check_gpu_alloc.py`, `check_file_io.py`
-  (exit code = findings).
+  also Shipping, Development and Cook. `/p:TcThreadChecks=true` compiles the thread-role checks into Release_Editor
+  (`TC_THREAD_CHECKS=1`; `--thread-check-selftest` proves them on); switching it rebuilds the configuration whole.
+- Before a commit: `python tools/check_logging.py`, `check_render_knobs.py`, `check_gpu_alloc.py`, `check_file_io.py`,
+  `check_threads.py` (a `.detach()` says where its exceptions are caught: `// detached-ok: <where>`) (exit code =
+  findings).
 - Editor gate: `tools/intent_regression.vcxproj` (Debug; links the Debug game's objects by its tlog, so build that
   first) -> `x64\Debug\intent_regression.exe`, last line `PASS`; `inspector_regression` likewise. After changing
   `sources/editor/intent/`, rebuild `tools/model_reaper.vcxproj` (close its tray icon: the running exe is locked).
@@ -84,12 +86,17 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
 - After any change to what the game half touches: `--rt-audit[=<s>]` (`--rt-audit-selftest` must FAIL naming
   `object #0 model matrix`); coverage via `--scene-stress=150 --rt-audit` or an editor run driven by an MCP script. A
   gate that touches the frame's order runs with `--set=frame.renderThread:0` too.
-- A resource that frames in flight read is freed or recreated only at a GPU-idle point or after a wait: a ring buffer
-  released at once hung the GPU.
+- A resource that frames in flight read is freed or recreated only at a GPU-idle point, after a wait, or through
+  `render::deferred::Retire` (`rendering/core/DeferredRelease.h`, released once its frame NUMBER completed;
+  `--retire-selftest`): a ring buffer released at once hung the GPU. For a lifetime alone, the service, not a
+  `WaitForPreviousFrame` (each counted by caller: `gpu idle waits:` every 5 s, scope `Renderer: GPU idle wait`).
 - A GPU copy is done by its frame NUMBER (`Renderer::IsFrameNumberComplete`), never by its slot.
 - An ExecuteIndirect count buffer holds the exact count, never ~0 (NVIDIA then draws nothing).
 - A bit-packed request or mark buffer does `InterlockedOr` only while the bit is clear.
 - Mesh-shader PSOs stay out of the disk PSO cache (the runtime refuses them back).
+- A task's exception means its `TaskSystem::FailurePolicy`, set by its creator and inherited by tasks created inside
+  it: `Frame` (render-graph passes) = Fatal naming the task, dump; `Background` (default) = Error, `Wait` returns false.
+  A broken contract (a task's dependencies, a graph's capacity) is `InvariantFailure`, never `assert` or `throw`.
 
 ## Checking live: the editor's MCP
 

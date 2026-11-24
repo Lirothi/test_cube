@@ -12,6 +12,8 @@
 #include "materials/Material.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/CrashHandler.h"   // --crash-selftest=terminate-frame (crash::SelfTestFrame)
+#include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (render::PassThrowSelfTestFrame)
+#include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (render::RetireSelfTestFrame)
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
 #include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
@@ -3605,6 +3607,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // (SceneRenderer::Render), and a game-half join would wait on nothing (TaskSystem: one list per role).
             renderer.BeginFrame();
             crash::SelfTestFrame(); // --crash-selftest=terminate-frame: std::terminate here, on the game thread
+            render::PassThrowSelfTestFrame(); // --crash-selftest=pass-throw: a run whose pass threw and went on ends here
+            if (render::RetireSelfTestFrame(renderer)) { isRunning_ = false; } // --retire-selftest: the verdict is in
 #if PROF_GPU_ENABLED
             Profiler::Get().CollectGpuResults();
 #endif
@@ -4186,6 +4190,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 tickUi();
                 tickScene();
                 rtaudit::GameHalf(scene); // --rt-audit-selftest's write into a frozen copy
+                render::RetireSelfTestGameHalf(renderer); // --retire-selftest=upload: a submit beside the render thread's frame
                 loadPendingLevel();
                 rtaudit::Jitter();
                 closeUi();
@@ -4210,6 +4215,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (frameStart - gameWaitLogStart >= 5.0)
                 {
                     threading::LogGameWaits(frameStart - gameWaitLogStart); // what took the overlap away, by site
+                    renderer.LogGpuIdleWaits(frameStart - gameWaitLogStart); // R16.10: the full idles, by site
                     logInputLag("");
                     gameWaitLogStart = frameStart;
                 }
@@ -4237,6 +4243,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 renderUpkeep();
                 tickUi();
                 tickScene();
+                render::RetireSelfTestGameHalf(renderer); // --retire-selftest=upload (one thread: before the hand-over)
                 loadPendingLevel();
                 closeUi();
                 handOver();
@@ -4271,8 +4278,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
             afterFrame();
             paceFrame();
+            if (frameStart - gameWaitLogStart >= 5.0)
+            {
+                renderer.LogGpuIdleWaits(frameStart - gameWaitLogStart); // R16.10: the full idles, by site (one thread)
+                gameWaitLogStart = frameStart;
+            }
         }
         wholeCycle.reset();
+        renderer.LogGpuIdleWaits(GetTimeSeconds() - gameWaitLogStart); // R16.10: the rest of the run's, and the total
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
         logInputLag(" (the rest of the run)");
 

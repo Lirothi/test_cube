@@ -313,7 +313,6 @@ private:
     // is not sampled until the copy has had a full frame ring to land, and the slot just retired
     // from sampling is not overwritten until it has had the same.
     Texture2D flareBokeh_[2];
-    std::unique_ptr<UploadBatch> flareBokehUpload_;
     std::uint64_t flareBokehSafeFrame_ = 0;
     std::uint32_t flareBokehSlot_ = 0;    // the slot the scatter samples
     std::int32_t flareBokehPending_ = -1; // the slot being uploaded, -1 = idle

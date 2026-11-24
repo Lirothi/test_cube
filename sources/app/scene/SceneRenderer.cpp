@@ -80,9 +80,9 @@ bool SceneRenderer::ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool fa
     const bool freeNear = ddgi_[0].Held() && !giWanted;
     const bool freeFar = ddgi_[1].Held() && (!giWanted || !farWanted);
     if (!renderer || (!freeNear && !freeFar)) { return false; }
-    renderer->WaitForPreviousFrame(); // nothing in flight reads the probes freed below
-    if (freeFar) { ddgi_[1].Reset(); }
-    if (freeNear) { ddgi_[0].Reset(); }
+    // R16.10: to render::deferred, not a GPU idle -- the frames in flight still trace and read the probes.
+    if (freeFar) { ddgi_[1].Retire(); }
+    if (freeNear) { ddgi_[0].Retire(); }
     LOG_INFO(logging::LogCategory::Render, "GI probe volumes: {} freed (the knob turned {} off)",
              freeNear && freeFar ? "both cascades" : freeNear ? "the near cascade" : "the far cascade",
              freeNear ? "gi.enabled" : "gi.far");
@@ -92,8 +92,7 @@ bool SceneRenderer::ReleaseUnwantedGi(Renderer* renderer, bool giWanted, bool fa
 bool SceneRenderer::ReleaseUnwantedClouds(Renderer* renderer, bool wanted)
 {
     if (!renderer || wanted || !volumetricCloud_.Held()) { return false; }
-    renderer->WaitForPreviousFrame(); // nothing in flight reads the volumes freed below
-    volumetricCloud_.Reset();         // Prepare makes them again when the clouds come back
+    volumetricCloud_.Retire(); // R16.10: to render::deferred (the frames in flight read them); Prepare makes them again
     cloudHistoryFrames_ = 0u;
     cloudLogged_ = -1;
     LOG_INFO(logging::LogCategory::Render, "volumetric clouds: resources freed (cloud.enabled off)");

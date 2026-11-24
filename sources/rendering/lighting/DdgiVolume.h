@@ -67,6 +67,9 @@ public:
     // Its resources exist (made by Prepare, not freed by Reset since).
     bool Held() const { return ready_ || heap_ != nullptr; }
     void Reset(); // the caller has drained the GPU (level/device teardown)
+    // R16.10: Reset with no drain -- the textures and the views go to render::deferred (the frames in flight still trace
+    // and read the probes); the materials are the material manager's.
+    void Retire();
 
     // Places the volume around `cameraPos` and picks this frame's probes. A new spacing starts a new
     // generation: every probe is then untraced until its turn comes.

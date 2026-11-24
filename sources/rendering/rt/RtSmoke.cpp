@@ -1,6 +1,7 @@
 #include "rendering/rt/RtSmoke.h"
 #include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/rt/AccelerationStructure.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/meshes/Mesh.h"
 
 #include <windows.h>
@@ -188,8 +189,9 @@ int RunRtSmoke(const char* outPath)
         cl4->Close();
         submitAndWait();
 
-        // GPU finished consuming scratch — safe to release it now.
-        asManager.ReleaseAllRetired();
+        // GPU finished consuming scratch — safe to release it now (this harness has its own device
+        // and no Renderer frames, so nothing else would: render::deferred, R16.4).
+        render::deferred::DrainIdle();
 
         // The BLAS was built on demand inside BuildTlas; fetch the cached address.
         blasAddr = asManager.GetOrBuildBlas(&mesh, /*nonOpaqueSlots*/ 0, nullptr).Address();

@@ -161,8 +161,6 @@ private:
     std::uint32_t layoutShoreW_ = 0;
     std::uint32_t layoutShoreH_ = 0;
     std::array<Slot, render::kFrameCount> slots_{};
-    // A buffer replaced on a settings change may still be a copy destination of frames in flight.
-    std::vector<std::pair<std::uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> retired_;
     bool requested_ = false;
     bool shoreQueued_ = false; // the CURRENT shore map is in a slot (re-armed when it re-renders)
     std::uint32_t surfWaits_ = 0; // copies put off for want of the surf sim's wave this frame (BuildPass), at most 4 in a row

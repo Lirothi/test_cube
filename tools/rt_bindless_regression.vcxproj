@@ -19,15 +19,27 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <LanguageStandard>stdcpp20</LanguageStandard><Optimization>MaxSpeed</Optimization>
-      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>NDEBUG;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\sources;$(MSBuildProjectDirectory)\..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory)\..\sources;$(MSBuildProjectDirectory)\..;$(MSBuildProjectDirectory)\..\third_party\mimalloc\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
-    <Link><SubSystem>Console</SubSystem><AdditionalDependencies>d3d12.lib;dxgi.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><SubSystem>Console</SubSystem><AdditionalLibraryDirectories>$(MSBuildProjectDirectory)\..\third_party\mimalloc\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories><AdditionalDependencies>mimalloc.lib;d3d12.lib;dxgi.lib;dxguid.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="rt_bindless_regression.cpp" />
     <ClCompile Include="..\sources\rendering\rt\BindlessTable.cpp" />
+    <ClCompile Include="..\sources\rendering\core\DeferredRelease.cpp" />
+    <ClCompile Include="..\sources\rendering\descriptors\BindlessHeap.cpp" />
+    <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
+    <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
+    <ClCompile Include="..\sources\core\memory\MemTrace.cpp" />
+    <ClCompile Include="..\sources\core\memory\MemNew.cpp" />
+    <ClCompile Include="..\sources\rendering\core\BarrierTranslation.cpp" />
+    <ClCompile Include="..\sources\core\logging\Log.cpp" />
+    <ClCompile Include="..\sources\core\logging\LogQueue.cpp" />
+    <ClCompile Include="..\sources\core\logging\LogSinks.cpp" />
+    <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />
+    <ClCompile Include="..\sources\core\diagnostics\InvariantFailure.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

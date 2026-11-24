@@ -49,6 +49,10 @@ using MemoryProviderFn = std::uint64_t (*)(const void* self);
 // Register a byte-count provider under `name` (a static string). `self` is passed back to `fn`
 // and is the key for Unregister. Called from the main thread only.
 void RegisterMemoryProvider(const char* name, MemoryProviderFn fn, const void* self);
+// The same with an entry count printed beside the bytes ("retire 0.4 MB (12)"): a holder whose entries may weigh
+// nothing (a descriptor slot) still shows them.
+using MemoryCountFn = std::uint64_t (*)(const void* self);
+void RegisterMemoryProvider(const char* name, MemoryProviderFn fn, const void* self, MemoryCountFn count);
 void UnregisterMemoryProvider(const void* self);
 
 // Emit the line if `periodSec` has passed since the last one (the first call emits). Main thread,

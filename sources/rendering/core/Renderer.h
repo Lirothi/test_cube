@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <source_location>
 #include <utility>
 #include <vector>
 #include <string>
@@ -477,7 +478,13 @@ public:
 #endif
 
     // Utility functions
-    void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
+    // Full synchronization: from the game half it parks the render half, sends the hand-over submits, waits for the RHI
+    // thread and both queues, exchanges the knobs (R16.10). Every call is counted by its caller's file:line and timed
+    // (CPU scope "Renderer: GPU idle wait"); LogGpuIdleWaits prints them.
+    void WaitForPreviousFrame(std::source_location where = std::source_location::current());
+    // R16.10: the idle waits since the last call, by site ("gpu idle waits: ..."; nothing when there were none) and the
+    // session's total; App's main loop every 5 s, beside threading::LogGameWaits, and once at the loop's end.
+    void LogGpuIdleWaits(double seconds);
     // Occlusion plan S3a: block until one frame SLOT's fence has passed -- the wait a query
     // latency below kFrameCount costs (UE's Map blocks the same way). Not the full idle above.
     // The last frame handed over first reaches the queues: under the RHI thread the slot of the frame before this one

@@ -12,8 +12,8 @@ namespace tc
 
 namespace detail
 {
-// More elements than the capacity the vector was declared with (core/logging/Log.cpp: a Fatal record in the session
-// log, then abort). In every build: the capacity is a contract of the declaration, and past it the write lands beyond
+// More elements than the capacity the vector was declared with (core/logging/Log.cpp: the shared fail-fast,
+// core/diagnostics/InvariantFailure.h -- a Fatal record in the session log, then abort). In every build: the capacity is a contract of the declaration, and past it the write lands beyond
 // the storage -- on the stack, or on a neighbouring member. An assert said so in Debug; Release wrote there in silence.
 [[noreturn]] void InlVectorOverflow(std::size_t capacity, std::size_t wanted) noexcept;
 } // namespace detail

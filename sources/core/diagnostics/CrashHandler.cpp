@@ -312,22 +312,33 @@ void InstallThisThread()
     SetThreadStackGuarantee(&guarantee);
 }
 
-int SelfTest(const std::string& arm, Options options)
+int SelfTest(const std::string& arm, Options options, std::span<const SelfTestArm> moreArms)
 {
     options.messageBoxTimeoutMs = 3000;
     const char* arms[] = { "av", "stack", "abort", "terminate", "throw", "purecall", "invalidparam", "fastfail", "overflow" };
     bool known = false;
     for (const char* a : arms) { known = known || arm == a; }
-    if (!known)
+    const SelfTestArm* more = nullptr;
+    for (const SelfTestArm& a : moreArms)
     {
+        if (arm == a.name) { more = &a; }
+    }
+    if (!known && more == nullptr)
+    {
+        std::string names;
+        for (const SelfTestArm& a : moreArms) { names += std::string(", ") + a.name; }
         LOG_ERROR(logging::LogCategory::Core, "--crash-selftest={}: arms are av, stack, abort, terminate, throw, purecall, "
-                  "invalidparam, fastfail, overflow, terminate-frame", arm);
+                  "invalidparam, fastfail, overflow{}, terminate-frame", arm, names);
         return 2;
     }
     Install(options);
     LOG_INFO(logging::LogCategory::Core, "crash self-test: {}", arm);
     logging::Flush(2000);
-    if (arm == "av")
+    if (more != nullptr)
+    {
+        more->run();
+    }
+    else if (arm == "av")
     {
         volatile int* volatile nowhere = nullptr;
         *nowhere = 1;

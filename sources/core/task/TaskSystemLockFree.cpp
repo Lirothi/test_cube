@@ -1,4 +1,5 @@
 #include "core/diagnostics/CrashHandler.h"
+#include "core/diagnostics/InvariantFailure.h"
 #include "core/logging/Log.h"
 #include "core/memory/MemScope.h"
 #include "core/profiling/Profiler.h"
@@ -10,7 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -129,6 +129,17 @@ TaskSystem::TaskWithDeps::TaskWithDeps(TaskSystem& owner, TaskKind kind, std::si
     // landed in no frame's list and outlived the frame it recorded for (game thread plan G1).
     memTag_ = static_cast<std::uint8_t>(mem::CurrentTag());
     role_ = static_cast<std::uint8_t>(threading::CurrentRole());
+    InheritFailurePolicy();
+}
+
+// R15.3: a task created while another runs on this thread is part of that task's work (a range's chunks, a pass
+// body's fan-out): its exception means what the creating task's would. Outside a task: Background, unnamed.
+void TaskSystem::TaskWithDeps::InheritFailurePolicy()
+{
+    const TaskWithDeps* creator = TaskSystem::currentTask_;
+    failurePolicy_ = creator ? creator->failurePolicy_ : FailurePolicy::Background;
+    name_ = creator ? creator->name_ : nullptr;
+    failed_ = false;
 }
 
 void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
@@ -145,6 +156,7 @@ void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
     nextReady_ = nullptr;
     memTag_ = static_cast<std::uint8_t>(mem::CurrentTag());
     role_ = static_cast<std::uint8_t>(threading::CurrentRole());
+    InheritFailurePolicy();
 }
 
 bool TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
@@ -259,14 +271,17 @@ void TaskSystem::RangeTaskSet::Execute()
 
     // Join even if the first chunk or child allocation threw. This Execute's
     // reference keeps this and fn_ alive; completion never precedes child work.
+    bool childFailed = false;
     for (auto& child : chunks) {
-        owner_.Wait(child);
+        childFailed = !owner_.Wait(child) || childFailed;
         owner_.Release(child);
     }
     chunks.clear();
     if (failure) {
         std::rethrow_exception(failure);
     }
+    // A chunk that threw already said so (its own Error line); the range completes as failed for its waiter.
+    failed_ = failed_ || childFailed;
 }
 
 TaskSystem::LambdaTaskSet* TaskSystem::AcquireLambdaTask(Task& fn, std::size_t depCapacity)
@@ -391,12 +406,13 @@ void TaskSystem::RunTask(TaskWithDeps* task)
     try {
         MEM_SCOPE(static_cast<MemTag>(task->memTag_));
         threading::RoleScope roleScope(static_cast<threading::ThreadRole>(task->role_));
+        threading::TaskBodyScope taskBody; // FrameQuiet: a task's body, whichever thread runs it (R15.6)
         task->Execute();
     } catch (const std::exception& error) {
-        // Wait remains non-throwing, as before; failures are session events.
-        LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::Task, "Task callback threw: {}", error.what());
+        // Wait remains non-throwing; what the exception means is the task's FailurePolicy (R15.3).
+        OnTaskThrew(task, error.what());
     } catch (...) {
-        LOG_ERROR_ONCE(logging::LogCategory::Task, "Task callback threw a non-standard exception");
+        OnTaskThrew(task, nullptr);
     }
     currentTask_ = previousTask;
 
@@ -405,6 +421,31 @@ void TaskSystem::RunTask(TaskWithDeps* task)
 
     task->NotifyDependents();
     FinishTask(task);
+}
+
+// Called from RunTask's catch, on the thread that ran the task: a Frame task's Fatal and minidump come from here.
+void TaskSystem::OnTaskThrew(TaskWithDeps* task, const char* what)
+{
+    const char* const described = what != nullptr ? what : "an exception of an unknown type";
+    if (task->failurePolicy_ == FailurePolicy::Frame) {
+        // Until 2026-11-24 this was an Error line and a task "done": the frame went to the GPU without the pass --
+        // its command list unclosed and unregistered, its compiled barriers never issued, and the next frame's pool
+        // handed out the unclosed list again (docs/architecture_review_plan.md 10.2, item 1).
+        char msg[640];
+        std::snprintf(msg, sizeof(msg),
+                      "frame task '%ls' threw: %s -- a frame cannot go on without its pass (its command list unclosed, "
+                      "its barriers never issued)",
+                      task->name_ != nullptr ? task->name_ : L"(unnamed)", described);
+        InvariantFailure(logging::LogCategory::Task, msg);
+    }
+    task->failed_ = true;
+    if (task->name_ != nullptr) {
+        LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::Task, "Task '{}' threw: {} -- it completes as failed",
+                                   task->name_, described);
+    } else {
+        LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::Task, "Task callback threw: {} -- it completes as failed",
+                                   described);
+    }
 }
 
 bool TaskSystem::TryRunTask(TaskWithDeps* task)
@@ -608,6 +649,17 @@ TaskSystem::TaskHandle TaskSystem::CreateTask(Task t, std::size_t depCount)
     return AcquireLambdaTask(t, depCount);
 }
 
+TaskSystem::TaskHandle TaskSystem::CreateTask(Task t, std::size_t depCount, FailurePolicy policy, const wchar_t* name)
+{
+    TaskHandle handle = CreateTask(std::move(t), depCount);
+    if (handle) {
+        // Before anyone can submit it: the creator owns the only reference.
+        handle->failurePolicy_ = policy;
+        handle->name_ = name;
+    }
+    return handle;
+}
+
 TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
                                                    std::function<void(std::size_t)> fn,
                                                    std::size_t batchSize,
@@ -624,19 +676,28 @@ TaskSystem::TaskHandle TaskSystem::CreateRangeTask(std::size_t jobCount,
 // passes: every pass with mt-deps is already submitted here, and gets scheduled
 // when its last dependency completes.
 //
-// Contract (asserted below): dependency setup is a single-threaded phase that
-// happens before anything can execute. The target must not have been submitted
+// Contract (checked below in EVERY build -- docs/architecture_review_plan.md R15.2): dependency setup is a
+// single-threaded phase that happens before anything can execute. The target must not have been submitted
 // yet, and no dependency may already be scheduled/executing — dependents_ is
 // unsynchronized and NotifyDependents iterates it on completion, so registering
-// on a running dependency is a data race.
+// on a running dependency is a data race, and on a finished one a dependent nobody will ever notify: a Wait
+// on it never returns. Until 2026-11-24 the three were asserts; a Release build registered the edge anyway.
 void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std::size_t depCount)
 {
     if (!handle) {
         return;
     }
 
-    assert(!handle->submitted_.load(std::memory_order_acquire) &&
-           "SetDependencies must run before the target task is submitted");
+    if (handle->submitted_.load(std::memory_order_acquire)) {
+        char msg[320];
+        std::snprintf(msg, sizeof(msg),
+                      "TaskSystem::SetDependencies: the target task was already submitted (%s) and is given %zu "
+                      "dependenc%s now -- a task's dependencies are set before it is submitted; an edge counted on a "
+                      "task that may already run makes it run without its input, or never",
+                      handle->completed_.load(std::memory_order_acquire) != 0 ? "and finished" : "not finished",
+                      depCount, depCount == 1 ? "y" : "ies");
+        InvariantFailure(logging::LogCategory::Task, msg);
+    }
 
     // Reserve before registering any edges, so allocation failure cannot leave
     // a partially registered graph. Stored prerequisites stay alive for Wait.
@@ -650,8 +711,16 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
         // scheduled_ (not submitted_): a dep with its own dependencies is legally
         // auto-submitted by its own SetDependencies call; the race only exists
         // once it can actually run.
-        assert(!dep->scheduled_.load(std::memory_order_acquire) &&
-               "Cannot add a dependent to a task that is already scheduled");
+        if (dep->scheduled_.load(std::memory_order_acquire)) {
+            char msg[320];
+            std::snprintf(msg, sizeof(msg),
+                          "TaskSystem::SetDependencies: dependency %zu of %zu is already scheduled (%s) -- it notifies "
+                          "only the dependents it had when it finished, so this task would wait for it forever (or race "
+                          "its notification); set the dependencies before the dependency is submitted",
+                          i, depCount,
+                          dep->completed_.load(std::memory_order_acquire) != 0 ? "and finished" : "queued or running");
+            InvariantFailure(logging::LogCategory::Task, msg);
+        }
         Retain(dep);
         handle->prerequisites_.push_back(dep);
         handle->IncrementDependency();
@@ -659,8 +728,13 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
             // Fan-out overflow is fatal in every build config: the alternatives
             // are an out-of-bounds write (raw push) or a permanent hang of the
             // dependent (silent drop — pendingDeps_ already counts this edge).
-            assert(false && "Task dependent fan-out exceeds dependents_ capacity");
-            std::abort();
+            char msg[320];
+            std::snprintf(msg, sizeof(msg),
+                          "TaskSystem::SetDependencies: dependency %zu of %zu already has %zu dependents, its capacity "
+                          "(TaskSystem::kDependentCapacity) -- one more would be lost or written past the list; raise "
+                          "the capacity or fan out through an intermediate task",
+                          i, depCount, dep->dependents_.size());
+            InvariantFailure(logging::LogCategory::Task, msg);
         }
         registered = true;
     }
@@ -704,13 +778,14 @@ void TaskSystem::DispatchTrack(std::size_t jobCount,
     TrackFrameTask(handle);
 }
 
-void TaskSystem::DispatchWait(std::size_t jobCount,
+bool TaskSystem::DispatchWait(std::size_t jobCount,
                               std::function<void(std::size_t)> fn,
                               std::size_t batchSize)
 {
     TaskHandle handle = Dispatch(jobCount, std::move(fn), batchSize);
-    Wait(handle);
+    const bool finished = Wait(handle);
     Release(handle);
+    return finished;
 }
 
 void TaskSystem::SubmitDetach(Task t)
@@ -727,10 +802,10 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
     Release(handle);
 }
 
-void TaskSystem::Wait(TaskHandle handle)
+bool TaskSystem::Wait(TaskHandle handle)
 {
     if (!handle) {
-        return;
+        return true;
     }
     while (handle->completed_.load(std::memory_order_acquire) == 0) {
         if (HelpTask(handle)) {
@@ -741,15 +816,25 @@ void TaskSystem::Wait(TaskHandle handle)
             // the main thread) keeps checking its target for newly-ready work.
             handle->completed_.wait(0, std::memory_order_acquire);
         } else {
-            for (int i = 0; i < 64; ++i) {
-                if (handle->completed_.load(std::memory_order_acquire) != 0) {
-                    return;
+            bool completed = false;
+            for (int i = 0; i < 64 && !completed; ++i) {
+                completed = handle->completed_.load(std::memory_order_acquire) != 0;
+                if (!completed) {
+                    _mm_pause();
                 }
-                _mm_pause();
             }
-            std::this_thread::yield();
+            if (!completed) {
+                std::this_thread::yield();
+            }
         }
     }
+    // failed_ was written before completed_'s release store; the acquire load above orders this read after it.
+    return !handle->failed_;
+}
+
+bool TaskSystem::Failed(TaskHandle handle) const
+{
+    return handle != nullptr && handle->completed_.load(std::memory_order_acquire) != 0 && handle->failed_;
 }
 
 void TaskSystem::Release(TaskHandle& handle)

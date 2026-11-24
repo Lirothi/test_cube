@@ -22,7 +22,7 @@ RenderThread::RenderThread()
     doneEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr); // manual: a nested wait leaves it set for the outer one
     g_parkTarget = this;
     owner_ = std::this_thread::get_id();
-    SetParkRenderHook(&RenderThread::Park, &RenderThread::InFlightForGame);
+    SetParkRenderHook(&RenderThread::Park, &RenderThread::InFlightForGame, &RenderThread::InFlightAnyThread);
 }
 
 RenderThread::~RenderThread()
@@ -138,6 +138,11 @@ void RenderThread::Park()
     }
 }
 
+bool RenderThread::InFlightAnyThread()
+{
+    return g_parkTarget != nullptr && g_parkTarget->inFlight_.load(std::memory_order_acquire);
+}
+
 bool RenderThread::InFlightForGame()
 {
     if (g_parkTarget == nullptr || !g_parkTarget->inFlight_.load(std::memory_order_acquire))
@@ -160,6 +165,7 @@ void RenderThread::Main()
     crash::InstallThisThread(); // std::terminate here reports as on the main thread; a stack overflow has room for the report
     Profiler::Get().SetThreadName("RenderThread");
     SetCurrentRole(ThreadRole::Render); // the role the frame's tasks inherit (plan section 3.4)
+    MarkRenderThread();                 // its own body outside tasks is the frame's pre-graph point (FrameQuiet, R15.6)
     for (;;)
     {
         WaitForSingleObject(static_cast<HANDLE>(kickEvent_), INFINITE);

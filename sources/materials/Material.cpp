@@ -1,5 +1,7 @@
 #include "materials/Material.h"
 #include "core/logging/Log.h"
+#include "core/threading/ThreadRole.h"
+#include "rendering/core/DeferredRelease.h"
 #include "core/vfs/Vfs.h"
 #include "core/vfs/Pak.h"
 #include <thread>
@@ -1754,11 +1756,14 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     RefreshWatchTimes_();
 }
 
-bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)
+bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t /*keepAliveFrames*/)
 {
     if (!pendingReload_.load(std::memory_order_acquire)) {
         return false;
     }
+    // R15.6: the swap below changes what Bind reads on the recording workers without a lock (rootParams_), so it runs
+    // in the render half's upkeep (Renderer::Tick, App.cpp renderUpkeep) while no frame records.
+    TC_CHECK_FRAME_QUIET("Material::HotReloadIfPending");
 
     ComPtr<ID3D12RootSignature> newRS;
     ComPtr<ID3D12PipelineState> newPSO;
@@ -1780,15 +1785,26 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
     }
     if (!isCompute_) { bindlessTextures_ = ChoosesBindless(r, cachedGfxDesc_); } // A6: the rebuilt answer
 
+    ComPtr<ID3D12PipelineState> oldPso;
+    ComPtr<ID3D12PipelineState> oldWirePso;
+    ComPtr<ID3D12RootSignature> oldRs;
     {
         std::lock_guard<std::mutex> lock(wireframeMtx_);
-        retired_.push_back({ pipelineState_, pipelineStateWire_, rootSignature_, frameNumber });
+        oldPso = std::move(pipelineState_);
+        oldWirePso = std::move(pipelineStateWire_);
+        oldRs = std::move(rootSignature_);
         pipelineState_ = newPSO;
         pipelineStateWire_.Reset();
         rootSignature_ = newRS;
         vertexShader_ = newVS;
         pixelShader_ = newPS;
     }
+    // R16.5: the frames in flight may still bind the old ones -- released once the GPU has finished them.
+    render::deferred::Retire([oldPso, oldWirePso, oldRs]() mutable {
+        oldPso.Reset();
+        oldWirePso.Reset();
+        oldRs.Reset();
+    }, 0, "material.pso");
     rootParams_ = std::move(newParams);
 
     {
@@ -1798,20 +1814,10 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
     RefreshWatchTimes_();
 
     pendingReload_.store(false, std::memory_order_release);
+    // Rare (a shader file saved, raster.bindless switched) and otherwise invisible: one line per rebuilt material.
+    LOG_INFO(logging::LogCategory::Render, "material hot reload: {} rebuilt (frame {})",
+             isCompute_ ? cachedCmpDesc_.shaderFile : cachedGfxDesc_.shaderFile, frameNumber);
     return true;
-}
-
-void Material::CollectRetired(uint64_t frameNumber, uint64_t keepAliveFrames)
-{
-    auto it = retired_.begin();
-    while (it != retired_.end()) {
-        if (frameNumber - it->retireFrame > keepAliveFrames) {
-            it = retired_.erase(it);
-        }
-        else {
-            ++it;
-        }
-    }
 }
 
 namespace
@@ -2597,7 +2603,6 @@ bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, 
                 anyReloaded = true;
                 // Logging hook: material was rebuilt
             }
-            mat->CollectRetired(frameNumber, keepAliveFrames);
         }
     }
     return anyReloaded;

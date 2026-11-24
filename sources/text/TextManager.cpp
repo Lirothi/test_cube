@@ -1,5 +1,6 @@
 #include <cstdarg>
 #include "rendering/core/RenderStats.h"
+#include "rendering/core/DeferredRelease.h"
 #include <cstdio>
 #include <cwchar>
 #include <optional>
@@ -433,8 +434,6 @@ void TextManager::AddTextfShadow(RegionId id, float px, const float4& color, boo
 
 // ======== BUILD / RENDER ========
 void TextManager::Build(Renderer* r, ID3D12GraphicsCommandList* /*cl*/) {
-    CollectRetiredTextIndexBuffers(r);
-
     if (font_ == nullptr) { return; }
     CPU_SCOPE(ProfilerScopes::kTextManagerBuild);
     TEXT_PERF_SCOPE(buildUs);
@@ -625,10 +624,6 @@ void TextManager::Clear() {
     framePerf_ = {};
     lastPerf_ = {};
     textIndexBuffer_.Reset();
-    for (auto& buffers : retiredTextIndexBuffers_) {
-        buffers.clear();
-    }
-    retiredTextIndexFrameMask_ = 0;
     textIBV_ = {};
     textIndexQuadCapacity_ = 0;
     RecycleRegionLines();
@@ -762,41 +757,11 @@ void TextManager::EnsureTextIndexCapacity(Renderer* r, size_t quadCount) {
     textIBV_.SizeInBytes = static_cast<UINT>(byteSize);
 }
 
-void TextManager::CollectRetiredTextIndexBuffers(Renderer* r) {
-    if (r == nullptr || retiredTextIndexFrameMask_ == 0u) {
-        return;
-    }
-
-    const UINT frameIndex = r->GetCurrentFrameIndex();
-    if (frameIndex >= retiredTextIndexBuffers_.size() || frameIndex >= 32u) {
-        return;
-    }
-
-    const uint32_t frameBit = 1u << frameIndex;
-    if ((retiredTextIndexFrameMask_ & frameBit) == 0u) {
-        return;
-    }
-
-    retiredTextIndexBuffers_[frameIndex].clear();
-    retiredTextIndexFrameMask_ &= ~frameBit;
-}
-
-void TextManager::RetireTextIndexBuffer(Renderer* r) {
-    if (!textIndexBuffer_) {
-        return;
-    }
-
-    if (r != nullptr) {
-        const UINT frameIndex = r->GetCurrentFrameIndex();
-        if (frameIndex < retiredTextIndexBuffers_.size() && frameIndex < 32u) {
-            retiredTextIndexBuffers_[frameIndex].push_back(std::move(textIndexBuffer_));
-            retiredTextIndexFrameMask_ |= (1u << frameIndex);
-            return;
-        }
-    }
-
-    retiredTextIndexBuffers_[0].push_back(std::move(textIndexBuffer_));
-    retiredTextIndexFrameMask_ |= 1u;
+// The outgrown index buffer: frames in flight may still draw with it. Released once the GPU has finished them, by frame
+// NUMBER (render::deferred, R16.7a). Until 2026-11-24 it waited for its frame SLOT to come round, and a retire made
+// with no renderer fell back to slot 0 (AGENTS.md: a GPU copy is done by its frame number, never by its slot).
+void TextManager::RetireTextIndexBuffer(Renderer* /*r*/) {
+    render::deferred::Retire(std::move(textIndexBuffer_), "text.ib");
 }
 
 // ===== Private helpers =====

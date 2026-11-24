@@ -119,15 +119,16 @@ void ScenarioNestedWaits(unsigned workerCount, int iterations)
     Check(sum.load() == expected, what);
 }
 
-// One producer with dependents_ filled exactly to capacity (4). Validates the
-// dependency protocol (deps run strictly after the producer) and that the
-// capacity boundary itself does not trip the fail-fast.
+// One producer with dependents_ filled exactly to capacity (TaskSystem::kDependentCapacity; the literal 4 here
+// outlived the capacity's raise to 8). Validates the dependency protocol (deps run strictly after the producer)
+// and that the capacity boundary itself does not trip the fail-fast.
 void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
 {
     ScopedSeconds timing(gFanOutSeconds);
     auto& ts = TaskSystem::Get();
     ts.Start(workerCount);
 
+    constexpr int kCapacity = static_cast<int>(TaskSystem::kDependentCapacity);
     int violations = 0;
     int missing = 0;
     for (int it = 0; it < iterations; ++it) {
@@ -139,8 +140,8 @@ void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
             producerDone.store(1, std::memory_order_release);
         });
 
-        TaskSystem::TaskHandle dependents[4] = {};
-        for (int i = 0; i < 4; ++i) {
+        TaskSystem::TaskHandle dependents[kCapacity] = {};
+        for (int i = 0; i < kCapacity; ++i) {
             dependents[i] = ts.CreateTask([&producerDone, &orderErrors, &ran]() {
                 if (producerDone.load(std::memory_order_acquire) == 0) {
                     orderErrors.fetch_add(1, std::memory_order_relaxed);
@@ -151,14 +152,14 @@ void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
         }
 
         ts.Submit(producer);
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < kCapacity; ++i) {
             ts.Wait(dependents[i]);
             ts.Release(dependents[i]);
         }
         ts.Release(producer);
 
         violations += orderErrors.load();
-        if (ran.load() != 4) {
+        if (ran.load() != kCapacity) {
             ++missing;
         }
     }
@@ -282,11 +283,12 @@ void ScenarioRangeExceptions()
     ts.Start(2);
     LOG_INFO(logging::LogCategory::Task, "task regression: expecting two intentional callback exceptions");
     std::atomic<unsigned> ran{0};
-    ts.DispatchWait(16, [&](std::size_t i) {
+    const bool childRangeFinished = ts.DispatchWait(16, [&](std::size_t i) {
         if (i == 7) { throw std::runtime_error("task regression: intentional child exception"); }
         ++ran;
     }, 1);
     RegressionCheck(ran.load() == 15, "throwing child still completes and joins");
+    RegressionCheck(!childRangeFinished, "a range whose chunk threw completes as failed for its waiter");
 
     std::latch first(1), releaseChild(1);
     std::atomic<bool> childDone{false};
@@ -296,7 +298,7 @@ void ScenarioRangeExceptions()
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
         releaseChild.count_down();
     });
-    ts.DispatchWait(2, [&](std::size_t i) {
+    const bool firstChunkRangeFinished = ts.DispatchWait(2, [&](std::size_t i) {
         if (i == 0) {
             first.count_down();
             throw std::runtime_error("task regression: intentional first-chunk exception");
@@ -305,7 +307,51 @@ void ScenarioRangeExceptions()
         childDone.store(true);
     }, 1);
     RegressionCheck(childDone.load(), "first-chunk exception joins outstanding children");
+    RegressionCheck(!firstChunkRangeFinished, "a range whose first chunk threw completes as failed for its waiter");
     release.join();
+    ts.Stop();
+}
+
+// R15.3 (the owner's answer В6): a background task's exception -- an Error line, the task completes as FAILED for its
+// waiter (Wait false, Failed true), its dependents still run, the process goes on; a task that finished is not failed,
+// and a pooled task reused after a failure starts clean. (A frame task's exception ends the process: that road is
+// --crash-selftest=pass-throw, through a real render pass.)
+void ScenarioFailedTasks()
+{
+    ScenarioDeadline deadline("failed tasks");
+    auto& ts = TaskSystem::Get();
+    ts.Start(2);
+    LOG_INFO(logging::LogCategory::Task, "task regression: expecting two intentional background-task exceptions");
+
+    TaskSystem::TaskHandle thrower = ts.CreateTask([]() {
+        throw std::runtime_error("task regression: intentional background-task exception");
+    });
+    std::atomic<bool> dependentRan{false};
+    TaskSystem::TaskHandle dependent = ts.CreateTask([&dependentRan]() { dependentRan.store(true); }, 1);
+    ts.SetDependencies(dependent, &thrower, 1);
+    ts.Submit(thrower);
+    const bool throwerFinished = ts.Wait(thrower);
+    RegressionCheck(!throwerFinished && ts.Failed(thrower), "a throwing background task completes as failed for its waiter");
+    RegressionCheck(ts.Wait(dependent) && dependentRan.load() && !ts.Failed(dependent),
+                    "the dependent of a failed task still runs, and is not failed itself");
+    ts.Release(dependent);
+    ts.Release(thrower);
+
+    TaskSystem::TaskHandle named = ts.CreateTask([]() {
+        throw std::runtime_error("task regression: intentional named background-task exception");
+    }, 0, TaskSystem::FailurePolicy::Background, L"regression.named");
+    ts.Submit(named);
+    RegressionCheck(!ts.Wait(named), "a named background task's exception fails it too");
+    ts.Release(named);
+
+    // The pool hands the failed nodes out again: a fresh task on them must not inherit the failure.
+    int wronglyFailed = 0;
+    for (int i = 0; i < 8; ++i) {
+        TaskSystem::TaskHandle fine = ts.Submit([]() {});
+        wronglyFailed += (!ts.Wait(fine) || ts.Failed(fine)) ? 1 : 0;
+        ts.Release(fine);
+    }
+    RegressionCheck(wronglyFailed == 0, "a task that finished is not failed (pooled nodes reused)");
     ts.Stop();
 }
 
@@ -417,16 +463,24 @@ void ScenarioPoolOwnership()
     RegressionCheck(!duplicate.load(), "concurrent pool ownership beyond 65536 reuse cycles");
 }
 
-// Death test: a fifth dependent must abort the process (fail-fast instead of
-// out-of-bounds write / silent hang). The harness runner treats abnormal exit
-// as the PASSING outcome for this mode.
-void RunOverflowDeathTest()
+// The overflow death test and the two --crash-selftest arms at the end of this file leave the task system holding a
+// task that never runs (a dependent whose producer was never submitted, or one counting a finished dependency) when they
+// survive. The task system's Stop at exit waits for every submitted task -- forever, then: before 2026-11-24 the
+// overflow test reached its FAIL line and hung there. A death test that survived therefore ends the process itself, its
+// verdict flushed.
+[[noreturn]] void EndSurvivedDeathTest(int exitCode)
+{
+    logging::Flush(2000);
+    gLog.Close();
+    std::_Exit(exitCode);
+}
+
+// The Debug CRT's own reports (an assert in a GUI app pops a message box and blocks) go to stderr instead
+// (_set_error_mode governs assert; _CrtSetReportMode only governs _CrtDbgReport-based macros), so an intentional
+// failure ends the process instead of waiting on a dialog.
+void RouteDebugReportsToStderr()
 {
 #ifdef _DEBUG
-    // The standard assert macro in a GUI app pops a message box and blocks; route
-    // it to stderr instead (_set_error_mode governs assert; _CrtSetReportMode
-    // only governs _CrtDbgReport-based macros). Both are set so the intentional
-    // failure aborts immediately instead of waiting on a dialog.
     _set_error_mode(_OUT_TO_STDERR);
     _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
@@ -434,23 +488,78 @@ void RunOverflowDeathTest()
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
 #endif
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+}
+
+// Death test: one dependent past TaskSystem::kDependentCapacity must end the process through the fan-out
+// invariant (InvariantFailure: its Fatal line, then abort -- exit 3 and a minidump where the crash handler is
+// installed) instead of an out-of-bounds write or a silent hang. Every dependent within the capacity must register.
+// The verdict is the session log's: "INVARIANT FAILURE: TaskSystem::SetDependencies: ... capacity" after the
+// "within the capacity" line. Before 2026-11-24 it registered five against a capacity of eight and survived.
+void RunOverflowDeathTest()
+{
+    RouteDebugReportsToStderr();
 
     auto& ts = TaskSystem::Get();
     ts.Start(2);
 
+    constexpr std::size_t kCapacity = TaskSystem::kDependentCapacity;
     TaskSystem::TaskHandle producer = ts.CreateTask([]() {});
-    TaskSystem::TaskHandle dependents[5] = {};
-    Log("overflow death test: registering 5 dependents (capacity 4), expecting abort...\n");
-    for (int i = 0; i < 5; ++i) {
+    TaskSystem::TaskHandle dependents[kCapacity + 1] = {};
+    Log("overflow death test: registering %zu dependents (capacity %zu), expecting the fan-out invariant...\n",
+        kCapacity + 1, kCapacity);
+    for (std::size_t i = 0; i < kCapacity; ++i) {
         dependents[i] = ts.CreateTask([]() {}, 1);
-        ts.SetDependencies(dependents[i], &producer, 1); // 5th call must abort
+        ts.SetDependencies(dependents[i], &producer, 1);
     }
+    LOG_INFO(logging::LogCategory::Task, "overflow death test: {} dependents within the capacity registered; the next "
+             "must end the process with the fan-out invariant", kCapacity);
+    Log("overflow death test: %zu dependents within the capacity registered\n", kCapacity);
+    logging::Flush(2000);
+    dependents[kCapacity] = ts.CreateTask([]() {}, 1);
+    ts.SetDependencies(dependents[kCapacity], &producer, 1); // one past the capacity: must not return
 
     // Not reached when the fail-fast works.
-    Log("FAIL: overflow death test survived 5 dependents\n");
+    LOG_ERROR(logging::LogCategory::Task, "FAIL: overflow death test survived {} dependents", kCapacity + 1);
+    Log("FAIL: overflow death test survived %zu dependents\n", kCapacity + 1);
+    EndSurvivedDeathTest(100);
 }
 
 } // namespace
+
+// --crash-selftest=taskdep: a dependency given to a task that was already submitted (TaskSystemLockFree.cpp,
+// SetDependencies' first check). Must not return.
+void CrashSelfTestTaskDependencyAfterSubmit()
+{
+    RouteDebugReportsToStderr();
+    auto& ts = TaskSystem::Get();
+    ts.Start(2);
+    TaskSystem::TaskHandle target = ts.CreateTask([]() {});
+    ts.Submit(target); // no dependencies: scheduled at once
+    TaskSystem::TaskHandle dependency = ts.CreateTask([]() {});
+    ts.SetDependencies(target, &dependency, 1);
+    // Without the check: the edge lands on a task that ran (or runs) without it; nothing says so.
+    LOG_ERROR(logging::LogCategory::Task, "crash self-test taskdep: a dependency was added to a submitted task and "
+              "nothing stopped it -- did not crash");
+    EndSurvivedDeathTest(1);
+}
+
+// --crash-selftest=taskdep-scheduled: a task made to depend on a task that already ran (SetDependencies' check of
+// each dependency). Must not return.
+void CrashSelfTestTaskDependencyOnScheduled()
+{
+    RouteDebugReportsToStderr();
+    auto& ts = TaskSystem::Get();
+    ts.Start(2);
+    TaskSystem::TaskHandle dependency = ts.CreateTask([]() {});
+    ts.Submit(dependency);
+    ts.Wait(dependency); // finished: its dependents were notified already
+    TaskSystem::TaskHandle target = ts.CreateTask([]() {}, 1);
+    ts.SetDependencies(target, &dependency, 1);
+    // Without the check: the target counts a dependency nobody will ever satisfy -- a Wait on it never returns.
+    LOG_ERROR(logging::LogCategory::Task, "crash self-test taskdep-scheduled: a task now waits for a finished one "
+              "and nothing stopped it (a Wait on it would never return) -- did not crash");
+    EndSurvivedDeathTest(1);
+}
 
 int RunTaskSystemStress(bool overflowDeathTest)
 {
@@ -471,6 +580,7 @@ int RunTaskSystemStress(bool overflowDeathTest)
     ScenarioSaturatedProducers(4);
     ScenarioLargeRange();
     ScenarioRangeExceptions();
+    ScenarioFailedTasks();
     ScenarioNestedTracking();
     ScenarioTargetedWait();
     ScenarioPrerequisiteLifetime();

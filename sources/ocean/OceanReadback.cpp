@@ -14,6 +14,7 @@
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h"
 #include "ocean/OceanWake.h"
+#include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
@@ -114,11 +115,10 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
         return true;
     }
 
-    const std::uint64_t now = renderer->GetTotalFrameNumber();
     if (buffer_)
     {
-        retired_.emplace_back(now, buffer_);
-        buffer_.Reset();
+        // R16.6: frames in flight may still copy into it -- released once the GPU has finished them (render::deferred).
+        render::deferred::Retire(std::move(buffer_), "ocean.readback");
         mapped_ = nullptr;
     }
     for (Slot& slot : slots_) { slot.frame = 0; slot.discard = false; }
@@ -377,8 +377,6 @@ void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
 {
     if (!renderer) { return; }
     const std::uint64_t now = renderer->GetTotalFrameNumber();
-    retired_.erase(std::remove_if(retired_.begin(), retired_.end(),
-        [now](const auto& entry) { return now > entry.first + render::kFrameCount + 1u; }), retired_.end());
 
     // BuildPass stops copying under None, but stopping is not forgetting: the surface adopted under
     // One/Two stayed adopted, HasSurface stayed true, and a floating object settled onto a frozen

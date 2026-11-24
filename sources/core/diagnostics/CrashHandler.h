@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <span>
 #include <string>
 
 // Crash reports (docs/distribution_build_plan.md §7): a minidump, a Fatal line in the session log (flushed at once) and,
@@ -31,10 +32,18 @@ namespace crash
     // std::terminate's handler is per thread in the MSVC CRT: a thread of ours calls this when it starts.
     void InstallThisThread();
 
+    // An arm another subsystem owns (its own contract broken on purpose: the task system's dependency rules, ...): `run`
+    // is expected not to return.
+    struct SelfTestArm
+    {
+        const char* name;
+        void (*run)();
+    };
+
     // --crash-selftest=<arm>: av | stack | abort | terminate | throw | purecall | invalidparam | fastfail | overflow (a
-    // tc::inl_vector outgrown: its Fatal line, then abort) -- installs the handler (the message box closing itself
-    // after 3 s) and crashes that way. Never returns; an unknown arm returns 2.
-    int SelfTest(const std::string& arm, Options options);
+    // tc::inl_vector outgrown: its Fatal line, then abort), or one of `moreArms` -- installs the handler (the message box
+    // closing itself after 3 s) and crashes that way. Never returns; an unknown arm returns 2, an arm that did not crash 1.
+    int SelfTest(const std::string& arm, Options options, std::span<const SelfTestArm> moreArms = {});
     // --crash-selftest=terminate-frame (main.cpp arms it instead of calling SelfTest): the game starts as always, and the
     // first frame after the renderer's BeginFrame throws out of a noexcept function on the game thread (SelfTestFrame): to
     // std::terminate, on the thread whose terminate handler the renderer sets there over this one

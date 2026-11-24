@@ -159,7 +159,7 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
     barriers::EmitAccelerationStructureBuildBarrier(cmdList4, result.Get());
 
     slot.result = std::move(result);
-    Retire(std::move(scratch)); // freed by ReleaseRetired() once the build's frame has completed
+    Retire(std::move(scratch)); // freed by render::deferred once the build's frame has completed
     return slot;
 }
 
@@ -581,33 +581,9 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     device5_->CreateShaderResourceView(nullptr, &srv, TlasSrvCpu(frameIndex));
 }
 
-void AccelerationStructureManager::StampRetired(uint64_t retireFrame)
-{
-    for (Retired& r : retireBin_) {
-        if (r.retireFrame == kUnstamped) { r.retireFrame = retireFrame; }
-    }
-}
-
-void AccelerationStructureManager::ReleaseRetired(uint64_t frameNo)
-{
-    // Order is irrelevant; an unstamped entry (retired this very frame, not yet stamped) can
-    // never satisfy the test because kUnstamped is the largest frame number there is.
-    std::erase_if(retireBin_, [frameNo](const Retired& r) { return r.retireFrame <= frameNo; });
-}
-
-uint64_t AccelerationStructureManager::RetireBinBytes() const
-{
-    uint64_t total = 0;
-    for (const Retired& r : retireBin_) {
-        if (r.buffer) { total += r.buffer->GetDesc().Width; }
-    }
-    return total;
-}
-
 void AccelerationStructureManager::Reset()
 {
-    blasCache_.clear();
-    retireBin_.clear(); // GPU idle by contract of Reset()
+    blasCache_.clear(); // what was retired stays with render::deferred until its frame completes
     for (WindBlasSlot& s : windSlots_) {
         s = WindBlasSlot{};
     }

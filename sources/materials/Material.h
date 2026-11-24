@@ -146,8 +146,9 @@ public:
 
     // Hot reload
     bool FSProbeAndFlagPending();
+    // The replaced PSOs and root signature go to the deferred-release service (R16.5): released once the GPU has
+    // finished the frames that may still bind them. `keepAliveFrames` is no longer used (the service's frame numbers).
     bool HotReloadIfPending(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
-    void CollectRetired(uint64_t frameIndex, uint64_t keepAliveFrames);
 
     struct CBufferField {
         UINT        offset = 0;         // Byte offset of the field inside the cbuffer
@@ -239,14 +240,6 @@ private:
     std::vector<std::uint64_t>                    watchedTimes_; // vfs::Stat::version (a loose file's last write time)
     mutable std::mutex                            watchMtx_;
     std::atomic<bool> pendingReload_{ false };
-
-    struct RetiredState {
-        ComPtr<ID3D12PipelineState> pso;
-        ComPtr<ID3D12PipelineState> wirePso;
-        ComPtr<ID3D12RootSignature> rs;
-        uint64_t retireFrame = 0;
-    };
-    std::vector<RetiredState> retired_;
 
     robin_hood::unordered_map<UINT, CBufferInfo> cbInfos_; // bReg -> info
 
