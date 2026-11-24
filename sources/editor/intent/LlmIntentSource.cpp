@@ -894,7 +894,7 @@ bool LlmIntentSource::StopServer(std::string& outStatus)
     // would be claiming an authority the editor does not have. Found by who is listening on
     // the endpoint, which is the only handle anybody has on a process they did not start.
     std::string error;
-    if (llmclient::StopListener(settings_.endpoint, error))
+    if (llmclient::StopListener(settings_.endpoint, settings_.serverExe, error))
     {
         serverOwned_ = false;
         serverHealthy_ = false;

@@ -67,6 +67,7 @@
 #include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
 #include "text/FontAtlas.h"                        // TestAFontTgaIsSizedByItsBytesNotItsHeader (LoadFontTga8)
 #include "core/vfs/Vfs.h"                          // TestAMaterialMapNamedInCyrillicKeepsItsName (vfs::Widen)
+#include "editor/intent/LlmClient.h"               // TestTheModelServersEndpointAnswerAndStop
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
@@ -3247,6 +3248,167 @@ void TestJsonFieldsAreReadWithoutThrowing()
           "a history that is no list, or no path at all, has no owner");
 }
 
+// A stand-in for the model's server (as tools/reaper_probe.py does it): a python script from a temp folder, in a job that
+// ends it with this test (KILL_ON_JOB_CLOSE), whatever the test does.
+struct PythonStandIn
+{
+    HANDLE job = nullptr;
+    PROCESS_INFORMATION info{};
+
+    bool Start(const std::filesystem::path& script, const std::string& args)
+    {
+        job = ::CreateJobObjectW(nullptr, nullptr);
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!job || !::SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+        {
+            return false;
+        }
+        std::wstring command = L"python \"" + script.wstring() + L"\" " + vfs::Widen(args);
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                              nullptr, &startup, &info))
+        {
+            return false;
+        }
+        ::AssignProcessToJobObject(job, info.hProcess);
+        ::ResumeThread(info.hThread);
+        return true;
+    }
+    bool Alive() const
+    {
+        DWORD code = 0;
+        return info.hProcess && ::GetExitCodeProcess(info.hProcess, &code) && code == STILL_ACTIVE;
+    }
+    std::string Image() const
+    {
+        std::wstring image(32768, L'\0');
+        DWORD size = static_cast<DWORD>(image.size());
+        return ::QueryFullProcessImageNameW(info.hProcess, 0, image.data(), &size) ? vfs::Narrow(image.substr(0, size)) : "";
+    }
+    ~PythonStandIn()
+    {
+        if (info.hProcess) { ::TerminateProcess(info.hProcess, 0); ::CloseHandle(info.hProcess); }
+        if (info.hThread) { ::CloseHandle(info.hThread); }
+        if (job) { ::CloseHandle(job); }
+    }
+};
+
+// A script listening on a free port, once the listener table says it is the one listening there; 0 when none came up.
+int StartListening(PythonStandIn& standIn, const std::filesystem::path& script, const std::string& extraArgs)
+{
+    const int base = 21000 + static_cast<int>(::GetCurrentProcessId() % 20000u);
+    for (int port = base; port < base + 40; ++port)
+    {
+        PythonStandIn attempt;
+        if (!attempt.Start(script, std::to_string(port) + " " + extraArgs)) { return 0; }
+        for (int i = 0; i < 100 && attempt.Alive(); ++i)
+        {
+            if (llmclient::FindListenerPid("127.0.0.1:" + std::to_string(port)) == attempt.info.dwProcessId)
+            {
+                std::swap(standIn.job, attempt.job);
+                std::swap(standIn.info, attempt.info);
+                return port;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    return 0;
+}
+
+void TestTheModelServersEndpointAnswerAndStop()
+{
+    // The model server's client (docs/architecture_review_plan.md M10): a port that did not parse became 8080, the host
+    // went on llama-server's command line as written, an answer grew without a bound, and Stop ended whatever listened on
+    // the endpoint's port in THIS machine's table -- another program, or, for an endpoint on another machine, a local
+    // copy of the very server.
+    std::string host, error, warning, none;
+    int port = 0;
+    const bool parse = !llmclient::ParseEndpoint("127.0.0.1:abc", host, port, error) &&
+                       !llmclient::ParseEndpoint("127.0.0.1", host, port, error) &&
+                       !llmclient::ParseEndpoint("127.0.0.1:70000", host, port, error) &&
+                       !llmclient::ParseEndpoint("127.0.0.1 --mlock:8127", host, port, error) &&
+                       llmclient::ParseEndpoint("0.0.0.0:8127", host, port, error, &warning) && port == 8127 && !warning.empty() &&
+                       llmclient::ParseEndpoint("127.0.0.1:8127", host, port, error, &none) && none.empty();
+    Check(parse, "an endpoint's port must parse, its host must be a host, and 0.0.0.0 comes with a warning");
+
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_llm_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const fs::path listen = dir / "listen.py";
+    const fs::path serve = dir / "serve.py";
+    {
+        std::ofstream out(listen, std::ios::binary | std::ios::trunc);
+        out << "import socket, sys, time\n"
+               "s = socket.socket()\n"
+               "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
+               "s.listen(1)\n"
+               "time.sleep(120)\n";
+    }
+    {
+        std::ofstream out(serve, std::ios::binary | std::ios::trunc);
+        out << "import socket, sys\n"
+               "s = socket.socket()\n"
+               "s.bind(('127.0.0.1', int(sys.argv[1])))\n"
+               "s.listen(1)\n"
+               "c, a = s.accept()\n"
+               "d = b''\n"
+               "while b'\\r\\n\\r\\n' not in d:\n"
+               "    d += c.recv(65536)\n"
+               "n = int(sys.argv[2])\n"
+               "c.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: ' + str(n).encode() + b'\\r\\nConnection: close\\r\\n\\r\\n')\n"
+               "k = b'x' * 1048576\n"
+               "try:\n"
+               "    for i in range(n // 1048576):\n"
+               "        c.sendall(k)\n"
+               "except Exception:\n"
+               "    pass\n"
+               "c.close()\n";
+    }
+
+    // The Stop arms' listeners first, on ports the answer's server has not used (its connection's TIME_WAIT kept one).
+    PythonStandIn other, twin;
+    const int otherPort = StartListening(other, listen, "");
+    const int twinPort = StartListening(twin, listen, "");
+
+    // An answer past the limit: cut, an error, not 18 MB in memory.
+    PythonStandIn server;
+    const int serverPort = StartListening(server, serve, std::to_string(llmclient::kMaxResponseBytes + (2u << 20)));
+    std::string body = "no server came up";
+    bool cut = false;
+    if (serverPort != 0)
+    {
+        const llmclient::Response r = llmclient::Get("127.0.0.1:" + std::to_string(serverPort), "/", 60);
+        cut = !r.ok && r.error.find("longer than") != std::string::npos && r.body.size() <= llmclient::kMaxResponseBytes;
+        body = (r.ok ? "read " : "refused ") + std::to_string(r.body.size()) + " bytes: " + r.error;
+    }
+
+    // Stop against a listener that is not the server, and against a remote endpoint whose port a local copy of the
+    // "server" holds: each refused, each alive.
+    std::string otherError, twinError;
+    if (otherPort == 0 || twinPort == 0)
+    {
+        otherError = twinError = "no listener came up (ports " + std::to_string(otherPort) + ", " + std::to_string(twinPort) + ")";
+    }
+    bool otherKept = false, twinKept = false;
+    if (otherPort != 0 && twinPort != 0)
+    {
+        const bool otherStopped = llmclient::StopListener("127.0.0.1:" + std::to_string(otherPort),
+                                                          "D:/llm_models/llama.cpp/llama-server.exe", otherError);
+        const bool twinStopped = llmclient::StopListener("10.0.0.5:" + std::to_string(twinPort), twin.Image(), twinError);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        otherKept = !otherStopped && other.Alive();
+        twinKept = !twinStopped && twin.Alive();
+    }
+    fs::remove_all(dir, ec);
+    Check(cut && otherKept && twinKept, "the model client holds its answer to 16 MB and Stop ends only the server here: "
+          "an 18 MB answer -> " + body + " || Stop on another program's port -> " + (otherKept ? "refused, alive: " :
+          "STOPPED ") + otherError + " || Stop on 10.0.0.5 with the server's twin listening here -> " +
+          (twinKept ? "refused, alive: " : "STOPPED ") + twinError);
+}
+
 void TestModelRepliesOfAnyShape()
 {
     llmreply::Completion reply;
@@ -6056,6 +6218,7 @@ int main(int argc, char** argv)
         TestModelAnswersAreRead();
         TestJsonFieldsAreReadWithoutThrowing();
         TestModelRepliesOfAnyShape();
+        TestTheModelServersEndpointAnswerAndStop();
         TestAToolPathCannotLeaveTheRepository();
         TestTheModelReadsOnlyTheSearchRootsAndACostlyPatternIsAnAnswer();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();

@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -105,9 +106,21 @@ namespace llmclient
     // would be claiming an authority it does not have.
     unsigned long FindListenerPid(const std::string& hostPort);
 
-    // Terminate whatever is listening there, with its children. False when nothing was
-    // listening or it could not be killed; `outError` says which.
-    bool StopListener(const std::string& hostPort, std::string& outError);
+    // Terminate the server listening there. Refused -- an Error, and false with `outError` -- when the endpoint is not on
+    // this machine (the listener table is this machine's: a remote endpoint's port can be held here by another process),
+    // or when what listens is not `serverExe` (its image's full path), and when nothing listens or it could not be killed
+    // (docs/architecture_review_plan.md M10).
+    bool StopListener(const std::string& hostPort, const std::string& serverExe, std::string& outError);
+
+    // "127.0.0.1:8127" -> host and port. False (and why) when the port is missing or not one (it became 8080 in
+    // silence) or the host holds a character no host has (it goes on llama-server's command line). `warning`: a host
+    // that is not this machine's loopback -- 0.0.0.0 listens on every network, another address is another machine.
+    bool ParseEndpoint(const std::string& hostPort, std::string& host, int& port, std::string& error,
+                       std::string* warning = nullptr);
+    // 127.x.x.x, localhost, ::1.
+    bool IsLoopbackHost(const std::string& host);
+    // The most a response body may hold: past it the read stops and the response is an error.
+    inline constexpr std::size_t kMaxResponseBytes = std::size_t{ 16 } << 20;
 
     bool StartReaper(const std::string& hostPort,
         unsigned long serverPid,

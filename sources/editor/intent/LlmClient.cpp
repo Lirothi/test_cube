@@ -1,6 +1,10 @@
 #include "editor/intent/LlmClient.h"
 #if WITH_EDITOR
 
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -54,22 +58,16 @@ namespace
         return narrow;
     }
 
-    // "127.0.0.1:8127" -> host + port.
-    void SplitHostPort(const std::string& hostPort, std::wstring& outHost, int& outPort)
+    // "127.0.0.1:8127" -> host + port, or false (llmclient::ParseEndpoint; a port that did not parse became 8080).
+    bool SplitHostPort(const std::string& hostPort, std::wstring& outHost, int& outPort, std::string& outError)
     {
-        const std::size_t colon = hostPort.rfind(':');
-        if (colon == std::string::npos)
+        std::string host;
+        if (!llmclient::ParseEndpoint(hostPort, host, outPort, outError))
         {
-            outHost = Widen(hostPort);
-            outPort = 8080;
-            return;
+            return false;
         }
-        outHost = Widen(hostPort.substr(0, colon));
-        outPort = std::atoi(hostPort.c_str() + colon + 1);
-        if (outPort <= 0)
-        {
-            outPort = 8080;
-        }
+        outHost = Widen(host);
+        return true;
     }
 
     // One RAII owner for the three WinHTTP handles, because five early returns and three
@@ -98,8 +96,11 @@ namespace
         llmclient::Response response;
 
         std::wstring host;
-        int port = 8080;
-        SplitHostPort(hostPort, host, port);
+        int port = 0;
+        if (!SplitHostPort(hostPort, host, port, response.error))
+        {
+            return response;
+        }
 
         WinHttpSession http;
         http.session = ::WinHttpOpen(L"test_cube-editor/1",
@@ -154,11 +155,18 @@ namespace
         response.statusCode = static_cast<long>(status);
 
         std::string body;
+        bool tooLong = false;
         for (;;)
         {
             DWORD available = 0;
             if (!::WinHttpQueryDataAvailable(http.request, &available) || available == 0)
             {
+                break;
+            }
+            // The answer's size is the server's word: it grew without a bound (docs/architecture_review_plan.md M10).
+            if (body.size() + available > llmclient::kMaxResponseBytes)
+            {
+                tooLong = true;
                 break;
             }
             const std::size_t offset = body.size();
@@ -178,7 +186,12 @@ namespace
         }
 
         response.body = std::move(body);
-        response.ok = status >= 200 && status < 300;
+        response.ok = status >= 200 && status < 300 && !tooLong;
+        if (tooLong)
+        {
+            response.error = "the answer from " + hostPort + " is longer than " +
+                std::to_string(llmclient::kMaxResponseBytes >> 20) + " MB; the rest was not read";
+        }
         if (!response.ok && response.error.empty())
         {
             response.error = "server returned HTTP " + std::to_string(status);
@@ -239,12 +252,55 @@ namespace llmclient
         processId = 0;
     }
 
+    bool IsLoopbackHost(const std::string& host)
+    {
+        std::string h = host;
+        std::transform(h.begin(), h.end(), h.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return h == "localhost" || h.rfind("127.", 0) == 0 || h == "::1" || h == "[::1]";
+    }
+
+    bool ParseEndpoint(const std::string& hostPort, std::string& host, int& port, std::string& error, std::string* warning)
+    {
+        if (warning) { warning->clear(); }
+        const std::size_t colon = hostPort.rfind(':');
+        if (colon == std::string::npos)
+        {
+            error = "the endpoint '" + hostPort + "' names no port (host:port)";
+            return false;
+        }
+        const std::string portText = hostPort.substr(colon + 1);
+        char* end = nullptr;
+        const long value = std::strtol(portText.c_str(), &end, 10);
+        if (portText.empty() || *end != '\0' || value < 1 || value > 65535)
+        {
+            error = "the endpoint's port '" + portText + "' is not a port (1-65535)";
+            return false;
+        }
+        const std::string name = hostPort.substr(0, colon);
+        // Letters, digits, dots, hyphens, and an IPv6 literal's colons and brackets: it is put on a command line.
+        if (name.empty() || name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:[]") !=
+                                std::string::npos)
+        {
+            error = "the endpoint's host '" + name + "' is not a host name or an address";
+            return false;
+        }
+        host = name;
+        port = static_cast<int>(value);
+        if (warning && !IsLoopbackHost(host))
+        {
+            *warning = host == "0.0.0.0"
+                ? "the endpoint " + hostPort + " listens on every network this machine is on, not only on itself"
+                : "the endpoint " + hostPort + " is not this machine's loopback";
+        }
+        return true;
+    }
+
     unsigned long FindListenerPid(const std::string& hostPort)
     {
         std::wstring host;
         int port = 0;
-        SplitHostPort(hostPort, host, port);
-        if (port <= 0)
+        std::string error;
+        if (!SplitHostPort(hostPort, host, port, error))
         {
             return 0;
         }
@@ -278,20 +334,58 @@ namespace llmclient
         return 0;
     }
 
-    bool StopListener(const std::string& hostPort, std::string& outError)
+    bool StopListener(const std::string& hostPort, const std::string& serverExe, std::string& outError)
     {
+        const auto refuse = [&outError](std::string why)
+        {
+            LOG_ERROR(logging::LogCategory::Editor, "intent model: Stop refused: {}", why);
+            outError = std::move(why);
+            return false;
+        };
+        std::string host;
+        int port = 0;
+        std::string error;
+        if (!ParseEndpoint(hostPort, host, port, error))
+        {
+            return refuse(error);
+        }
+        // BEFORE the table (docs/architecture_review_plan.md M10): the listener table is THIS machine's, so for an endpoint
+        // elsewhere the port found here is another process's -- another copy of the very same server among them, which the
+        // image check below would let through. 0.0.0.0 is this machine on every network.
+        if (!IsLoopbackHost(host) && host != "0.0.0.0")
+        {
+            return refuse("the server at " + hostPort + " is not on this machine; Stop ends only a server here");
+        }
         const unsigned long pid = FindListenerPid(hostPort);
         if (pid == 0)
         {
             outError = "nothing is listening on " + hostPort;
             return false;
         }
-        HANDLE handle = ::OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+        HANDLE handle = ::OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
         if (!handle)
         {
             outError = "cannot stop pid " + std::to_string(pid) + " (error " +
                 std::to_string(::GetLastError()) + ")";
             return false;
+        }
+        // What listens must BE the server: the port alone named whatever held it, and Stop ended that.
+        {
+            std::wstring image(32768, L'\0');
+            DWORD size = static_cast<DWORD>(image.size());
+            const bool named = ::QueryFullProcessImageNameW(handle, 0, image.data(), &size) != 0;
+            image.resize(named ? size : 0);
+            std::error_code ec;
+            const bool same = named && !serverExe.empty() &&
+                std::filesystem::equivalent(std::filesystem::path(image), std::filesystem::path(Widen(serverExe)), ec);
+            if (!same)
+            {
+                ::CloseHandle(handle);
+                return refuse("pid " + std::to_string(pid) + " listening on " + hostPort + " is " +
+                              (named ? Narrow(image) : std::string("a process whose image could not be read")) +
+                              ", not the configured server " + (serverExe.empty() ? std::string("(none)") : serverExe) +
+                              "; it was not stopped");
+            }
         }
         const BOOL ok = ::TerminateProcess(handle, 0);
         ::CloseHandle(handle);
@@ -391,9 +485,17 @@ namespace llmclient
     {
         ServerProcess process;
 
-        std::wstring host;
-        int port = 8080;
-        SplitHostPort(hostPort, host, port);
+        std::string hostName;
+        int port = 0;
+        std::string warning;
+        if (!ParseEndpoint(hostPort, hostName, port, outError, &warning))
+        {
+            return process; // nothing goes on a command line that did not parse
+        }
+        if (!warning.empty())
+        {
+            LOG_WARNING(logging::LogCategory::Editor, "intent model: {}", warning);
+        }
 
         // By default --no-webui keeps it a service rather than a website. The chat page is
         // worth having on demand though: this is a capable general model, and the command
@@ -404,7 +506,7 @@ namespace llmclient
         // byte-identical between requests for the prefill cache to hit (E4).
         std::string command = "\"" + serverExe + "\"" +
             " -m \"" + modelPath + "\"" +
-            " --host " + hostPort.substr(0, hostPort.rfind(':')) +
+            " --host " + hostName +
             " --port " + std::to_string(port) +
             " -c " + std::to_string(contextTokens > 0 ? contextTokens : 8192) +
             " -ngl " + std::to_string(gpuLayers) +
