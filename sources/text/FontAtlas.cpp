@@ -1,4 +1,5 @@
 #include "text/FontAtlas.h"
+#include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include <fstream>
 #include <sstream>
@@ -32,16 +33,30 @@ void UpdatePackedUv(FontGlyph& glyph) {
 }
 }
 
-// VERY small TGA reader (8-bit)
-static bool LoadTGA8(const std::wstring& path, int& w, int& h, std::vector<uint8_t>& out) {
+// VERY small TGA reader (8-bit). The header's size is the file's word (docs/architecture_review_plan.md M7): a side of 0 or
+// past a texture's, or a file shorter than w x h bytes after the header, is refused BEFORE anything is sized by it -- a
+// 65535 x 65535 header on an 18-byte file allocated 4.3 GB.
+bool LoadFontTga8(const std::wstring& path, int& w, int& h, std::vector<uint8_t>& out) {
+    w = h = 0;
     vfs::InStream f(path);
     if (!f) { return false; }
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    f.seekg(0, std::ios::beg);
     unsigned char hdr[18];
     f.read((char*)hdr, 18);
     if (!f || hdr[2] != 3 || hdr[16] != 8) { return false; }
     w = hdr[12] | (hdr[13] << 8);
     h = hdr[14] | (hdr[15] << 8);
-    out.resize((size_t)w * (size_t)h);
+    constexpr int kMostSide = 16384; // D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION
+    const uint64_t pixels = static_cast<uint64_t>(w) * static_cast<uint64_t>(h);
+    if (w <= 0 || h <= 0 || w > kMostSide || h > kMostSide || size < 18 || pixels > static_cast<uint64_t>(size - 18)) {
+        LOG_ERROR(logging::LogCategory::Asset, "font atlas {}: {}x{} in a file of {} bytes -- refused", vfs::Narrow(path), w, h,
+                  static_cast<long long>(size));
+        w = h = 0;
+        return false;
+    }
+    out.resize(static_cast<size_t>(pixels));
     // TGA stores rows bottom-to-top
     for (int y = h - 1; y >= 0; --y) {
         f.read((char*)&out[(size_t)y * (size_t)w], w);
@@ -198,11 +213,11 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
 
     // Load the .tga atlas, convert it to RGBA8, and upload it via Texture2D::CreateFromRGBA8
     int w=0, h=0; std::vector<uint8_t> g;
-    if (!LoadTGA8(tgaPath, w, h, g)) {
+    if (!LoadFontTga8(tgaPath, w, h, g)) {
         return false;
     }
     std::vector<uint8_t> rgba((size_t)w * (size_t)h * 4u);
-    for (int i = 0; i < w*h; ++i) {
+    for (size_t i = 0; i < (size_t)w * (size_t)h; ++i) {
         uint8_t v = g[(size_t)i];
         rgba[(size_t)i*4+0] = v;
         rgba[(size_t)i*4+1] = v;

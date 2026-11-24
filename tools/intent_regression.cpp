@@ -65,6 +65,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
 #include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
+#include "text/FontAtlas.h"                        // TestAFontTgaIsSizedByItsBytesNotItsHeader (LoadFontTga8)
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
@@ -3458,6 +3459,60 @@ void TestParticleFieldsOfAnotherTypeAreLeftAlone()
           d.gravity == 4.0f, "the good fields are read (a count written as 7.0 too)");
 }
 
+void TestAFontTgaIsSizedByItsBytesNotItsHeader()
+{
+    // The font atlas's TGA header sized the pixel buffer: 65535 x 65535 on an 18-byte file allocated 4.3 GB
+    // (docs/architecture_review_plan.md M7). Four files in a temp folder: that one, a side of 0, a file shorter than its
+    // header says -- each refused with nothing allocated -- and a whole 4 x 4 one, read with its bytes, rows top to bottom.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_tga_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const auto tga = [&dir](const char* name, int w, int h, size_t dataBytes) -> std::wstring
+    {
+        std::vector<uint8_t> bytes(18 + dataBytes, 0);
+        bytes[2] = 3;   // uncompressed grey
+        bytes[12] = static_cast<uint8_t>(w & 0xFF); bytes[13] = static_cast<uint8_t>(w >> 8);
+        bytes[14] = static_cast<uint8_t>(h & 0xFF); bytes[15] = static_cast<uint8_t>(h >> 8);
+        bytes[16] = 8;  // bits a pixel
+        for (size_t i = 0; i < dataBytes; ++i) { bytes[18 + i] = static_cast<uint8_t>(i); }
+        std::ofstream out(dir / name, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        return (dir / name).wstring();
+    };
+    struct Case { const char* what; std::wstring path; };
+    const Case refused[] = {
+        { "65535 x 65535 on an 18-byte file", tga("huge.tga", 65535, 65535, 0) },
+        { "a side of 0", tga("zero.tga", 0, 16, 0) },
+        { "4 x 4 with 10 bytes after the header", tga("short.tga", 4, 4, 10) },
+    };
+    const std::wstring good = tga("good.tga", 4, 4, 16);
+    // One at a time, each checked before the next is read: on the code before M7 the side of 0 read out[0] of an empty
+    // vector (a Debug assert), so the 4.3 GB case must report first.
+    for (const Case& c : refused)
+    {
+        int w = -1, h = -1;
+        std::vector<uint8_t> pixels;
+        std::string what;
+        bool read = false;
+        try { read = LoadFontTga8(c.path, w, h, pixels); }
+        catch (const std::bad_alloc&) { what = "threw bad_alloc"; }
+        if (what.empty()) { what = read ? "read" : "refused"; }
+        what += ", " + std::to_string(pixels.capacity()) + " bytes held";
+        if (read || pixels.capacity() >= (1u << 20)) { fs::remove_all(dir, ec); }
+        Check(!read && pixels.capacity() < (1u << 20),
+              std::string("a font TGA whose header lies is refused with nothing allocated: ") + c.what + " -> " + what);
+    }
+    int w = 0, h = 0;
+    std::vector<uint8_t> pixels;
+    const bool goodRead = LoadFontTga8(good, w, h, pixels);
+    fs::remove_all(dir, ec);
+    // TGA rows are stored bottom to top: the file's last row (bytes 12..15) is the image's first.
+    Check(goodRead && w == 4 && h == 4 && pixels.size() == 16 && pixels[0] == 12 && pixels[3] == 15 && pixels[12] == 0 &&
+          pixels[15] == 3, "a whole 4 x 4 TGA is read with its bytes");
+}
+
 void TestModelSettingsRoundTrip()
 {
     // Off unless somebody turns it on: since Claude Code drives the editor over MCP the local
@@ -5933,6 +5988,7 @@ int main(int argc, char** argv)
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
         TestAMeshBinThatLiesIsAnErrorNotACrash();
         TestParticleFieldsOfAnotherTypeAreLeftAlone();
+        TestAFontTgaIsSizedByItsBytesNotItsHeader();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
         TestOnlyOrganisingActionsMayTakeTheWholeLevel();

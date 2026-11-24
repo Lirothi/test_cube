@@ -7,6 +7,10 @@
 
 class Renderer;
 
+// An 8-bit uncompressed TGA (type 3), rows put top to bottom: false (an Error naming the file) for a side of 0 or past
+// 16384, or a file shorter than its header says -- nothing is allocated by its numbers then. No GPU (a test calls it).
+bool LoadFontTga8(const std::wstring& path, int& w, int& h, std::vector<uint8_t>& out);
+
 struct FontGlyph {
     uint32_t cp = 0;
     int x=0,y=0,w=0,h=0;
