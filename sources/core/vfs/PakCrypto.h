@@ -26,15 +26,18 @@ namespace vfs::pak
 
     [[nodiscard]] std::string GuidText(const std::array<std::uint8_t, 16>& guid);
 
-    // A new key from the system's random source.
-    [[nodiscard]] Key GenerateKey();
+    // A new key from the system's random source; none (and why) when the source fails.
+    [[nodiscard]] std::optional<Key> GenerateKey(std::string& error);
     // {"guid": "<32 hex>", "key": "<64 hex>"}.
     bool SaveKeyFile(const Key& key, const std::filesystem::path& file, std::string& error);
     std::optional<Key> LoadKeyFile(const std::filesystem::path& file, std::string& error);
-    // A C++ header that rebuilds the key from four XOR-masked parts at run time (Shipping, plan §4).
+    // A C++ header that rebuilds the key from four XOR-masked parts at run time (Shipping, plan §4). False (and why), with
+    // nothing written, when the random source for the masks fails.
     bool WriteKeyHeader(const Key& key, const std::filesystem::path& header, std::string& error);
     // The key the build embedded (core/vfs/generated/PakKey.g.h), if it was generated before the build.
     [[nodiscard]] std::optional<Key> EmbeddedKey();
+    // --vfs-selftest only: the system's random source fails (true) or works again (false), process-wide.
+    void FailRandomForSelfTest(bool fail);
 
     // The keys a process can open packages with.
     class KeyRing

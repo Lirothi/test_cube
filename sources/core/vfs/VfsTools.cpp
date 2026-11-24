@@ -147,14 +147,14 @@ namespace vfs
             if (HasFlag(cmd, "--pak-keygen="))
             {
                 const std::string file = ArgValue(cmd, "--pak-keygen=");
-                const pak::Key key = pak::GenerateKey();
-                if (!pak::SaveKeyFile(key, FsPath(file), error))
+                const std::optional<pak::Key> key = pak::GenerateKey(error);
+                if (!key || !pak::SaveKeyFile(*key, FsPath(file), error))
                 {
                     LOG_ERROR(logging::LogCategory::Vfs, "pak keygen: {}", error);
                     return 1;
                 }
                 LOG_INFO(logging::LogCategory::Vfs, "pak keygen: {} -- key {}. Keep a copy: packages built with it cannot be read without it.",
-                         file, pak::GuidText(key.guid));
+                         file, pak::GuidText(key->guid));
                 return 0;
             }
             const std::string arg = ArgValue(cmd, "--pak-key-header=");
@@ -218,6 +218,15 @@ namespace vfs
                 }
             }
         };
+
+        // A new key for an arm: the random source failing is a failed check (the arm goes on with zeros).
+        pak::Key NewKey(SelfTest& t)
+        {
+            std::string error;
+            const std::optional<pak::Key> key = pak::GenerateKey(error);
+            t.Expect(key.has_value(), "a new key: " + error);
+            return key.value_or(pak::Key{});
+        }
 
         std::vector<std::uint8_t> Pattern(std::size_t size, std::uint32_t seed, bool compressible)
         {
@@ -451,7 +460,7 @@ namespace vfs
 
             // Encryption (§4): the same reads through an encrypted package, nothing in the clear, and the controls.
             {
-                const pak::Key key = pak::GenerateKey();
+                const pak::Key key = NewKey(t);
                 pak::KeyRing ring;
                 ring.Add(key);
                 pak::BuildOptions secret;
@@ -503,7 +512,7 @@ namespace vfs
                 why.clear();
                 t.Expect(!pak::Package::Open(encA, why) && why.find(pak::GuidText(key.guid)) != std::string::npos,
                          "control: without the key the package is refused, naming its key");
-                pak::Key impostor = pak::GenerateKey();
+                pak::Key impostor = NewKey(t);
                 impostor.guid = key.guid;
                 pak::KeyRing wrong;
                 wrong.Add(impostor);
@@ -533,6 +542,39 @@ namespace vfs
                 t.Expect(!cipher.Decrypt(nonce, aadA, sizeof(aadA), copy.data(), copy.size(), badTag), "control: a changed tag fails");
                 copy = data;
                 t.Expect(cipher.Decrypt(nonce, aadA, sizeof(aadA), copy.data(), copy.size(), tag) && copy == original, "decrypt");
+
+                // The system's random source failing (docs/architecture_review_plan.md M3): --pak-keygen and
+                // --pak-key-header refuse and write nothing -- a key or masks of zeros is no key -- while a package built
+                // with a key it already has never asks the source (its nonces are HMACs of the bytes): the same bytes.
+                {
+                    const std::filesystem::path goodKey = root / L"random_arm_key.json";
+                    const std::filesystem::path failKey = root / L"random_fail_key.json";
+                    const std::filesystem::path failHeader = root / L"random_fail_key.h";
+                    const std::filesystem::path encC = root / L"enc_c.tcpak";
+                    std::string keyError;
+                    t.Expect(pak::SaveKeyFile(key, goodKey, keyError), "the random-source arm's key file: " + keyError);
+                    pak::FailRandomForSelfTest(true);
+                    const int keygen = KeyTool(("--pak-keygen=\"" + Narrow(failKey.wstring()) + "\"").c_str());
+                    const int header = KeyTool(("--pak-key-header=\"" + Narrow(goodKey.wstring()) + "," +
+                                                Narrow(failHeader.wstring()) + "\"").c_str());
+                    const bool rebuilt = pak::Build(encC, encFiles, secret).ok;
+                    pak::FailRandomForSelfTest(false);
+                    std::error_code fe;
+                    std::string written;
+                    if (std::filesystem::exists(failKey, fe))
+                    {
+                        std::string why;
+                        const std::optional<pak::Key> zero = pak::LoadKeyFile(failKey, why);
+                        const bool zeros = zero && std::all_of(zero->bytes.begin(), zero->bytes.end(), [](std::uint8_t b) { return b == 0; });
+                        written = zeros ? " -- it wrote a key of zeros" : " -- it wrote a key file";
+                    }
+                    t.Expect(keygen != 0 && !std::filesystem::exists(failKey, fe),
+                             "the random source failing: --pak-keygen refuses and writes no key" + written);
+                    t.Expect(header != 0 && !std::filesystem::exists(failHeader, fe),
+                             "the random source failing: --pak-key-header refuses and writes no header");
+                    t.Expect(rebuilt && ReadOs(encC) == ReadOs(encA),
+                             "the random source failing: a package built with a key it has comes out the same, byte for byte");
+                }
             }
 
             // Control arms: damage must be caught, and named.
@@ -685,7 +727,7 @@ namespace vfs
                     std::filesystem::create_directories(plainOnly, pe);
                     std::filesystem::copy_file(pakA, policy / L"plain.tcpak", std::filesystem::copy_options::overwrite_existing, pe);
                     std::filesystem::copy_file(pakA, plainOnly / L"plain.tcpak", std::filesystem::copy_options::overwrite_existing, pe);
-                    const pak::Key policyKey = pak::GenerateKey();
+                    const pak::Key policyKey = NewKey(t);
                     const std::filesystem::path keyFile = root / L"policy_key.json";
                     std::string keyError;
                     t.Expect(pak::SaveKeyFile(policyKey, keyFile, keyError), "the policy arm's key file: " + keyError);

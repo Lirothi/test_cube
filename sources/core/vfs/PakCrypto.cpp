@@ -7,6 +7,7 @@
 #include <bcrypt.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <mutex>
@@ -131,19 +132,35 @@ namespace vfs::pak
             return true;
         }
 
-        void Random(std::uint8_t* out, std::size_t n)
+        std::atomic<bool> g_failRandom{ false }; // FailRandomForSelfTest
+
+        // False (and why) when the system's random source fails: a key or masks it did not fill are zeros, never a key
+        // (docs/architecture_review_plan.md M3).
+        bool Random(std::uint8_t* out, std::size_t n, std::string& error)
         {
-            ::BCryptGenRandom(nullptr, out, static_cast<ULONG>(n), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            const NTSTATUS status = g_failRandom.load()
+                                        ? static_cast<NTSTATUS>(0xC0000001L) // --vfs-selftest: STATUS_UNSUCCESSFUL
+                                        : ::BCryptGenRandom(nullptr, out, static_cast<ULONG>(n), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+            if (status >= 0) { return true; }
+            char text[160];
+            std::snprintf(text, sizeof(text), "the system's random source failed (BCryptGenRandom 0x%08lX)%s",
+                          static_cast<unsigned long>(status), g_failRandom.load() ? ", made to fail by the vfs self-test" : "");
+            error = text;
+            return false;
         }
     }
 
     std::string GuidText(const std::array<std::uint8_t, 16>& guid) { return Hex(guid.data(), guid.size()); }
 
-    Key GenerateKey()
+    void FailRandomForSelfTest(bool fail) { g_failRandom.store(fail); }
+
+    std::optional<Key> GenerateKey(std::string& error)
     {
         Key key;
-        Random(key.guid.data(), key.guid.size());
-        Random(key.bytes.data(), key.bytes.size());
+        if (!Random(key.guid.data(), key.guid.size(), error) || !Random(key.bytes.data(), key.bytes.size(), error))
+        {
+            return std::nullopt;
+        }
         return key;
     }
 
@@ -193,7 +210,10 @@ namespace vfs::pak
     bool WriteKeyHeader(const Key& key, const std::filesystem::path& header, std::string& error)
     {
         std::array<std::array<std::uint8_t, 32>, 4> parts{};
-        for (int p = 1; p < 4; ++p) { Random(parts[static_cast<std::size_t>(p)].data(), 32); }
+        for (int p = 1; p < 4; ++p)
+        {
+            if (!Random(parts[static_cast<std::size_t>(p)].data(), 32, error)) { return false; } // before the file is opened
+        }
         for (std::size_t i = 0; i < 32; ++i)
         {
             parts[0][i] = static_cast<std::uint8_t>(key.bytes[i] ^ parts[1][i] ^ parts[2][i] ^ parts[3][i]);
