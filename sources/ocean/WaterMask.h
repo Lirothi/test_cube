@@ -167,5 +167,10 @@ namespace watermask
     // At Scene::Sync, after the physics poses: every registered object that is visible and has a field, with the matrix the
     // frame draws it at and its inverse.
     void Collect(std::vector<WaterMaskInstance>& out);
+    // --water-mask-selftest=throw[:<path part>] (main.cpp, any build but Shipping): the first field Collect asks for -- of a
+    // geometry whose path holds the part, when one is given -- skips its bake and its build task throws before BuildField:
+    // nothing is built and nothing is written, so the road of a build that failed is seen in a running game
+    // (docs/architecture_review_plan.md M1).
+    void ArmSelfTestThrow(const std::string& pathPart);
 }
 } // namespace ocean

@@ -13,6 +13,7 @@
 #include <iterator>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <thread>
 #include <unordered_map>
 
@@ -34,6 +35,7 @@ namespace
         std::atomic<bool> done{ false };
         std::shared_ptr<const WaterMaskField> field;
         std::string note;
+        bool failed = false; // the build threw: no field, `note` says why (written before `done`)
     };
     struct Entry
     {
@@ -48,6 +50,10 @@ namespace
         std::vector<Entry> entries;
         std::unordered_map<std::string, std::shared_ptr<const WaterMaskField>> fields; // by key; null = none
         std::unordered_map<std::string, std::shared_ptr<Job>> jobs;                     // by key; building
+        // --water-mask-selftest=throw[:<path part>] (watermask::ArmSelfTestThrow): taken by the first field of a geometry
+        // whose path holds the part (empty = any) that would read its bake.
+        bool selfTestArmed = false;
+        std::string selfTestPathPart;
     };
     Registry& TheRegistry()
     {
@@ -96,7 +102,14 @@ namespace
         if (registry.jobs.count(key) != 0u) { return nullptr; }
         const std::string bakePath = watermask::BakePathOf(path);
         std::string why = "no bake file";
-        if (!bakePath.empty())
+        const bool selfTestThrow = registry.selfTestArmed && path.find(registry.selfTestPathPart) != std::string::npos;
+        if (selfTestThrow)
+        {
+            registry.selfTestArmed = false;
+            why = "its bake skipped by --water-mask-selftest=throw";
+            LOG_WARNING(logging::LogCategory::Ocean, "water mask self-test: {} -- its build task will throw before BuildField", path);
+        }
+        else if (!bakePath.empty())
         {
             const auto started = std::chrono::steady_clock::now();
             std::vector<std::uint8_t> bytes;
@@ -118,34 +131,61 @@ namespace
                  bakePath.empty() ? std::string("no bake for this geometry") : "the bake does not serve", why);
         auto job = std::make_shared<Job>();
         registry.jobs.emplace(key, job);
-        TaskSystem::Get().SubmitDetach([job, path, bakePath, bakeKey]()
+        TaskSystem::Get().SubmitDetach([job, path, bakePath, bakeKey, selfTestThrow]()
         {
-            const auto started = std::chrono::steady_clock::now();
-            std::shared_ptr<const WaterMaskField> field =
-                watermask::BuildField(path, bakeKey.glassSlots, bakeKey.waterline, bakeKey.draftOverLowest);
-            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
-            char head[96];
-            std::snprintf(head, sizeof(head), "built on a worker in %.0f ms", ms);
-            std::string note = head;
-            if (!field) { note += ", no mask -- the water is drawn inside it"; }
+            // The job always lands (docs/architecture_review_plan.md M1). Anything the build or its bake throws -- out of
+            // memory on a large hull -- is a field NOT built, an Error when the frame takes it. Left to the scheduler, which
+            // only logs "Task callback threw", `done` stayed false and the key sat in `jobs` for the process: the hull was
+            // never masked, never tried again, and nothing said which one.
+            std::shared_ptr<const WaterMaskField> field;
+            std::string note;
+            bool failed = false;
+            try
+            {
+                if (selfTestThrow)
+                {
+                    throw std::runtime_error("water mask self-test: thrown inside the build task of " + path +
+                                             ", before BuildField");
+                }
+                const auto started = std::chrono::steady_clock::now();
+                field = watermask::BuildField(path, bakeKey.glassSlots, bakeKey.waterline, bakeKey.draftOverLowest);
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+                char head[96];
+                std::snprintf(head, sizeof(head), "built on a worker in %.0f ms", ms);
+                note = head;
+                if (!field) { note += ", no mask -- the water is drawn inside it"; }
 #if WITH_EDITOR
-            else if (!bakePath.empty() && !vfs::IsLooseFile(path))
-            {
-                // A packaged geometry's key is its content hash, not a loose file's time: a bake written for it would be
-                // stale for the loose file beside it, and the next run on loose files would write it back. The cook
-                // (docs/distribution_build_plan.md §8.1) writes the package's bakes.
-                note += ", not baked: the geometry comes from a package";
-            }
-            else if (!bakePath.empty())
-            {
-                const std::vector<std::uint8_t> bytes = watermask::SerializeField(*field, bakeKey);
-                std::string why;
-                note += WriteBakeFile(bakePath, bytes, why) ? ", baked into " + bakePath + " (" + std::to_string(bytes.size() / 1024u) + " KB)"
-                                                            : ", NOT baked: " + why;
-            }
+                else if (!bakePath.empty() && !vfs::IsLooseFile(path))
+                {
+                    // A packaged geometry's key is its content hash, not a loose file's time: a bake written for it would be
+                    // stale for the loose file beside it, and the next run on loose files would write it back. The cook
+                    // (docs/distribution_build_plan.md §8.1) writes the package's bakes.
+                    note += ", not baked: the geometry comes from a package";
+                }
+                else if (!bakePath.empty())
+                {
+                    const std::vector<std::uint8_t> bytes = watermask::SerializeField(*field, bakeKey);
+                    std::string why;
+                    note += WriteBakeFile(bakePath, bytes, why) ? ", baked into " + bakePath + " (" + std::to_string(bytes.size() / 1024u) + " KB)"
+                                                                : ", NOT baked: " + why;
+                }
 #endif
+            }
+            catch (const std::exception& error)
+            {
+                failed = true;
+                field.reset(); // any throw is a build not done: a field made before its bake threw goes with it
+                try { note = std::string("the build FAILED: ") + error.what(); } catch (...) {}
+            }
+            catch (...)
+            {
+                failed = true;
+                field.reset();
+                try { note = "the build FAILED: a non-standard exception"; } catch (...) {}
+            }
             job->field = std::move(field);
             job->note = std::move(note);
+            job->failed = failed;
             job->done.store(true, std::memory_order_release);
         });
         return nullptr;
@@ -158,7 +198,15 @@ namespace
         {
             if (!it->second->done.load(std::memory_order_acquire)) { ++it; continue; }
             const std::string path = it->first.substr(0, it->first.find('|'));
-            if (it->second->field)
+            if (it->second->failed)
+            {
+                // Kept as "none" (null in `fields`): the same geometry and key would throw again. Another key (a draft, the
+                // glass, a re-bake of the geometry) is another build.
+                LOG_ERROR(logging::LogCategory::Ocean, "water mask: {} -- {} -- no mask: the water is drawn inside it, and this "
+                          "geometry and key are not built again", path,
+                          it->second->note.empty() ? std::string("the build FAILED") : it->second->note);
+            }
+            else if (it->second->field)
             {
                 LOG_INFO(logging::LogCategory::Ocean, "water mask: {} -- {}", path, it->second->note);
             }
@@ -1713,6 +1761,16 @@ namespace watermask
             const Math::mat4 model = entry.object->GetModelMatrix();
             out.push_back(WaterMaskInstance{ entry.field, Math::mat4::Inverse(model), model });
         }
+    }
+
+    void ArmSelfTestThrow(const std::string& pathPart)
+    {
+        Registry& registry = TheRegistry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        registry.selfTestArmed = true;
+        registry.selfTestPathPart = pathPart;
+        LOG_WARNING(logging::LogCategory::Ocean, "--water-mask-selftest=throw: the first water mask asked for{}{} skips its bake "
+                    "and its build task throws", pathPart.empty() ? "" : " whose geometry path holds ", pathPart);
     }
 }
 } // namespace ocean

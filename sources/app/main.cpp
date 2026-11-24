@@ -909,6 +909,20 @@ int WINAPI WinMain(
         render::g_uploadRingCheckSelftest = std::strstr(lpCmdLine, "--upload-ring-check=selftest") != nullptr;
     }
 
+    // "--water-mask-selftest=throw[:<path part>]": the first water mask the frame asks for (of a geometry whose path holds
+    // the part) skips its bake and its build task throws (ocean/WaterMask.h ArmSelfTestThrow; docs/architecture_review_plan.md M1).
+    if (lpCmdLine) {
+        if (const std::string arm = ExtractArgValue(lpCmdLine, "--water-mask-selftest"); !arm.empty()) {
+            if (arm == "throw") {
+                ocean::watermask::ArmSelfTestThrow({});
+            } else if (arm.rfind("throw:", 0) == 0 && arm.size() > 6) {
+                ocean::watermask::ArmSelfTestThrow(arm.substr(6));
+            } else {
+                LOG_ERROR(logging::LogCategory::Ocean, "--water-mask-selftest={}: the only arm is throw[:<path part>]", arm);
+            }
+        }
+    }
+
     // Async-compute plan step 7: "--dump-barriers" writes every compiled barrier once, for a
     // before/after diff of the barrier compile itself.
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-barriers")) {
