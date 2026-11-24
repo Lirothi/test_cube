@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,7 +61,7 @@ public:
     };
 
     // Shutdown, the GPU idle: the icon atlas goes before the device does (the panel itself outlives it).
-    void ReleaseGpuResources() { iconAtlas_.Release(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
+    void ReleaseGpuResources() { iconAtlas_.reset(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
 
     struct PersistentState
     {
@@ -138,7 +139,7 @@ private:
     bool includeSubfolders_ = true;
     bool activeTypeFilters_[5] = {};
     ViewMode viewMode_ = ViewMode::List;
-    Texture2D iconAtlas_;
+    std::optional<Texture2D> iconAtlas_; // made on first use, reset by ReleaseGpuResources
     bool iconAtlasTried_ = false;
     bool iconAtlasReady_ = false;
     double lastAutoRefreshTimeSec_ = -1000.0;

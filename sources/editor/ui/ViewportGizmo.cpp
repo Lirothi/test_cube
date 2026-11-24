@@ -730,21 +730,22 @@ void ViewportGizmo::Update(EditorContext& ctx,
             Texture2D::CreateDesc desc;
             desc.path = L"textures/editor/editor_icons.png";
             desc.usage = Texture2D::Usage::LinearData;
-            iconAtlas_.SetMemTag(MemTag::Editor);
-            iconAtlasReady_ = iconAtlas_.CreateFromFile(&ctx.renderer, up.CommandList(), desc, up.KeepAlive());
+            iconAtlas_.emplace();
+            iconAtlas_->SetMemTag(MemTag::Editor);
+            iconAtlasReady_ = iconAtlas_->CreateFromFile(&ctx.renderer, up.CommandList(), desc, up.KeepAlive());
             up.SubmitAndWait(&ctx.renderer);
         }
     }
 
-    if (iconAtlasReady_)
+    if (iconAtlasReady_ && iconAtlas_)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = iconAtlas_.GetSrvFormat();
+        srvDesc.Format = iconAtlas_->GetSrvFormat();
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
-        ctx.renderer.MarkImGuiTextureShaderReadable(iconAtlas_.GetResource());
-        const ImTextureID iconTex = ctx.renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
+        ctx.renderer.MarkImGuiTextureShaderReadable(iconAtlas_->GetResource());
+        const ImTextureID iconTex = ctx.renderer.CreateImGuiTextureId(iconAtlas_->GetResource(), srvDesc);
         if (iconTex != ImTextureID_Invalid)
         {
             ImDrawList* dl = ImGui::GetBackgroundDrawList();

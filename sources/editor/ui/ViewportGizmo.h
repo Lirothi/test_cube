@@ -1,6 +1,7 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <optional>
 #include <vector>
 
 #include "core/math/Math.h"
@@ -22,7 +23,7 @@ public:
     enum class TransformSpace { Local, World };
 
     // Shutdown, the GPU idle: the icon atlas goes before the device does (the gizmo itself outlives it).
-    void ReleaseGpuResources() { iconAtlas_.Release(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
+    void ReleaseGpuResources() { iconAtlas_.reset(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
 
     struct PersistentState
     {
@@ -90,7 +91,7 @@ private:
     // Editor icon billboards for world-positioned editor entities: screen-space,
     // always-on-top ImGui overlay images drawn from the icon atlas, clickable to
     // select the entity. Loaded lazily on first use.
-    Texture2D iconAtlas_;
+    std::optional<Texture2D> iconAtlas_; // made on first use, reset by ReleaseGpuResources
     bool iconAtlasTried_ = false;
     bool iconAtlasReady_ = false;
 };

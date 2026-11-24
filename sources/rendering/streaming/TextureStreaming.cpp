@@ -93,6 +93,7 @@ int TextureStreaming::Register(Texture2D* tex)
     e.tex = tex;
     ++e.gen;
     e.swap = nullptr;
+    e.offStreaming = false;
     e.fading = false;
     e.fade = MipBiasFade{};
     // StreamableTextureResource.cpp:227: the fade starts at the loaded count, no interpolation.
@@ -160,7 +161,7 @@ UINT TextureStreaming::InFlightTarget(std::uint32_t i) const
 
 bool TextureStreaming::RequestResident(std::uint32_t i, UINT mips, float lastRenderAge)
 {
-    if (i >= entries_.size() || !entries_[i].tex || entries_[i].swap) { return false; }
+    if (i >= entries_.size() || !entries_[i].tex || entries_[i].swap || entries_[i].offStreaming) { return false; }
     if (mips == entries_[i].tex->GetResidentMips()) { return false; }
     return IssueSwap_(i, mips, lastRenderAge);
 }
@@ -261,7 +262,28 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
             if (!alive) { DropSwap_(s, frameNo); removed = true; break; }
             switch (s->io->GetState())
             {
-            case IoRequest::State::Done: s->stage = Swap::Stage::ReadyToCopy; break;
+            case IoRequest::State::Done:
+                s->stage = Swap::Stage::ReadyToCopy;
+                if (s->selfTest)
+                {
+                    LOG_INFO(logging::LogCategory::Asset, "texture streaming self-test: {} -- the request was read and its mips copied into the ring",
+                             s->io->path);
+                }
+                break;
+            case IoRequest::State::Refused:
+                // The worker said why (Error). The texture keeps the mips it has and asks for no more: its file no
+                // longer matches the table it was registered with, and a reload is what reads it again.
+                ++swapsFailed_;
+                if (alive)
+                {
+                    Entry& e = entries_[s->entry];
+                    e.offStreaming = true;
+                    LOG_WARNING(logging::LogCategory::Asset, "texture streaming: {} is off streaming, with {} of its {} mips resident",
+                                e.tex->GetSourcePath(), e.tex->GetResidentMips(), e.tex->GetFileMipCount());
+                }
+                DropSwap_(s, frameNo);
+                removed = true;
+                break;
             case IoRequest::State::Failed:
             case IoRequest::State::Cancelled:
                 ++swapsFailed_;
@@ -315,7 +337,7 @@ void TextureStreaming::IssueRequests_(std::uint64_t /*frameNo*/)
     for (std::uint32_t i = 0; i < entries_.size(); ++i)
     {
         Entry& e = entries_[i];
-        if (!e.tex || e.swap) { continue; }
+        if (!e.tex || e.swap || e.offStreaming) { continue; }
         const UINT fileMips = e.tex->GetFileMipCount();
         if (fileMips == 0 || !e.tex->IsStreamable() || !e.tex->GetResource()) { continue; }
         const UINT wanted = static_cast<UINT>(std::clamp(g_forceMips, 1, static_cast<int>(fileMips)));
@@ -383,7 +405,10 @@ bool TextureStreaming::IssueSwap_(std::uint32_t entryIdx, UINT wanted, float las
         io->path = tex->GetSourcePath();
         io->fileOffset = table.mips[fileMip0].fileOffset;
         io->fileBytes = 0;
+        io->expectedFileSize = table.headerBytes + table.DataBytes(); // == the file's size at load, or not streamable
         io->ringBase = ring_.Cpu();
+        io->ringBegin = ringOffset;
+        io->ringEnd = ringOffset + offset;
         io->mips.resize(newMips);
         for (UINT m = 0; m < newMips; ++m)
         {
@@ -396,6 +421,22 @@ bool TextureStreaming::IssueSwap_(std::uint32_t entryIdx, UINT wanted, float las
             l.rowBytes = mip.rowPitchBytes;
             l.rowPitch = swap->ringFootprints[m].Footprint.RowPitch;
             io->fileBytes += mip.sliceBytes;
+        }
+        switch (TextureStreamingIo::TakeSelfTest())
+        {
+        case TextureStreamingIo::SelfTest::Layout:
+            io->mips.back().fileOffset += io->mips.back().rowBytes; // its last row now ends one row past the read
+            LOG_INFO(logging::LogCategory::Asset, "texture streaming self-test: {} -- its last new mip moved {} bytes past what is read",
+                     tex->GetSourcePath(), io->mips.back().rowBytes);
+            swap->selfTest = true;
+            break;
+        case TextureStreamingIo::SelfTest::Size:
+            io->expectedFileSize += 4096; // as if the file changed after the texture was loaded
+            LOG_INFO(logging::LogCategory::Asset, "texture streaming self-test: {} -- its file is expected 4096 bytes larger",
+                     tex->GetSourcePath());
+            swap->selfTest = true;
+            break;
+        default: break;
         }
         swap->io = std::move(io);
         swap->stage = Swap::Stage::WaitIo;

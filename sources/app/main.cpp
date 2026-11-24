@@ -41,6 +41,7 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "rendering/meshes/LodSwitchReport.h" // --lod-report
+#include "rendering/streaming/TextureStreamingIo.h" // --texstream-selftest
 #include <fstream>
 #include "meshoptimizer.h"                // --reimport-drop-small= -> meshopt_SimplifyPrune
 #include "rendering/rt/AccelerationStructure.h"
@@ -923,6 +924,21 @@ int WINAPI WinMain(
                 ocean::watermask::ArmSelfTestThrow(arm.substr(6));
             } else {
                 LOG_ERROR(logging::LogCategory::Ocean, "--water-mask-selftest={}: the only arm is throw[:<path part>]", arm);
+            }
+        }
+    }
+
+    // "--texstream-selftest=layout|size": the first texture stream-in is built wrong -- its last new mip one row past
+    // what is read, or its file expected 4 KB larger than it is (rendering/streaming/TextureStreamingIo.h;
+    // docs/architecture_review_plan.md M14). The worker refuses it and the texture goes off streaming.
+    if (lpCmdLine) {
+        if (const std::string arm = ExtractArgValue(lpCmdLine, "--texstream-selftest"); !arm.empty()) {
+            if (arm == "layout") {
+                streaming::TextureStreamingIo::ArmSelfTest(streaming::TextureStreamingIo::SelfTest::Layout);
+            } else if (arm == "size") {
+                streaming::TextureStreamingIo::ArmSelfTest(streaming::TextureStreamingIo::SelfTest::Size);
+            } else {
+                LOG_ERROR(logging::LogCategory::Asset, "--texstream-selftest={}: the arms are layout and size", arm);
             }
         }
     }

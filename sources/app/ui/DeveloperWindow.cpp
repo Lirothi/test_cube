@@ -728,21 +728,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 Texture2D::CreateDesc desc;
                 desc.path = L"textures/editor/content_browser_icons.png";
                 desc.usage = Texture2D::Usage::AlbedoSRGB;
-                resetIconAtlas_.SetMemTag(MemTag::Ui);
-                resetIconAtlasReady_ = resetIconAtlas_.CreateFromFile(
+                resetIconAtlas_.emplace();
+                resetIconAtlas_->SetMemTag(MemTag::Ui);
+                resetIconAtlasReady_ = resetIconAtlas_->CreateFromFile(
                     &renderer, uploads.CommandList(), desc, uploads.KeepAlive());
                 uploads.SubmitAndWait(&renderer);
             }
         }
-        if (resetIconAtlasReady_)
+        if (resetIconAtlasReady_ && resetIconAtlas_)
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = resetIconAtlas_.GetSrvFormat();
+            srvDesc.Format = resetIconAtlas_->GetSrvFormat();
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
-            renderer.MarkImGuiTextureShaderReadable(resetIconAtlas_.GetResource());
-            resetIconTexture = renderer.CreateImGuiTextureId(resetIconAtlas_.GetResource(), srvDesc);
+            renderer.MarkImGuiTextureShaderReadable(resetIconAtlas_->GetResource());
+            resetIconTexture = renderer.CreateImGuiTextureId(resetIconAtlas_->GetResource(), srvDesc);
         }
 
         ImGui::SeparatorText("Project graphics settings");

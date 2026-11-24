@@ -29,13 +29,18 @@ struct IoMipLayout
 // the requester once Finished().
 struct IoRequest
 {
-    enum class State : int { Queued, Reading, Done, Failed, Cancelled };
+    // Refused: the file or the layout no longer matches the mip table the texture was registered with (architecture
+    // review 10.5 p. 5) -- nothing was read into the ring, and the texture is taken off streaming.
+    enum class State : int { Queued, Reading, Done, Failed, Cancelled, Refused };
 
     std::wstring path;
     std::uint64_t fileOffset = 0;      // the tight [first new mip, last new mip] range in the file
     std::uint64_t fileBytes = 0;
+    std::uint64_t expectedFileSize = 0; // the whole file per its mip table (header + every mip), as at load
     std::vector<IoMipLayout> mips;
     std::uint8_t* ringBase = nullptr;
+    std::uint64_t ringBegin = 0;       // the ring range this request owns: every row lands inside [begin, end)
+    std::uint64_t ringEnd = 0;
     std::atomic<int> state{ static_cast<int>(State::Queued) };
     std::atomic<bool> cancel{ false };
 
@@ -59,7 +64,19 @@ public:
     std::size_t Queued() const;
     std::uint64_t BytesRead() const { return bytesRead_.load(std::memory_order_relaxed); }
 
+    // Empty when every row of `req` lies inside the `readBytes` read for it and inside its ring range, and the file is
+    // the size its table says; otherwise why not. The worker refuses such a request instead of copying by it.
+    static std::string CheckLayout(const IoRequest& req, std::uint64_t readBytes, std::uint64_t fileSize);
+
+    // `--texstream-selftest=layout|size` (architecture review M14): the next stream-in request is built wrong -- its
+    // last mip moved one row past what is read, or the file's expected size off by 4 KB (a file changed after the
+    // texture was registered). The requester takes the arm (TakeSelfTest) once.
+    enum class SelfTest : int { None, Layout, Size };
+    static void ArmSelfTest(SelfTest arm) { selfTest_.store(static_cast<int>(arm), std::memory_order_release); }
+    static SelfTest TakeSelfTest() { return static_cast<SelfTest>(selfTest_.exchange(0, std::memory_order_acq_rel)); }
+
 private:
+    static inline std::atomic<int> selfTest_{ 0 };
     static constexpr std::size_t kMaxOpenFiles = 64;
     void Run_();
     const vfs::File* OpenCached_(const std::wstring& path); // null when it cannot be opened

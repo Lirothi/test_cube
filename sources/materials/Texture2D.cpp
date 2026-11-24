@@ -49,14 +49,6 @@ Texture2D::~Texture2D()
     }
 }
 
-void Texture2D::Release()
-{
-    // The destructor's work and then a default-constructed object in place: every member the class grows is reset
-    // with it, with no second list of them to keep in step.
-    this->~Texture2D();
-    new (this) Texture2D();
-}
-
 void Texture2D::RenameBindless_()
 {
     auto* heap = render::BindlessHeap::Instance();

@@ -2489,6 +2489,36 @@ R3 и R5 — M, с низким риском, друг от друга не за
   после регистрации текстуры — копия в рабочей папке), отменяется с Error и текстура снимается со стриминга, а не
   читает за буфером (контроль: на исходном коде тот же запрос проходит — строки Error нет, мип копируется).
 
+  **Сделано (2026-11-24).** Якоря на месте (`Texture2D.cpp:52-58`, `TextureStreamingIo.cpp:114-123`).
+  `Texture2D::Release()` убран совсем: его звали только три владельца иконочных атласов (`DeveloperWindow`,
+  `ContentBrowserPanel`, `ViewportGizmo`) перед уходом устройства. Теперь они держат `std::optional<Texture2D>`:
+  атлас создаётся `emplace()` при первом показе, `ReleaseGpuResources` делает `reset()`. Работает настоящий
+  деструктор, второго списка членов нет. Поток ввода-вывода ДО чтения сверяет запрос
+  (`TextureStreamingIo::CheckLayout`): размер файла равен размеру по таблице мипов (заголовок и все мипы — при
+  загрузке DDS это уже сверено, иначе он не стримится); читаемый отрезок лежит в файле; каждая строка каждого
+  нового мипа берётся из прочитанного и кладётся в отрезок кольца, выделенный этому запросу (новые поля
+  `ringBegin`/`ringEnd`); строка не шире шага кольца. Несовпадение — Error «texture stream-in refused: <файл> --
+  <что>; the texture is taken off streaming», состояние `Refused`, в кольцо ничего не пишется. Запрашивающий на
+  границе кадра снимает текстуру со стриминга (`Entry::offStreaming`: `RequestResident` и `forceMips` её
+  пропускают, новая регистрация записи сбрасывает флаг) с Warning «… is off streaming, with N of its M mips
+  resident». Самопроверка `--texstream-selftest=layout|size` (Shipping её отбрасывает фильтром ключей) портит первый
+  запрос на подгрузку: последний новый мип сдвинут на одну строку за прочитанное, либо файл «ожидается» на 4 КБ
+  больше — как файл, сменившийся после загрузки текстуры. Вживую на `demo` (Release), оба плеча: Error («new mip 2:
+  its 8192 bytes at file offset 688512 lie outside the 172032 bytes read at 524416» / «the file holds 699192 bytes,
+  its mip table 703288»), Warning «textures/bronze_albedo.dds is off streaming, with 7 of its 11 mips resident», в
+  отчёте `[texstream]` `failed 1` и `refused 1` (менеджер просит, текстура не берёт), выход чистый. Контроль — тот
+  же код без вызова проверки: оба плеча без строки Error, «the request was read and its mips copied into the
+  ring», `done 20 failed 0`. Гейт C: Release `--scene-stress=150 --rt-audit` — `mem tags: STABLE`, `rt audit:
+  PASS`; Debug `--scene-stress=12 --texstream-selftest=layout` на своём рабочем столе — `CLEAN`, отказ прошёл и
+  там; суженный GBV `--gbv-passes=TextureStreaming,Skybox --gbv-selftest=1@Skybox --texstream-selftest=layout` —
+  единственная находка `id=935` самопроверки, 37 подмен через пасс и один отказ, `live objects at exit: none`,
+  чистый выход; Release `--mem-readout=30` — PASS. Debug-редактор (`--editor --dev-tab=Streaming`, свой порт
+  MCP, `imgui.ini` и `editor_state.json` возвращены): атласы всех трёх владельцев нарисованы, выход после снимка
+  чистый. Шесть конфигураций собираются без предупреждений; `check_*.py` (четыре) — 0; `intent_regression` —
+  PASS. Заметка `docs/agents/memory_and_streaming.md` дополнена. Не покрыто: файл, сменившийся без смены размера
+  (таблица сходится, содержимое другое); открытый файл в кэше потока (64 последних) держит размер на момент
+  открытия; текстура вне стриминга числится в `lag>2` менеджера, пока её не загрузят заново.
+
 #### R15. Контракты в Release (S-M, риск низкий)
 
 Смысл: нарушение, которое в Release сегодня даёт зависание, запись за буфер или кадр без пасса, даёт строку Fatal и

@@ -87,3 +87,10 @@ arm's reach `tex.stream` 472 -> 166 MB, read 459 -> 161 MB, GPU objects 273 -> 1
 loads 343 -> 167, 172-191 -> 96-100 ms; the boot 4056-4315 -> 3876 ms; 50 switches 6242-6324 -> 6089-6154 ms. The same picture:
 the bathroom 1.25-2.38 % of pixels over 8 levels against the same arm across processes 1.21 % (within a process up to 2.31 %,
 its candles), the grove 0.10-0.40 % against 0.50 %.
+
+**A stream-in whose file no longer matches its mip table is refused** (2026-11-24, architecture review M14). The IO thread
+checks every request before it reads (`TextureStreamingIo::CheckLayout`): the file the size its table says, every row of
+every new mip inside what is read and inside the ring range the request owns. A mismatch is an Error ("texture stream-in
+refused: ..."), nothing reaches the ring, and the texture goes off streaming with the mips it has (a Warning; `failed`
+and the manager's `refused` count in `[texstream]`) until it is registered again. `--texstream-selftest=layout|size`
+builds the first stream-in wrong on purpose.

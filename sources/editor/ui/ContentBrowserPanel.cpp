@@ -2865,8 +2865,9 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             Texture2D::CreateDesc desc;
             desc.path = L"textures/editor/content_browser_icons.png";
             desc.usage = Texture2D::Usage::AlbedoSRGB;
-            iconAtlas_.SetMemTag(MemTag::Editor);
-            iconAtlasReady_ = iconAtlas_.CreateFromFile(
+            iconAtlas_.emplace();
+            iconAtlas_->SetMemTag(MemTag::Editor);
+            iconAtlasReady_ = iconAtlas_->CreateFromFile(
                 &renderer,
                 uploads.CommandList(),
                 desc,
@@ -2875,16 +2876,16 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         }
     }
 
-    if (iconAtlasReady_)
+    if (iconAtlasReady_ && iconAtlas_)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = iconAtlas_.GetSrvFormat();
+        srvDesc.Format = iconAtlas_->GetSrvFormat();
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
-        renderer.MarkImGuiTextureShaderReadable(iconAtlas_.GetResource());
+        renderer.MarkImGuiTextureShaderReadable(iconAtlas_->GetResource());
         icons.texture =
-            renderer.CreateImGuiTextureId(iconAtlas_.GetResource(), srvDesc);
+            renderer.CreateImGuiTextureId(iconAtlas_->GetResource(), srvDesc);
     }
 
     ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_FirstUseEver);

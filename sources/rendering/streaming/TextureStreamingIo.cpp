@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 
 #include "core/logging/Log.h"
 
@@ -81,6 +82,43 @@ void TextureStreamingIo::CloseAll_()
     files_.clear();
 }
 
+std::string TextureStreamingIo::CheckLayout(const IoRequest& req, std::uint64_t readBytes, std::uint64_t fileSize)
+{
+    if (req.expectedFileSize != 0 && fileSize != req.expectedFileSize)
+    {
+        return std::format("the file holds {} bytes, its mip table {} (it changed after the texture was loaded)",
+                           fileSize, req.expectedFileSize);
+    }
+    if (req.fileOffset > fileSize || readBytes > fileSize - req.fileOffset)
+    {
+        return std::format("the read of {} bytes at {} runs past the file's {}", readBytes, req.fileOffset, fileSize);
+    }
+    if (req.ringBegin > req.ringEnd) { return std::format("its ring range [{}, {}) is reversed", req.ringBegin, req.ringEnd); }
+    for (std::size_t i = 0; i < req.mips.size(); ++i)
+    {
+        const IoMipLayout& m = req.mips[i];
+        if (m.rows == 0 || m.rowBytes == 0) { return std::format("new mip {} has no rows", i); }
+        if (m.rowBytes > m.rowPitch)
+        {
+            return std::format("new mip {}: a row of {} bytes is wider than its ring pitch {}", i, m.rowBytes, m.rowPitch);
+        }
+        const std::uint64_t srcBytes = static_cast<std::uint64_t>(m.rows) * m.rowBytes;
+        if (m.fileOffset < req.fileOffset || m.fileOffset - req.fileOffset > readBytes
+            || srcBytes > readBytes - (m.fileOffset - req.fileOffset))
+        {
+            return std::format("new mip {}: its {} bytes at file offset {} lie outside the {} bytes read at {}", i, srcBytes,
+                               m.fileOffset, readBytes, req.fileOffset);
+        }
+        const std::uint64_t dstBytes = static_cast<std::uint64_t>(m.rows - 1) * m.rowPitch + m.rowBytes;
+        if (m.ringOffset < req.ringBegin || m.ringOffset > req.ringEnd || dstBytes > req.ringEnd - m.ringOffset)
+        {
+            return std::format("new mip {}: its rows land in [{}, {}), outside its ring range [{}, {})", i, m.ringOffset,
+                               m.ringOffset + dstBytes, req.ringBegin, req.ringEnd);
+        }
+    }
+    return {};
+}
+
 void TextureStreamingIo::Run_()
 {
     MEM_SCOPE(MemTag::TexStream); // the IO thread's buffers (memory profiling M3)
@@ -104,7 +142,22 @@ void TextureStreamingIo::Run_()
         req->state.store(static_cast<int>(IoRequest::State::Reading), std::memory_order_release);
 
         bool ok = false;
+        std::string refused;
         const vfs::File* file = OpenCached_(req->path);
+        if (file != nullptr && req->fileBytes > 0 && req->ringBase)
+        {
+            // Architecture review 10.5 p. 5: the layout comes from the mip table checked once, at load, and the file
+            // may have changed since (a re-import with the editor open). Checked before the read: a request whose rows
+            // would be taken from past the read or put past its ring range reads nothing.
+            refused = CheckLayout(*req, req->fileBytes, file->Size());
+        }
+        if (!refused.empty())
+        {
+            LOG_ERROR(logging::LogCategory::Asset, "texture stream-in refused: {} -- {}; the texture is taken off streaming",
+                      req->path, refused);
+            req->state.store(static_cast<int>(IoRequest::State::Refused), std::memory_order_release);
+            continue;
+        }
         if (file != nullptr && req->fileBytes > 0 && req->ringBase)
         {
             tight.resize(static_cast<std::size_t>(req->fileBytes));

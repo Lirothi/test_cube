@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -63,7 +64,7 @@ public:
     // Shutdown, the GPU idle: the reset-icon atlas goes before the device does (the window itself outlives it).
     void ReleaseGpuResources()
     {
-        resetIconAtlas_.Release();
+        resetIconAtlas_.reset();
         resetIconAtlasTried_ = false;
         resetIconAtlasReady_ = false;
     }
@@ -114,7 +115,7 @@ private:
     void DrawTraceControls();
 
     TextureDebugViewer textureDebugViewer_;
-    Texture2D resetIconAtlas_;
+    std::optional<Texture2D> resetIconAtlas_; // made on first use, reset by ReleaseGpuResources
     OceanControlsWindow oceanControlsWindow_;
     LogWindow logWindow_;
     MemoryTab memoryTab_;

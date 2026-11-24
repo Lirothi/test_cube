@@ -75,6 +75,7 @@ private:
         Swap* swap = nullptr;
         MipBiasFade fade;      // A4
         bool fading = false;
+        bool offStreaming = false; // a stream-in was refused (its file no longer matches its table): no more requests
     };
     struct Swap
     {
@@ -93,6 +94,7 @@ private:
         std::uint64_t copyFrame = 0;
         UINT64 newBytes = 0;
         float lastRenderAge = 0.0f;   // A4: decides whether the arrival fades
+        bool selfTest = false;        // built wrong on purpose (TextureStreamingIo::SelfTest): its outcome is logged
     };
 
     bool EnsureRing_();
