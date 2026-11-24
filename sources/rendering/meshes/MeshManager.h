@@ -263,7 +263,9 @@ public:
         std::vector<BinaryLodInfo> lods; // lods[0] = LOD0
         BinaryDagInfo dag;               // dag.clusters 0 = no DAG in the file
     };
-    static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out);
+    // False when the file cannot be read; `why` (optional) says why -- "damaged: ..." for a file whose numbers do not hold
+    // (also an Error in the log, naming it), else missing or an older format.
+    static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out, std::string* why = nullptr);
     // The DAG's numbers by level (DescribeMeshBinary's, and the bake's log line). `withMeshlets` cuts its clusters into
     // meshlets to count them (needs the DAG's indices).
     static BinaryDagInfo DescribeDag(const Mesh::Dag& dag, bool withMeshlets);

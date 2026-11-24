@@ -1633,7 +1633,7 @@ int WINAPI WinMain(
         // "--lod-report[=<part of a path>]": the Mesh Editor's "LOD switching" for every models/**/*.mesh.json (or those
         // whose path holds the text) -- where each LOD comes in on UE's reference view and every warning with its fix
         // (rendering/meshes/LodSwitchReport.h), at the compiled defaults of lod.* (graphics_settings.json is not read).
-        // Headless, read-only. Exit code = the assets with a warning.
+        // Headless, read-only. Exit code = the assets with a warning + those whose geometry cannot be read (an Error each).
         // "--water-mask-lid=<geometry .mesh.bin>[,<out.obj>[,<glass slot;slot...>]]": a hull's water mask (ocean/WaterMask.h)
         // built as the frame builds it the first time it meets the hull -- its basins and their lids in the log -- and its lid
         // written as an OBJ to look at (per basin a group of the cap and one of the curtains and glass faces). The glass slots
@@ -1729,6 +1729,7 @@ int WINAPI WinMain(
             }
             std::sort(manifests.begin(), manifests.end());
             int withWarnings = 0;
+            int unreadable = 0;
             size_t warnings = 0;
             for (const std::string& path : manifests) {
                 std::ifstream in(path); // vfs-ok: --lod-report, a tool on the loose assets
@@ -1736,8 +1737,16 @@ int WINAPI WinMain(
                 if (doc.is_discarded() || !doc.is_object()) { continue; }
                 std::string geometry = doc.value("geometry", std::string());
                 if (const size_t hash = geometry.find('#'); hash != std::string::npos) { geometry.resize(hash); }
+                if (geometry.empty()) { continue; }
                 MeshManager::BinaryInfo info;
-                if (geometry.empty() || !MeshManager::DescribeMeshBinary(geometry, info)) { continue; }
+                std::string why;
+                if (!MeshManager::DescribeMeshBinary(geometry, info, &why)) {
+                    // Skipped in silence until 2026-11-24 (docs/architecture_review_plan.md M5): a damaged or missing
+                    // geometry read as an asset with nothing to report.
+                    LOG_ERROR(logging::LogCategory::Asset, "--lod-report: {}: its geometry {} cannot be read: {}", path, geometry, why);
+                    ++unreadable;
+                    continue;
+                }
                 const lodreport::Report r = lodreport::Build(info, doc, lodreport::ManifestHasFoliage(doc));
                 std::string levels;
                 for (size_t i = 0; i < r.rows.size(); ++i) {
@@ -1754,9 +1763,9 @@ int WINAPI WinMain(
                 warnings += r.warnings.size();
                 withWarnings += r.warnings.empty() ? 0 : 1;
             }
-            LOG_INFO(logging::LogCategory::Asset, "--lod-report: {} asset(s), {} with warnings, {} warning(s)", manifests.size(),
-                     withWarnings, warnings);
-            return withWarnings;
+            LOG_INFO(logging::LogCategory::Asset, "--lod-report: {} asset(s), {} with warnings, {} warning(s){}", manifests.size(),
+                     withWarnings, warnings, unreadable == 0 ? std::string() : ", " + std::to_string(unreadable) + " UNREADABLE");
+            return withWarnings + unreadable;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

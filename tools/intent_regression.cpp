@@ -3351,6 +3351,71 @@ void TestAMaterialOfTheWrongTypeIsAnErrorNotACrash()
     Check(!threw, "a material's field of the wrong type does not throw out of the loader");
 }
 
+void TestAMeshBinThatLiesIsAnErrorNotACrash()
+{
+    // A .mesh.bin's counts sized its vectors and its indices were trusted (docs/architecture_review_plan.md M5). Two copies
+    // of models/box in a temp folder: a vertex count of 2^32 - 1 (223 GB of vertices: bad_alloc before the check) and an
+    // index one past the vertices (read as whole before it) -- each refused, the reason named. The original reads.
+    namespace fs = std::filesystem;
+    const std::string source = "models/box/box.mesh.bin";
+    std::ifstream in(source, std::ios::binary);
+    const std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    uint32_t vertexCount = 0;
+    if (bytes.size() >= 32) { std::memcpy(&vertexCount, bytes.data() + 24, sizeof(vertexCount)); }
+    const size_t firstIndex = 32 + static_cast<size_t>(vertexCount) * sizeof(VertexPNTUV) + 12; // LOD0: ic, sc, error
+    Check(bytes.size() > firstIndex + 4 && vertexCount > 0, "the source mesh binary: " + source);
+    if (bytes.size() <= firstIndex + 4 || vertexCount == 0) { return; }
+
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_meshbin_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    const auto write = [&dir](const char* file, std::vector<char> data) -> std::string
+    {
+        std::ofstream out(dir / file, std::ios::binary | std::ios::trunc);
+        out.write(data.data(), static_cast<std::streamsize>(data.size()));
+        return (dir / file).generic_string();
+    };
+    std::vector<char> hugeCount = bytes;
+    const uint32_t most = 0xFFFFFFFFu;
+    std::memcpy(hugeCount.data() + 24, &most, sizeof(most));
+    std::vector<char> pastIndex = bytes;
+    std::memcpy(pastIndex.data() + firstIndex, &vertexCount, sizeof(vertexCount)); // one past the last vertex
+    const std::string hugePath = write("huge_count.mesh.bin", hugeCount);
+    const std::string pastPath = write("past_index.mesh.bin", pastIndex);
+
+    // Each read: read (true), refused (false and why), or thrown (what the reader threw -- the allocation of a count).
+    struct Outcome { bool read = false; std::string why; std::string threw; };
+    const auto describe = [](const std::string& path, uint32_t* vertices)
+    {
+        Outcome o;
+        try
+        {
+            MeshManager::BinaryInfo info;
+            o.read = MeshManager::DescribeMeshBinary(path, info, &o.why);
+            if (vertices) { *vertices = info.vertexCount; }
+        }
+        catch (const std::bad_alloc&) { o.threw = "bad_alloc"; }
+        catch (const std::length_error&) { o.threw = "length_error"; }
+        return o;
+    };
+    const auto say = [](const Outcome& o)
+    {
+        return !o.threw.empty() ? "threw " + o.threw : o.read ? std::string("read as whole") : "refused: " + o.why;
+    };
+    uint32_t originalVertices = 0;
+    const Outcome original = describe(source, &originalVertices);
+    const Outcome huge = describe(hugePath, nullptr);
+    const Outcome past = describe(pastPath, nullptr);
+    fs::remove_all(dir, ec);
+    Check(original.read && originalVertices == vertexCount, "the original reads: " + say(original));
+    const bool hugeRefused = huge.threw.empty() && !huge.read && huge.why.find("damaged") != std::string::npos &&
+                             huge.why.find("vertices") != std::string::npos;
+    const bool pastRefused = past.threw.empty() && !past.read && past.why.find("past the") != std::string::npos;
+    Check(hugeRefused && pastRefused, "a damaged mesh binary is refused with its reason, neither thrown nor read: a vertex "
+          "count of 2^32 - 1 -> " + say(huge) + "; an index past the vertices -> " + say(past));
+}
+
 void TestModelSettingsRoundTrip()
 {
     // Off unless somebody turns it on: since Claude Code drives the editor over MCP the local
@@ -5824,6 +5889,7 @@ int main(int argc, char** argv)
         TestModelRepliesOfAnyShape();
         TestAToolPathCannotLeaveTheRepository();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
+        TestAMeshBinThatLiesIsAnErrorNotACrash();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
         TestOnlyOrganisingActionsMayTakeTheWholeLevel();

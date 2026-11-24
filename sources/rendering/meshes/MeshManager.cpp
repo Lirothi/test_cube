@@ -1286,11 +1286,17 @@ template <typename T> void WriteBinVector(std::ofstream& f, const std::vector<T>
     f.write(reinterpret_cast<const char*>(&n), sizeof(n));
     f.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
 }
-template <typename T> bool ReadBinVector(std::istream& f, std::vector<T>& v, uint32_t cap)
+// The bytes after the stream's position in a file of `fileSize` (0 when the position is unknown or past it).
+uint64_t BytesLeft(std::istream& f, uint64_t fileSize)
+{
+    const std::streamoff at = f.tellg();
+    return at < 0 || static_cast<uint64_t>(at) > fileSize ? 0 : fileSize - static_cast<uint64_t>(at);
+}
+template <typename T> bool ReadBinVector(std::istream& f, std::vector<T>& v, uint32_t cap, uint64_t fileSize)
 {
     uint32_t n = 0;
     f.read(reinterpret_cast<char*>(&n), sizeof(n));
-    if (!f || n > cap) { return false; }
+    if (!f || n > cap || static_cast<uint64_t>(n) * sizeof(T) > BytesLeft(f, fileSize)) { return false; }
     v.resize(n);
     f.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
     return static_cast<bool>(f);
@@ -1347,34 +1353,69 @@ bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t o
 // check (a directly-referenced committed .bin has no runtime source to compare against; only the
 // magic + format version matter). `lods[0]` = LOD 0. A v3 file reads without clusters; `outDag` (optional) takes a v5
 // file's cluster DAG (left empty for an older one, or a v5 one without).
+//
+// The file's numbers are its word (docs/architecture_review_plan.md M5): every count is held against the bytes left
+// before anything is sized by it, and what was read against itself -- an index past the vertices, a submesh or a cluster
+// past its LOD's indices -- before anybody indexes by it (the collision, the water mask, the wind weights do, on the
+// CPU). A DAMAGED file is an Error naming it, and false; a missing, stale or older-format one is a quiet false (the
+// caller falls back). `why` (optional) says which either way.
 bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash,
     const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods,
-    MeshBinHeader* outHeader = nullptr, Mesh::Dag* outDag = nullptr)
+    MeshBinHeader* outHeader = nullptr, Mesh::Dag* outDag = nullptr, std::string* why = nullptr)
 {
+    const auto refuse = [why](const char* reason) { if (why) { *why = reason; } return false; };
+    const auto damaged = [&binPath, why](const std::string& reason)
+    {
+        LOG_ERROR(logging::LogCategory::Asset, "mesh binary {} is damaged: {}", binPath, reason);
+        if (why) { *why = "damaged: " + reason; }
+        return false;
+    };
     vfs::InStream f(binPath);
-    if (!f) { return false; }
+    if (!f) { return refuse("cannot be opened"); }
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    f.seekg(0, std::ios::beg);
+    const uint64_t fileSize = size > 0 ? static_cast<uint64_t>(size) : 0;
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
     if (outHeader) { *outHeader = h; }
-    if (!f || h.magic != kMeshBinMagic || !MeshBinVersionReadable(h.version) ||
-        (expectSourceHash && h.sourceHash != *expectSourceHash) ||
-        (expectOptionsHash && h.optionsHash != *expectOptionsHash) ||
-        h.vertexCount == 0 || h.lodCount == 0)
+    if (!f) { return damaged("shorter than its header (" + std::to_string(fileSize) + " bytes)"); }
+    if (h.magic != kMeshBinMagic) { return damaged("not a mesh binary (its magic)"); }
+    if (!MeshBinVersionReadable(h.version)) { return refuse("a format version this build does not read"); }
+    if ((expectSourceHash && h.sourceHash != *expectSourceHash) || (expectOptionsHash && h.optionsHash != *expectOptionsHash))
     {
-        return false; // missing/stale -> caller falls back to the runtime parse
+        return refuse("stale"); // the caller falls back to the runtime parse
+    }
+    if (h.vertexCount == 0 || h.lodCount == 0) { return damaged("no vertices or no LODs"); }
+    if (static_cast<uint64_t>(h.vertexCount) * sizeof(VertexPNTUV) > BytesLeft(f, fileSize))
+    {
+        return damaged(std::to_string(h.vertexCount) + " vertices, and " + std::to_string(BytesLeft(f, fileSize)) +
+                       " bytes after the header");
     }
     verts.resize(h.vertexCount);
     f.read(reinterpret_cast<char*>(verts.data()),
         static_cast<std::streamsize>(h.vertexCount * sizeof(VertexPNTUV)));
-    lods.resize(h.lodCount);
-    for (uint32_t i = 0; i < h.lodCount && f; ++i)
+    const uint64_t lodHeaderBytes = 3u * sizeof(uint32_t) + (h.version >= 4u ? sizeof(uint32_t) : 0u); // ic, sc, error (+ cc)
+    if (!f || static_cast<uint64_t>(h.lodCount) * lodHeaderBytes > BytesLeft(f, fileSize))
     {
+        return damaged(std::to_string(h.lodCount) + " LODs, and " + std::to_string(BytesLeft(f, fileSize)) +
+                       " bytes after the vertices");
+    }
+    lods.resize(h.lodCount);
+    for (uint32_t i = 0; i < h.lodCount; ++i)
+    {
+        const std::string lod = "LOD " + std::to_string(i) + ": ";
         uint32_t ic = 0, sc = 0;
         float err = 0.0f;
         f.read(reinterpret_cast<char*>(&ic), sizeof(ic));
         f.read(reinterpret_cast<char*>(&sc), sizeof(sc));
         f.read(reinterpret_cast<char*>(&err), sizeof(err)); // v2
-        if (!f) { return false; }
+        if (!f) { return damaged(lod + "cut short"); }
+        if (static_cast<uint64_t>(ic) * sizeof(uint32_t) + static_cast<uint64_t>(sc) * sizeof(Mesh::Submesh) > BytesLeft(f, fileSize))
+        {
+            return damaged(lod + std::to_string(ic) + " indices and " + std::to_string(sc) + " submeshes, and " +
+                           std::to_string(BytesLeft(f, fileSize)) + " bytes left");
+        }
         lods[i].error = err;
         lods[i].indices.resize(ic);
         lods[i].submeshes.resize(sc);
@@ -1384,27 +1425,71 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
         {
             uint32_t cc = 0;
             f.read(reinterpret_cast<char*>(&cc), sizeof(cc));
-            if (!f || cc > ic / 3u) { return false; } // more clusters than triangles: not this format
+            if (!f) { return damaged(lod + "cut short"); }
+            if (cc > ic / 3u) { return damaged(lod + "more clusters than triangles"); }
+            if (static_cast<uint64_t>(cc) * sizeof(Mesh::Cluster) > BytesLeft(f, fileSize))
+            {
+                return damaged(lod + std::to_string(cc) + " clusters, and " + std::to_string(BytesLeft(f, fileSize)) + " bytes left");
+            }
             lods[i].clusters.resize(cc);
             f.read(reinterpret_cast<char*>(lods[i].clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
         }
+        if (!f) { return damaged(lod + "cut short"); }
     }
-    if (!f) { return false; }
+    // What was read, against itself.
+    for (uint32_t i = 0; i < h.lodCount; ++i)
+    {
+        const MeshLodCpu& l = lods[i];
+        const std::string lod = "LOD " + std::to_string(i) + ": ";
+        for (size_t k = 0; k < l.indices.size(); ++k)
+        {
+            if (l.indices[k] >= h.vertexCount)
+            {
+                return damaged(lod + "index " + std::to_string(k) + " is " + std::to_string(l.indices[k]) + ", past the " +
+                               std::to_string(h.vertexCount) + " vertices");
+            }
+        }
+        for (size_t s = 0; s < l.submeshes.size(); ++s)
+        {
+            if (static_cast<uint64_t>(l.submeshes[s].indexOffset) + l.submeshes[s].indexCount > l.indices.size())
+            {
+                return damaged(lod + "submesh " + std::to_string(s) + " runs past its " + std::to_string(l.indices.size()) + " indices");
+            }
+        }
+        for (size_t c = 0; c < l.clusters.size(); ++c)
+        {
+            if (static_cast<uint64_t>(l.clusters[c].firstIndex) + 3ull * l.clusters[c].triCount > l.indices.size())
+            {
+                return damaged(lod + "cluster " + std::to_string(c) + " runs past its " + std::to_string(l.indices.size()) + " indices");
+            }
+        }
+    }
     if (outDag) { *outDag = Mesh::Dag{}; }
     if (h.version >= 5u && outDag) // Tessy N7e: the DAG block (bounded by LOD0: a DAG holds ~2x its triangles)
     {
         uint32_t hasDag = 0;
         f.read(reinterpret_cast<char*>(&hasDag), sizeof(hasDag));
-        if (!f) { return false; }
+        if (!f) { return damaged("cut short before the cluster DAG"); }
         if (hasDag != 0u)
         {
             const uint32_t cap = std::max<uint32_t>(static_cast<uint32_t>(lods[0].indices.size()) * 8u, 1024u);
             Mesh::Dag dag;
-            if (!ReadBinVector(f, dag.indices, cap) || !ReadBinVector(f, dag.clusters, cap) ||
-                !ReadBinVector(f, dag.lod, cap) || !ReadBinVector(f, dag.levels, cap) || !ReadBinVector(f, dag.submeshes, cap) ||
-                dag.lod.size() != dag.clusters.size())
+            if (!ReadBinVector(f, dag.indices, cap, fileSize) || !ReadBinVector(f, dag.clusters, cap, fileSize) ||
+                !ReadBinVector(f, dag.lod, cap, fileSize) || !ReadBinVector(f, dag.levels, cap, fileSize) ||
+                !ReadBinVector(f, dag.submeshes, cap, fileSize) || dag.lod.size() != dag.clusters.size())
             {
-                return false;
+                return damaged("the cluster DAG's tables (a count past its bound or the file, or cut short)");
+            }
+            for (const uint32_t index : dag.indices)
+            {
+                if (index >= h.vertexCount) { return damaged("the cluster DAG indexes past the vertices"); }
+            }
+            for (const Mesh::Cluster& c : dag.clusters)
+            {
+                if (static_cast<uint64_t>(c.firstIndex) + 3ull * c.triCount > dag.indices.size())
+                {
+                    return damaged("a cluster of the DAG runs past its indices");
+                }
             }
             *outDag = std::move(dag);
         }
@@ -3470,13 +3555,30 @@ bool MeshManager::ReadCollisionGeometry(const std::string& binPath, int lod, Col
     {
         return false;
     }
+    // The same rules as ReadMeshBinary (M5): a count is held against the bytes left before it sizes anything, and the
+    // indices and submeshes read are held against the vertices and the indices; a damaged file is an Error naming it.
+    const auto damaged = [&binPath, &out](const std::string& reason)
+    {
+        LOG_ERROR(logging::LogCategory::Asset, "mesh binary {} is damaged: {}", binPath, reason);
+        out = CollisionGeometry{};
+        return false;
+    };
     vfs::InStream f(binPath); // seeks past the LODs it does not want: only the wanted one is read
     if (!f) { return false; }
+    f.seekg(0, std::ios::end);
+    const std::streamoff size = f.tellg();
+    f.seekg(0, std::ios::beg);
+    const uint64_t fileSize = size > 0 ? static_cast<uint64_t>(size) : 0;
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
     if (!f || h.magic != kMeshBinMagic || !MeshBinVersionReadable(h.version) || h.vertexCount == 0 || h.lodCount == 0)
     {
         return false;
+    }
+    if (static_cast<uint64_t>(h.vertexCount) * sizeof(VertexPNTUV) > BytesLeft(f, fileSize))
+    {
+        return damaged(std::to_string(h.vertexCount) + " vertices, and " + std::to_string(BytesLeft(f, fileSize)) +
+                       " bytes after the header");
     }
     std::vector<VertexPNTUV> verts(h.vertexCount);
     f.read(reinterpret_cast<char*>(verts.data()), static_cast<std::streamsize>(h.vertexCount * sizeof(VertexPNTUV)));
@@ -3495,13 +3597,30 @@ bool MeshManager::ReadCollisionGeometry(const std::string& binPath, int lod, Col
         f.read(reinterpret_cast<char*>(&sc), sizeof(sc));
         f.read(reinterpret_cast<char*>(&err), sizeof(err));
         if (!f) { return false; }
+        if (static_cast<uint64_t>(ic) * sizeof(uint32_t) + static_cast<uint64_t>(sc) * sizeof(Mesh::Submesh) > BytesLeft(f, fileSize))
+        {
+            return damaged("LOD " + std::to_string(i) + ": " + std::to_string(ic) + " indices and " + std::to_string(sc) +
+                           " submeshes, and " + std::to_string(BytesLeft(f, fileSize)) + " bytes left");
+        }
         if (i == want)
         {
             out.indices.resize(ic);
             out.submeshes.resize(sc);
             f.read(reinterpret_cast<char*>(out.indices.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
             f.read(reinterpret_cast<char*>(out.submeshes.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
-            return static_cast<bool>(f);
+            if (!f) { return false; }
+            for (const uint32_t index : out.indices)
+            {
+                if (index >= h.vertexCount) { return damaged("LOD " + std::to_string(i) + " indexes past the vertices"); }
+            }
+            for (const Mesh::Submesh& s : out.submeshes)
+            {
+                if (static_cast<uint64_t>(s.indexOffset) + s.indexCount > out.indices.size())
+                {
+                    return damaged("LOD " + std::to_string(i) + ": a submesh runs past its indices");
+                }
+            }
+            return true;
         }
         f.seekg(static_cast<std::streamoff>(ic * sizeof(uint32_t)) + static_cast<std::streamoff>(sc * sizeof(Mesh::Submesh)), std::ios::cur);
         if (h.version >= 4u)
@@ -3514,7 +3633,7 @@ bool MeshManager::ReadCollisionGeometry(const std::string& binPath, int lod, Col
     return false;
 }
 
-bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out)
+bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out, std::string* why)
 {
     out = {};
     std::vector<VertexPNTUV> verts;
@@ -3523,7 +3642,7 @@ bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out
     Mesh::Dag dag;
     // Freshness checks skipped on purpose (same reason LoadBinaryDirect skips them): a committed
     // .bin IS the asset, there is no source to compare against.
-    if (!ReadMeshBinary(GeometryFilePart(binPath), nullptr, nullptr, verts, lods, &header, &dag) || lods.empty())
+    if (!ReadMeshBinary(GeometryFilePart(binPath), nullptr, nullptr, verts, lods, &header, &dag, why) || lods.empty())
     {
         return false;
     }
