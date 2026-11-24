@@ -1,6 +1,9 @@
 #include "vfx/ParticlePresets.h"
+#include "core/JsonField.h"
 #include "core/vfs/Vfs.h"
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -9,24 +12,49 @@ namespace vfx
 {
 namespace
 {
-    void ReadRange(const nlohmann::json& j, const char* key, float& lo, float& hi)
+    // Every read takes the field only when it is of its type (jsonfield::Get; docs/architecture_review_plan.md M6): a
+    // preset or a level is a file a person edits, and nlohmann's value() and get<float>() threw on a field of another
+    // type -- out of the level load, or out of the frame for an Inspector edit.
+
+    // The first `n` elements of an array, when it has them and they are all numbers.
+    bool Numbers(const nlohmann::json& a, size_t n, float* out)
+    {
+        if (!a.is_array() || a.size() < n) { return false; }
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (!a[i].is_number()) { return false; }
+        }
+        for (size_t i = 0; i < n; ++i) { out[i] = a[i].get<float>(); }
+        return true;
+    }
+    bool Numbers(const nlohmann::json& j, const char* key, size_t n, float* out)
     {
         const auto it = j.find(key);
-        if (it != j.end() && it->is_array() && it->size() >= 2)
+        return it != j.end() && Numbers(*it, n, out);
+    }
+
+    void ReadRange(const nlohmann::json& j, const char* key, float& lo, float& hi)
+    {
+        float v[2];
+        if (Numbers(j, key, 2, v))
         {
-            lo = (*it)[0].get<float>();
-            hi = (*it)[1].get<float>();
+            lo = v[0];
+            hi = v[1];
         }
     }
 
     Math::float3 ReadF3(const nlohmann::json& j, const char* key, const Math::float3& def)
     {
-        const auto it = j.find(key);
-        if (it != j.end() && it->is_array() && it->size() >= 3)
-        {
-            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
-        }
-        return def;
+        float v[3];
+        return Numbers(j, key, 3, v) ? Math::float3(v[0], v[1], v[2]) : def;
+    }
+
+    // A count: any JSON number (3.0 included, as value() took it), clamped into [lo, hi]; another type = unchanged.
+    uint32_t ReadCount(const nlohmann::json& j, const char* key, uint32_t current, uint32_t lo, uint32_t hi)
+    {
+        const double v = jsonfield::Get<double>(j, key, static_cast<double>(current));
+        if (!std::isfinite(v)) { return current; }
+        return static_cast<uint32_t>(std::clamp(v, static_cast<double>(lo), static_cast<double>(hi)));
     }
 
     bool HasSort(const nlohmann::json& j)
@@ -43,49 +71,48 @@ void ApplyEmitterJson(const nlohmann::json& j, EmitterDesc& d)
     }
 
     // --- sim ---
-    d.maxParticles = j.value("maxParticles", d.maxParticles);
-    d.spawnRate = j.value("spawnRate", d.spawnRate);
+    d.maxParticles = ReadCount(j, "maxParticles", d.maxParticles, 0u, kMaxParticlesPerEmitter);
+    d.spawnRate = jsonfield::Get(j, "spawnRate", d.spawnRate);
     ReadRange(j, "lifetime", d.lifetimeMin, d.lifetimeMax);
     d.coneDir = ReadF3(j, "coneDir", d.coneDir);
-    d.coneAngleDeg = j.value("coneAngleDeg", d.coneAngleDeg);
+    d.coneAngleDeg = jsonfield::Get(j, "coneAngleDeg", d.coneAngleDeg);
     ReadRange(j, "speed", d.speedMin, d.speedMax);
-    d.gravity = j.value("gravity", d.gravity);
-    d.drag = j.value("drag", d.drag);
-    d.windInfluence = j.value("windInfluence", d.windInfluence);
-    d.seed = j.value("seed", d.seed);
+    d.gravity = jsonfield::Get(j, "gravity", d.gravity);
+    d.drag = jsonfield::Get(j, "drag", d.drag);
+    d.windInfluence = jsonfield::Get(j, "windInfluence", d.windInfluence);
+    d.seed = ReadCount(j, "seed", d.seed, 0u, UINT32_MAX);
     ReadRange(j, "rotation", d.rotMin, d.rotMax);
     ReadRange(j, "spin", d.spinMin, d.spinMax);
 
     // --- rendering ---
     ReadRange(j, "size", d.sizeStart, d.sizeEnd);
-    d.texture = j.value("texture", d.texture);
-    d.additive = j.value("additive", d.additive);
-    d.softFade = j.value("softFade", d.softFade);
-    d.luminanceCdM2 = j.value("luminanceCdM2", d.luminanceCdM2); // P16.7
-    d.sortParticles = j.value("sort", d.sortParticles);
-    d.localSpace = j.value("localSpace", d.localSpace);
-    d.flipbookCols = j.value("flipCols", d.flipbookCols);
-    d.flipbookRows = j.value("flipRows", d.flipbookRows);
-    d.flipbookFps = j.value("flipFps", d.flipbookFps);
-    d.flipbookRandomStart = j.value("flipRandomStart", d.flipbookRandomStart);
-    d.frameBlend = j.value("frameBlend", d.frameBlend);
-    d.lit = j.value("lit", d.lit);
-    d.forwardScatter = j.value("forwardScatter", d.forwardScatter);
-    d.phaseG = j.value("phaseG", d.phaseG);
-    d.litFlat = j.value("litFlat", d.litFlat);
-    d.velocityStretch = j.value("velocityStretch", d.velocityStretch);
+    d.texture = jsonfield::Get(j, "texture", d.texture);
+    d.additive = jsonfield::Get(j, "additive", d.additive);
+    d.softFade = jsonfield::Get(j, "softFade", d.softFade);
+    d.luminanceCdM2 = jsonfield::Get(j, "luminanceCdM2", d.luminanceCdM2); // P16.7
+    d.sortParticles = jsonfield::Get(j, "sort", d.sortParticles);
+    d.localSpace = jsonfield::Get(j, "localSpace", d.localSpace);
+    d.flipbookCols = ReadCount(j, "flipCols", d.flipbookCols, 0u, UINT32_MAX);
+    d.flipbookRows = ReadCount(j, "flipRows", d.flipbookRows, 0u, UINT32_MAX);
+    d.flipbookFps = jsonfield::Get(j, "flipFps", d.flipbookFps);
+    d.flipbookRandomStart = jsonfield::Get(j, "flipRandomStart", d.flipbookRandomStart);
+    d.frameBlend = jsonfield::Get(j, "frameBlend", d.frameBlend);
+    d.lit = jsonfield::Get(j, "lit", d.lit);
+    d.forwardScatter = jsonfield::Get(j, "forwardScatter", d.forwardScatter);
+    d.phaseG = jsonfield::Get(j, "phaseG", d.phaseG);
+    d.litFlat = jsonfield::Get(j, "litFlat", d.litFlat);
+    d.velocityStretch = jsonfield::Get(j, "velocityStretch", d.velocityStretch);
     d.lineOffset = ReadF3(j, "lineOffset", d.lineOffset);
-    d.killBelowY = j.value("killBelowY", d.killBelowY);
-    d.collideHulls = j.value("collideHulls", d.collideHulls);
+    d.killBelowY = jsonfield::Get(j, "killBelowY", d.killBelowY);
+    d.collideHulls = jsonfield::Get(j, "collideHulls", d.collideHulls);
     if (const auto it = j.find("colorKeys"); it != j.end() && it->is_array())
     {
         for (size_t k = 0; k < 4 && k < it->size(); ++k)
         {
-            const auto& key = (*it)[k];
-            if (key.is_array() && key.size() >= 4)
+            float v[4];
+            if (Numbers((*it)[k], 4, v))
             {
-                d.colorKeys[k] = Math::float4(key[0].get<float>(), key[1].get<float>(),
-                                              key[2].get<float>(), key[3].get<float>());
+                d.colorKeys[k] = Math::float4(v[0], v[1], v[2], v[3]);
             }
         }
     }

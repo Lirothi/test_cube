@@ -2263,6 +2263,20 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `jsonfield::Get` (`core/JsonField.h`), `maxParticles` зажать сверху (предложение: 1 048 576),
   `ReadRange` / `ReadF3` / `colorKeys` — с `is_number`. Готово: тест в `intent_regression` по образцу
   `TestAMaterialOfTheWrongTypeIsAnErrorNotACrash`; `e3_particle_test` — картинка на полу шума.
+
+  **Сделано (2026-11-24).** Якорь на месте (`ParticlePresets.cpp:12-92`). Все поля `ApplyEmitterJson` читаются через
+  `jsonfield::Get`; диапазоны, векторы и ключи цвета берутся, только если нужные элементы массива — числа
+  (`Numbers`); иначе поле остаётся каким было. Счётчики (`maxParticles`, `seed`, `flipCols`, `flipRows`) — любое число
+  JSON, как принимал `value()` (`3.0` тоже), зажатое в пределы; `maxParticles` — сверху `vfx::kMaxParticlesPerEmitter`
+  = 1 048 576 (`ParticlePresets.h`), снизу как было (`ParticleEmitterObject` держит минимум 1). Целые поля частиц во
+  всех `data/particles/*.json` и уровнях записаны целыми (`"seed": 3.0` в пяти уровнях — у порыва ветра, не у
+  частиц). Тест `TestParticleFieldsOfAnotherTypeAreLeftAlone`: пресет во временной папке и переопределения объекта —
+  `maxParticles` 10⁸ зажат, поле другого типа и диапазон со строкой оставляют прежнее, хорошие поля прочитаны.
+  Контроль (`ParticlePresets.cpp` из HEAD): тест падает на `[json.exception.type_error.302] type must be number, but
+  is string`. `e3_particle_test` (Release, `--wind-freeze=3`, без HUD): одна сборка дважды 0,98 % / 1,02 % пикселей
+  больше 8 уровней, до против после 1,08 % / 0,92 % — пол шума; огонь и дым на кадрах. Общий гейт: Debug,
+  Release_Editor, Release собираются; `check_*.py` (четыре) — 0; `intent_regression` — PASS. Не покрыто: правка из
+  Inspector живьём (тот же `ApplyEmitterJson`).
 - **M7. TGA шрифта: выделение по числам заголовка** (10.13, п. 8 — в редакции 11-24; прежний текст шага чинил
   таблицу перекодировки, которая уже ограничена, см. там). `text/FontAtlas.cpp:36-50`, `LoadTGA8`: до `resize`
   проверить `w > 0`, `h > 0`, предел стороны (предложение: 16384 — предел стороны текстуры D3D12) и что в файле

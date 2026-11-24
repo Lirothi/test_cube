@@ -64,6 +64,7 @@
 #include "rendering/lighting/NightLamps.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
+#include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
@@ -3416,6 +3417,47 @@ void TestAMeshBinThatLiesIsAnErrorNotACrash()
           "count of 2^32 - 1 -> " + say(huge) + "; an index past the vertices -> " + say(past));
 }
 
+void TestParticleFieldsOfAnotherTypeAreLeftAlone()
+{
+    // A particle preset or a level's emitter is a file a person edits: a field of another type threw out of the level load
+    // (value(), get<float>()), and maxParticles had no ceiling (docs/architecture_review_plan.md M6). A preset in a temp
+    // folder and the object's overrides: every bad field leaves what was there, the good ones are read, the count is held.
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("tc_review_particles_" + std::to_string(::GetCurrentProcessId()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir, ec);
+    {
+        std::ofstream out(dir / "bad.json", std::ios::binary | std::ios::trunc);
+        out << R"({"maxParticles": 100000000, "spawnRate": "fast", "lifetime": [1, "x"], "speed": [2, 3],
+                   "coneDir": [0, "up", 1], "texture": 5, "additive": 1, "seed": 7.0, "flipCols": 4,
+                   "colorKeys": [[1, 1, "a", 1], [0.5, 0.25, 0.125, 1]]})";
+    }
+    const vfx::EmitterDesc defaults;
+    vfx::EmitterDesc d;
+    bool threw = false;
+    std::string what;
+    try
+    {
+        d = vfx::ResolveEmitterDesc(Json{ { "preset", (dir / "bad.json").generic_string() },
+                                          { "overrides", Json{ { "drag", "x" }, { "gravity", 4.0 } } } });
+    }
+    catch (const Json::exception& e)
+    {
+        threw = true;
+        what = e.what();
+    }
+    fs::remove_all(dir, ec);
+    Check(!threw, "a particle field of another type does not throw out of the reader: " + what);
+    Check(d.maxParticles == vfx::kMaxParticlesPerEmitter, "maxParticles 10^8 is held to the ceiling: " + std::to_string(d.maxParticles));
+    Check(d.spawnRate == defaults.spawnRate && d.lifetimeMin == defaults.lifetimeMin && d.lifetimeMax == defaults.lifetimeMax &&
+          d.coneDir.y == defaults.coneDir.y && d.texture == defaults.texture && d.additive == defaults.additive &&
+          d.colorKeys[0].z == defaults.colorKeys[0].z && d.drag == defaults.drag,
+          "a field of another type, or a range with a string in it, leaves what was there");
+    Check(d.speedMin == 2.0f && d.speedMax == 3.0f && d.seed == 7u && d.flipbookCols == 4u && Near(d.colorKeys[1].x, 0.5f) &&
+          d.gravity == 4.0f, "the good fields are read (a count written as 7.0 too)");
+}
+
 void TestModelSettingsRoundTrip()
 {
     // Off unless somebody turns it on: since Claude Code drives the editor over MCP the local
@@ -5890,6 +5932,7 @@ int main(int argc, char** argv)
         TestAToolPathCannotLeaveTheRepository();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();
         TestAMeshBinThatLiesIsAnErrorNotACrash();
+        TestParticleFieldsOfAnotherTypeAreLeftAlone();
         TestModelSettingsRoundTrip();
         TestRefusalWritesANoteForTheImplementer();
         TestOnlyOrganisingActionsMayTakeTheWholeLevel();
