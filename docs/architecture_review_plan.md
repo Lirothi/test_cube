@@ -2402,6 +2402,24 @@ R3 и R5 — M, с низким риском, друг от друга не за
   задания НЕ проверяет: он зовёт `TerminateJobObject` сам (`:275-282`). Поэтому отдельно — закрытие владельца:
   подставной родитель создаёт задание той же функцией, запускает дочерний процесс и убит по PID; дочерний исчезает
   (контроль: без `SetInformationJobObject` он жив).
+
+  **Сделано (2026-11-24).** Якоря на месте (`DistBuildJob.cpp` 43-51, 217-220, 243-245, 254, Cancel 275-282).
+  `dist::CreateBuildJobObject` (в заголовке): `CreateJobObjectW` и `SetInformationJobObject` с `KILL_ON_JOB_CLOSE`
+  проверены. Без задания сборка не запускается. Если `AssignProcessToJobObject` не прошёл, ещё приостановленный
+  процесс завершается и сборка не стартует. Наследуется только конец канала: `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+  через `STARTUPINFOEXW`, без стандартного ввода. `FindPython` собирает все `python.exe`, затем `py.exe` из PATH по
+  порядку, `dist::ChoosePython` берёт первый не из `\WindowsApps\`. Тест `TestTheBuildsPythonAndItsJob`: выбор (заглушка
+  отвергнута, обычный принят, `/` и `\` одинаково); флаг `KILL_ON_JOB_CLOSE` спрошен у задания
+  (`QueryInformationJobObject`); владелец убит по PID — сам `intent_regression` в режиме `--job-parent` делает задание
+  той же функцией, кладёт в него Python и ждёт, тест его убивает, ребёнок уходит следом. Контроль (без
+  `SetInformationJobObject` и без проверки `WindowsApps`, заменой текста): «skips the Store's stub (NO) … KILL_ON_JOB_CLOSE
+  NOT SET … the child OUTLIVED it». `TestMcpDrivesTheSameRoad` (`BuildCommandLine`) — PASS. Вживую (свой Release_Editor
+  на порту 8133, `imgui.ini` и `editor_state.json` скопированы до и возвращены после, редактор завершён по PID): MCP
+  `build_dist {mode: check}` — `python` сборки в задании (`IsProcessInJob`), через 6 с дерево из 45 процессов
+  (python, MSBuild, cl, Tracker, mspdbsrv, conhost); `build_dist_cancel` — от дерева редактора не осталось ни одного,
+  статус `cancelled`, код 2. Общий гейт: Debug, Release_Editor, Release собираются; `check_*.py` (четыре) — 0;
+  `intent_regression` — PASS. Не покрыто: закрытие настоящего редактора посреди сборки (только подставной родитель);
+  отменённая проверка оставила недособранный x64/Cook — следующая сборка его доделает.
 - **M12. `build_dist.py`: символы и замена папки** (10.14, п. 10-11). Символы писать в рабочую папку и
   переименовывать вместе с папкой сборки; замена готовой папки — так, чтобы смерть между двумя `os.replace`
   (`:907-909` до правок 11-24) не оставляла `dist/` без версии. Порядок публикации на 11-24 (`:995-1023`):

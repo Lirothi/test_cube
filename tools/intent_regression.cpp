@@ -3317,6 +3317,95 @@ int StartListening(PythonStandIn& standIn, const std::filesystem::path& script, 
     return 0;
 }
 
+// `--job-parent <file>`: a stand-in for the editor in TestTheBuildsPythonAndItsJob -- the build's job made by the same
+// function, a child (python sleeping) put in it, the child's PID written to <file>; then it waits to be killed.
+int JobParent(const char* pidFile)
+{
+    std::string why;
+    HANDLE job = static_cast<HANDLE>(dist::CreateBuildJobObject(why));
+    if (!job) { return 2; }
+    std::wstring command = L"python -c \"import time; time.sleep(120)\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION info{};
+    if (!::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                          nullptr, &startup, &info) ||
+        !::AssignProcessToJobObject(job, info.hProcess))
+    {
+        return 3;
+    }
+    ::ResumeThread(info.hThread);
+    {
+        std::ofstream out(pidFile, std::ios::trunc);
+        out << info.dwProcessId;
+    }
+    ::Sleep(INFINITE);
+    return 0;
+}
+
+void TestTheBuildsPythonAndItsJob()
+{
+    // The editor's build (docs/architecture_review_plan.md M11): the first python.exe on the PATH was taken whatever it
+    // was -- often the Microsoft Store's stub, which opens the Store -- and the job's setup was never looked at: without
+    // KILL_ON_JOB_CLOSE the build's tree outlives the editor. The choice, the flag asked of the job itself, and the owner
+    // killed: this binary as the editor (--job-parent), killed by its PID -- its child must go with it.
+    const std::wstring stub = L"C:\\Users\\x\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe";
+    const std::wstring real = L"C:\\Python312\\python.exe";
+    const bool chosen = dist::ChoosePython({ stub, real }) == real && dist::ChoosePython({ stub }).empty() &&
+                        dist::ChoosePython({ real, stub }) == real && dist::ChoosePython({ L"C:/Users/y/AppData/Local/Microsoft/"
+                                                                                           L"WindowsApps/python.exe" }).empty();
+    std::string why;
+    HANDLE job = static_cast<HANDLE>(dist::CreateBuildJobObject(why));
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    const bool killOnClose = job &&
+        ::QueryInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits), nullptr) &&
+        (limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE) != 0;
+    if (job) { ::CloseHandle(job); }
+
+    namespace fs = std::filesystem;
+    const fs::path pidFile = fs::temp_directory_path() / ("tc_review_jobparent_" + std::to_string(::GetCurrentProcessId()) + ".txt");
+    std::error_code ec;
+    fs::remove(pidFile, ec);
+    wchar_t self[MAX_PATH] = {};
+    ::GetModuleFileNameW(nullptr, self, MAX_PATH);
+    std::wstring command = L"\"" + std::wstring(self) + L"\" --job-parent \"" + pidFile.wstring() + L"\"";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION parent{};
+    std::string childOutcome = "the stand-in parent did not start";
+    bool childGone = false;
+    if (::CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &parent))
+    {
+        DWORD childPid = 0;
+        for (int i = 0; i < 100 && childPid == 0; ++i)
+        {
+            std::ifstream in(pidFile);
+            in >> childPid;
+            if (childPid == 0) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }
+        }
+        HANDLE child = childPid ? ::OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE, FALSE, childPid) : nullptr;
+        ::TerminateProcess(parent.hProcess, 9); // the editor killed from outside: no shutdown path runs
+        ::WaitForSingleObject(parent.hProcess, 5000);
+        if (!child)
+        {
+            childOutcome = "no child appeared (pid " + std::to_string(childPid) + ")";
+        }
+        else
+        {
+            childGone = ::WaitForSingleObject(child, 5000) == WAIT_OBJECT_0;
+            childOutcome = childGone ? "the child ended with it" : "the child OUTLIVED it";
+            if (!childGone) { ::TerminateProcess(child, 9); }
+            ::CloseHandle(child);
+        }
+        ::CloseHandle(parent.hThread);
+        ::CloseHandle(parent.hProcess);
+    }
+    fs::remove(pidFile, ec);
+    Check(chosen && killOnClose && childGone, std::string("the build's python skips the Store's stub (") + (chosen ? "yes" : "NO") +
+          "), its job ends its processes with it (KILL_ON_JOB_CLOSE " + (killOnClose ? "set" : "NOT SET: " + why) +
+          "), and the editor killed takes the build with it: " + childOutcome);
+}
+
 void TestTheModelServersEndpointAnswerAndStop()
 {
     // The model server's client (docs/architecture_review_plan.md M10): a port that did not parse became 8080, the host
@@ -6073,6 +6162,10 @@ int main(int argc, char** argv)
     {
         return TalkProbe(argv[2], argv[3], argc == 5 ? std::atoi(argv[4]) : 8192);
     }
+    if (argc == 3 && std::string(argv[1]) == "--job-parent")
+    {
+        return JobParent(argv[2]);
+    }
     std::puts("Intent regression: editor command layer");
     try
     {
@@ -6219,6 +6312,7 @@ int main(int argc, char** argv)
         TestJsonFieldsAreReadWithoutThrowing();
         TestModelRepliesOfAnyShape();
         TestTheModelServersEndpointAnswerAndStop();
+        TestTheBuildsPythonAndItsJob();
         TestAToolPathCannotLeaveTheRepository();
         TestTheModelReadsOnlyTheSearchRootsAndACostlyPatternIsAnAnswer();
         TestAMaterialOfTheWrongTypeIsAnErrorNotACrash();

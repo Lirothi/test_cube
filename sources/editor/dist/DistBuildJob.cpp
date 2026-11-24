@@ -12,8 +12,11 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cwctype>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <vector>
 
 namespace dist
 {
@@ -41,15 +44,62 @@ namespace
         return out + L"\"";
     }
 
+    // Every python.exe, then every py.exe, the PATH holds, in its order (ChoosePython picks). SearchPathW gave the first
+    // alone, and that is often the Microsoft Store's stub.
     std::wstring FindPython()
     {
+        std::vector<std::wstring> found;
+        const DWORD size = GetEnvironmentVariableW(L"PATH", nullptr, 0);
+        std::wstring path(size, L'\0');
+        path.resize(GetEnvironmentVariableW(L"PATH", path.data(), size));
         for (const wchar_t* name : { L"python.exe", L"py.exe" })
         {
-            wchar_t found[MAX_PATH] = {};
-            if (SearchPathW(nullptr, name, nullptr, MAX_PATH, found, nullptr) > 0) { return found; }
+            for (std::size_t at = 0; at <= path.size();)
+            {
+                const std::size_t end = std::min(path.find(L';', at), path.size());
+                std::wstring dir = path.substr(at, end - at);
+                at = end + 1;
+                if (dir.size() >= 2 && dir.front() == L'"' && dir.back() == L'"') { dir = dir.substr(1, dir.size() - 2); }
+                if (dir.empty()) { continue; }
+                const std::wstring candidate = dir + (dir.back() == L'\\' || dir.back() == L'/' ? L"" : L"\\") + name;
+                if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES) { found.push_back(candidate); }
+            }
         }
-        return {};
+        return ChoosePython(found);
     }
+}
+
+std::wstring ChoosePython(const std::vector<std::wstring>& onPath)
+{
+    for (const std::wstring& candidate : onPath)
+    {
+        std::wstring lower = candidate;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+        std::replace(lower.begin(), lower.end(), L'/', L'\\');
+        if (lower.find(L"\\windowsapps\\") == std::wstring::npos) { return candidate; }
+    }
+    return {};
+}
+
+void* CreateBuildJobObject(std::string& why)
+{
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (!job)
+    {
+        why = "cannot create a job object (error " + std::to_string(GetLastError()) + ")";
+        return nullptr;
+    }
+    // The second of the three that must hold (docs/architecture_review_plan.md M11): without the flag the job exists and
+    // the promise -- the editor closes, the build's tree dies -- does not.
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
+    {
+        why = "cannot set the job object to end its processes with the editor (error " + std::to_string(GetLastError()) + ")";
+        CloseHandle(job);
+        return nullptr;
+    }
+    return job;
 }
 
 std::wstring BuildCommandLine(const std::wstring& python, const BuildRequest& request)
@@ -214,18 +264,42 @@ bool BuildJob::Start(const BuildRequest& request, std::string& why)
         return false;
     }
     SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    HANDLE job = CreateJobObjectW(nullptr, nullptr);
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    if (job) { SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)); }
+    // No job, no build (docs/architecture_review_plan.md M11): its results were not looked at, and a build started without
+    // one outlived the editor that started it.
+    HANDLE job = static_cast<HANDLE>(CreateBuildJobObject(why));
+    if (!job)
+    {
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        return false;
+    }
 
     std::wstring cmd = BuildCommandLine(python, request);
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
+    // The pipe's write end ALONE is inherited (PROCESS_THREAD_ATTRIBUTE_HANDLE_LIST): with bInheritHandles alone, every
+    // inheritable handle the editor held went to python and on to MSBuild. No standard input: the build reads none.
+    SIZE_T attributeBytes = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attributeBytes);
+    std::vector<unsigned char> attributeStorage(attributeBytes);
+    auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attributeStorage.data());
+    HANDLE inherited[] = { writePipe };
+    if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes) ||
+        !UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr,
+                                   nullptr))
+    {
+        why = "cannot limit what the build inherits (error " + std::to_string(GetLastError()) + ")";
+        CloseHandle(readPipe);
+        CloseHandle(writePipe);
+        CloseHandle(job);
+        return false;
+    }
+    STARTUPINFOEXW startupEx{};
+    STARTUPINFOW& startup = startupEx.StartupInfo;
+    startup.cb = sizeof(startupEx);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdOutput = writePipe;
     startup.hStdError = writePipe;
-    startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup.hStdInput = nullptr;
+    startupEx.lpAttributeList = attributes;
     PROCESS_INFORMATION info{};
     const std::wstring cwd = vfs::ContentRoot().wstring();
     // PYTHONIOENCODING: the events carry Cyrillic paths; a console code page would turn them into '?'.
@@ -241,17 +315,29 @@ bool BuildJob::Start(const BuildRequest& request, std::string& why)
         env.push_back(L'\0');
     }
     const BOOL created = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE,
-                                        CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, env.data(), cwd.c_str(),
-                                        &startup, &info);
+                                        CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT |
+                                            EXTENDED_STARTUPINFO_PRESENT,
+                                        env.data(), cwd.c_str(), &startup, &info);
+    DeleteProcThreadAttributeList(attributes);
     CloseHandle(writePipe);
     if (!created)
     {
         CloseHandle(readPipe);
-        if (job) { CloseHandle(job); }
+        CloseHandle(job);
         why = "cannot start " + vfs::Narrow(cmd);
         return false;
     }
-    if (job) { AssignProcessToJobObject(job, info.hProcess); }
+    if (!AssignProcessToJobObject(job, info.hProcess))
+    {
+        // Suspended, so it ran nothing: ended here rather than left to run outside the job.
+        why = "cannot put the build in its job object (error " + std::to_string(GetLastError()) + "); not started";
+        TerminateProcess(info.hProcess, 1);
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+        CloseHandle(readPipe);
+        CloseHandle(job);
+        return false;
+    }
     ResumeThread(info.hThread);
     CloseHandle(info.hThread);
 

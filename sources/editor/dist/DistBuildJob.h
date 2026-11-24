@@ -97,4 +97,13 @@ namespace dist
 
     // The command line build_dist.py gets for a request (testable without a process).
     std::wstring BuildCommandLine(const std::wstring& python, const BuildRequest& request);
+
+    // The interpreter among those the PATH offers, in its order: the first that is not the Microsoft Store's stub
+    // (...\WindowsApps\python.exe, which opens the Store instead of running a script). Empty = none
+    // (docs/architecture_review_plan.md M11).
+    std::wstring ChoosePython(const std::vector<std::wstring>& onPath);
+
+    // The job a build runs in: KILL_ON_JOB_CLOSE, so the build's whole tree ends with the editor whatever ends it. Null
+    // (and why) when it cannot be made or set -- then no build is started (a HANDLE; void* keeps windows.h out).
+    void* CreateBuildJobObject(std::string& why);
 }
