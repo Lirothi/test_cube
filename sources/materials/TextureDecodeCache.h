@@ -97,4 +97,10 @@ void ResetStats();
 // Bytes currently held. Diagnostics only.
 std::size_t BytesResident();
 
+// --throw-selftest=texdecode (core/diagnostics/ThrowSelfTest.h): the game thread, once a frame while that site is armed.
+// Requests one decode of a file that is not there (its task throws at the site before reading anything), then reports
+// the decode landed once no claim is left -- a claim kept by a decode that threw left that texture "pending" for the
+// process and, two of them, no decode was dispatched again (kMaxDecodesInFlight).
+void ThrowSelfTestFrame();
+
 } // namespace texdecode

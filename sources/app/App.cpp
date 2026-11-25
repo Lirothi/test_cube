@@ -14,6 +14,8 @@
 #include "core/diagnostics/CrashHandler.h"   // --crash-selftest=terminate-frame (crash::SelfTestFrame)
 #include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (render::PassThrowSelfTestFrame)
 #include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (render::RetireSelfTestFrame)
+#include "core/diagnostics/ThrowSelfTest.h"  // --throw-selftest, --crash-selftest=view-throw (diag::ThrowSelfTestFrame)
+#include "materials/TextureDecodeCache.h"    // --throw-selftest=texdecode (texdecode::ThrowSelfTestFrame)
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
 #include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
@@ -3609,6 +3611,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             crash::SelfTestFrame(); // --crash-selftest=terminate-frame: std::terminate here, on the game thread
             render::PassThrowSelfTestFrame(); // --crash-selftest=pass-throw: a run whose pass threw and went on ends here
             if (render::RetireSelfTestFrame(renderer)) { isRunning_ = false; } // --retire-selftest: the verdict is in
+            texdecode::ThrowSelfTestFrame(); // --throw-selftest=texdecode: the decode it requests (nothing otherwise)
+            if (diag::ThrowSelfTestFrame()) { isRunning_ = false; } // --throw-selftest, view-throw: the verdict is in
 #if PROF_GPU_ENABLED
             Profiler::Get().CollectGpuResults();
 #endif

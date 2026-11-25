@@ -1,4 +1,5 @@
 #include "materials/Material.h"
+#include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest=fsprobe
 #include "core/logging/Log.h"
 #include "core/threading/ThreadRole.h"
 #include "rendering/core/DeferredRelease.h"
@@ -1756,7 +1757,7 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
     RefreshWatchTimes_();
 }
 
-bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t /*keepAliveFrames*/)
+bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber)
 {
     if (!pendingReload_.load(std::memory_order_acquire)) {
         return false;
@@ -2521,7 +2522,9 @@ bool MaterialManager::RequestFSProbeAsync()
         return false;
     }
 
+    diag::ThrowSelfTestLanded(diag::ThrowSite::FsProbe); // a probe after a thrown one starts (--throw-selftest)
     auto requestJob = [this]() {
+        diag::ThrowSelfTestPoint(diag::ThrowSite::FsProbe);
         // A snapshot, probed unlocked: the probe stats every watched file, and holding the map for
         // that long would stall the frame thread's next GetOrCreate.
         std::vector<std::shared_ptr<Material>> snapshot;
@@ -2535,13 +2538,22 @@ bool MaterialManager::RequestFSProbeAsync()
         for (const auto& mat : snapshot) {
             (void)mat->FSProbeAndFlagPending();
         }
-        fsProbeInFlight_.store(false, std::memory_order_release);
     };
+    // The flag clears whether the probe returned or threw: cleared at the end of the body, a throw left it set, and
+    // Renderer::Tick never probed again -- shader hot reload stopped for the process (the second review of wave 1,
+    // item 2).
+    auto landing = [this](bool) { fsProbeInFlight_.store(false, std::memory_order_release); };
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    TaskSystem::Get().SubmitDetach(std::move(requestJob));
+    TaskSystem::Get().SubmitDetach(std::move(requestJob), std::move(landing));
 #else
-    requestJob();
+    try {
+        requestJob();
+    } catch (...) {
+        landing(true);
+        throw;
+    }
+    landing(false);
 #endif
 
     return true;
@@ -2592,14 +2604,14 @@ unsigned MaterialManager::RequestReloadWhere(bool (*pred)(const std::wstring& sh
     return flagged;
 }
 
-bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)
+bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber)
 {
     bool anyReloaded = false;
     std::lock_guard<std::mutex> lock(materialsMtx_); // a rebuild never calls back into the manager
     for (auto& kv : materials_) {
         auto& mat = kv.second;
         if (mat) {
-            if (mat->HotReloadIfPending(r, frameNumber, keepAliveFrames)) {
+            if (mat->HotReloadIfPending(r, frameNumber)) {
                 anyReloaded = true;
                 // Logging hook: material was rebuilt
             }

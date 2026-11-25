@@ -42,6 +42,7 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (R15.3), graphcap (R15.4)
 #include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (R16.1)
+#include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest, --crash-selftest=view-throw (the second review of wave 1)
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "rendering/meshes/LodSwitchReport.h" // --lod-report
 #include "rendering/streaming/TextureStreamingIo.h" // --texstream-selftest
@@ -395,6 +396,13 @@ int WINAPI WinMain(
             // No early exit either: a render pass throws once inside its frame task (R15.3) -- a Fatal naming the pass
             // and the dump; render::PassThrowSelfTestFrame (App.cpp) ends a run that goes on instead.
             if (!render::ArmPassThrowSelfTest(arm.size() > 11 ? std::string_view(arm).substr(11) : std::string_view())) {
+                return 2;
+            }
+        } else if (arm == "view-throw" || arm == "view-throw@other") {
+            // Likewise: a culling task of Scene::PrepareViews throws once (the camera view's, or the first other view's)
+            // -- a frame task (R15.3; the second review of wave 1, item 1): a Fatal naming it and the dump.
+            // diag::ThrowSelfTestFrame (App.cpp) ends a run that goes on instead.
+            if (!diag::ArmThrowSelfTest(arm == "view-throw" ? "view" : "view-other")) {
                 return 2;
             }
         } else if (!arm.empty()) {
@@ -962,6 +970,17 @@ int WINAPI WinMain(
                 ocean::watermask::ArmSelfTestThrow(arm.substr(6));
             } else {
                 LOG_ERROR(logging::LogCategory::Ocean, "--water-mask-selftest={}: the only arm is throw[:<path part>]", arm);
+            }
+        }
+    }
+
+    // "--throw-selftest=texstream|texdecode|fsprobe": that detached task throws once; its owner must see it land and start
+    // again (core/diagnostics/ThrowSelfTest.h; the second review of wave 1, item 2). The verdict is the log's and the
+    // exit code's.
+    if (lpCmdLine) {
+        if (const std::string site = ExtractArgValue(lpCmdLine, "--throw-selftest"); !site.empty()) {
+            if (!diag::ArmThrowSelfTest(site)) {
+                return 2;
             }
         }
     }
@@ -1994,6 +2013,7 @@ int WINAPI WinMain(
     const int memExit = memgate::ExitCode();
     if (memExit != 0) { return memExit; }
     if (const int retireExit = render::RetireSelfTestExitCode(); retireExit >= 0) { return retireExit; } // --retire-selftest
+    if (const int throwExit = diag::ThrowSelfTestExitCode(); throwExit >= 0) { return throwExit; } // --throw-selftest
     if (g_scalabilityCheckExit != 0) { return g_scalabilityCheckExit; } // --scalability-check's failed reads
     return rtaudit::ExitCode();
 }

@@ -433,8 +433,8 @@ void TaskSystem::OnTaskThrew(TaskWithDeps* task, const char* what)
         // handed out the unclosed list again (docs/architecture_review_plan.md 10.2, item 1).
         char msg[640];
         std::snprintf(msg, sizeof(msg),
-                      "frame task '%ls' threw: %s -- a frame cannot go on without its pass (its command list unclosed, "
-                      "its barriers never issued)",
+                      "frame task '%ls' threw: %s -- the frame cannot go on without its work (a pass: its command list "
+                      "unclosed, its barriers never issued; a view's cull: its draw queue half built)",
                       task->name_ != nullptr ? task->name_ : L"(unnamed)", described);
         InvariantFailure(logging::LogCategory::Task, msg);
     }
@@ -792,6 +792,23 @@ void TaskSystem::SubmitDetach(Task t)
 {
     TaskHandle handle = Submit(std::move(t));
     Release(handle);
+}
+
+void TaskSystem::SubmitDetach(Task body, std::function<void(bool threw)> landing)
+{
+    if (!landing) {
+        SubmitDetach(std::move(body));
+        return;
+    }
+    SubmitDetach([body = std::move(body), landing = std::move(landing)]() {
+        try {
+            if (body) { body(); }
+        } catch (...) {
+            landing(true);
+            throw; // on to RunTask: the task's FailurePolicy (OnTaskThrew's Error line names what it threw)
+        }
+        landing(false);
+    });
 }
 
 void TaskSystem::DispatchDetach(std::size_t jobCount,

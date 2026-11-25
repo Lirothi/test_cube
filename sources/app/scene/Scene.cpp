@@ -34,6 +34,7 @@
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
+#include "core/diagnostics/ThrowSelfTest.h" // --crash-selftest=view-throw: a culling task throws once
 #include "core/threading/ThreadRole.h" // game thread plan: who may touch what, and when
 #include "core/threading/Knob.h"       // G5: the knobs cross at the hand-over
 #include "core/profiling/Profiler.h"
@@ -2599,6 +2600,22 @@ void Scene::Sync(Renderer* renderer)
     frameData_.cascadeConfig = &renderCascadeConfig_; // S8: a Developer Controls edit reaches the next frame
 }
 
+namespace
+{
+// The name a culling task's Fatal gives (static storage, as FailurePolicy::Frame asks).
+const wchar_t* ViewCullTaskName(SceneView::Type type)
+{
+    switch (type)
+    {
+    case SceneView::Type::Camera: return L"PrepareViewQueue (camera view)";
+    case SceneView::Type::Shadow: return L"PrepareViewQueue (shadow view)";
+    case SceneView::Type::ShoreDepth: return L"PrepareViewQueue (shore depth view)";
+    case SceneView::Type::SkyOcclusion: return L"PrepareViewQueue (sky occlusion view)";
+    }
+    return L"PrepareViewQueue";
+}
+} // namespace
+
 void Scene::PrepareViews(Renderer* renderer)
 {
     CPU_SCOPE(ProfilerScopes::kPrepareViews);
@@ -2730,11 +2747,16 @@ void Scene::PrepareViews(Renderer* renderer)
     TaskSystem::TaskHandle mainViewTask = nullptr;
     {
         CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);
-        mainViewTask = tasks.Submit([this, &mainView, camMask]()
+        // A frame task (R15.3, the owner's answer В6): the frame draws what these queues hold, so a cull that threw is a
+        // Fatal naming it -- not an Error line and a frame drawn from a half-built queue, which is what a background
+        // task's exception meant here until the second review of wave 1 (item 1). --crash-selftest=view-throw.
+        mainViewTask = tasks.CreateTask([this, &mainView, camMask]()
         {
             CPU_SCOPE(ProfilerScopes::kPrepareMainView);
+            diag::ThrowSelfTestPoint(diag::ThrowSite::ViewCamera);
             PrepareViewQueue(mainView, camMask);
-        });
+        }, 0, TaskSystem::FailurePolicy::Frame, L"PrepareViewQueue (camera view)");
+        tasks.Submit(mainViewTask);
     }
 
     if (oceanSimulation)
@@ -3172,11 +3194,14 @@ void Scene::PrepareViews(Renderer* renderer)
         for (SceneView* view : viewsToCull)
         {
             if (!view) { continue; }
-            if (TaskSystem::TaskHandle task = tasks.Submit([this, view, camMask]()
+            // Frame tasks too, as the camera's above (--crash-selftest=view-throw@other).
+            if (TaskSystem::TaskHandle task = tasks.CreateTask([this, view, camMask]()
                 {
+                    diag::ThrowSelfTestPoint(diag::ThrowSite::ViewOther);
                     PrepareViewQueue(*view, camMask);
-                }))
+                }, 0, TaskSystem::FailurePolicy::Frame, ViewCullTaskName(view->type)))
             {
+                tasks.Submit(task);
                 viewTasks.push_back(task);
             }
         }

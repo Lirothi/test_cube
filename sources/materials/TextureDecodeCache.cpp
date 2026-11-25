@@ -1,4 +1,6 @@
 #include "materials/TextureDecodeCache.h"
+#include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest=texdecode
+#include "core/logging/Log.h"
 #include "core/memory/MemScope.h"
 
 #include <mutex>
@@ -70,6 +72,38 @@ bool FinishInFlight(const Key& key)
     return stillValid;
 }
 
+// The decode of a claimed key, and its claim retired whatever happens. An exception out of the decode (WIC, out of
+// memory on a large image) left the key in gInFlight for the process: that texture answered Pending for ever and, with
+// kMaxDecodesInFlight of them, no decode was dispatched again (the second review of wave 1, item 2). It goes on to the
+// caller: a detached decode's Error line (TaskSystem), Prewarm's caller's own.
+void DecodeClaimed(const Texture2D::CreateDesc& desc, const Key& key)
+{
+    DecodedImage img;
+    try
+    {
+        diag::ThrowSelfTestPoint(diag::ThrowSite::TexDecode);
+        UINT w = 0, h = 0;
+        img.valid = Texture2D::DecodeToMips(desc, img.mips, w, h);
+        img.width = w;
+        img.height = h;
+    }
+    catch (...)
+    {
+        {
+            std::lock_guard<std::mutex> lk(gMutex);
+            (void)FinishInFlight(key);
+        }
+        throw;
+    }
+
+    std::lock_guard<std::mutex> lk(gMutex);
+    const bool wanted = FinishInFlight(key);
+    if (!img.valid || !wanted) { return; } // a failed decode, or a re-import landed while we decoded: leave the cache
+                                           // empty and let CreateFromFile take its normal path
+    gBytes += ImageBytes(img);
+    gEntries.emplace(key, std::move(img));
+}
+
 } // namespace
 
 Status Request(const Texture2D::CreateDesc& desc)
@@ -101,20 +135,7 @@ Status Request(const Texture2D::CreateDesc& desc)
     // the frame — the frame would wait for a two-second PNG decode and reproduce the exact stall this exists to remove,
     // one layer down. Every other long job in this path (preview init, preflight, PNG encode)
     // already uses SubmitDetach; this was the one that did not.
-    TaskSystem::Get().SubmitDetach([desc, key]() mutable
-    {
-        DecodedImage img;
-        UINT w = 0, h = 0;
-        img.valid = Texture2D::DecodeToMips(desc, img.mips, w, h);
-        img.width = w;
-        img.height = h;
-
-        std::lock_guard<std::mutex> lk(gMutex);
-        const bool wanted = FinishInFlight(key);
-        if (!img.valid || !wanted) { return; }
-        gBytes += ImageBytes(img);
-        gEntries.emplace(key, std::move(img));
-    });
+    TaskSystem::Get().SubmitDetach([desc, key]() { DecodeClaimed(desc, key); });
     return Status::Pending;
 }
 
@@ -130,19 +151,7 @@ void Prewarm(const Texture2D::CreateDesc& desc)
         gInFlight[key] = true;
     }
 
-    DecodedImage img;
-    UINT w = 0, h = 0;
-    img.valid = Texture2D::DecodeToMips(desc, img.mips, w, h);
-    img.width = w;
-    img.height = h;
-
-    std::lock_guard<std::mutex> lk(gMutex);
-    const bool wanted = FinishInFlight(key);
-    if (!img.valid || !wanted) { return; } // a DDS, a failed decode, or a re-import landed while we
-                                           // decoded: leave the cache empty and let CreateFromFile
-                                           // take its normal path
-    gBytes += ImageBytes(img);
-    gEntries.emplace(key, std::move(img));
+    DecodeClaimed(desc, key);
 }
 
 bool Take(const Texture2D::CreateDesc& desc, DecodedImage& out)
@@ -213,6 +222,29 @@ std::size_t BytesResident()
 {
     std::lock_guard<std::mutex> lk(gMutex);
     return gBytes;
+}
+
+void ThrowSelfTestFrame()
+{
+    if (!diag::ThrowSelfTestArmed(diag::ThrowSite::TexDecode)) { return; }
+    static bool requested = false; // the game thread only
+    if (!requested)
+    {
+        requested = true;
+        Texture2D::CreateDesc desc;
+        desc.path = L"throw_selftest/not_there.png"; // never read: the task throws at the site first
+        desc.usage = Texture2D::Usage::LinearData;
+        const Status status = Request(desc);
+        LOG_INFO(logging::LogCategory::Asset, "throw self-test texdecode: a decode requested ({})",
+                 status == Status::Pending ? "dispatched" : "NOT dispatched -- the site will never run");
+        return;
+    }
+    bool noClaimLeft = false;
+    {
+        std::lock_guard<std::mutex> lk(gMutex);
+        noClaimLeft = gInFlight.empty();
+    }
+    if (noClaimLeft) { diag::ThrowSelfTestLanded(diag::ThrowSite::TexDecode); }
 }
 
 } // namespace texdecode

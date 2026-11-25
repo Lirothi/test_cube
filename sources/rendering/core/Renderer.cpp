@@ -1377,7 +1377,7 @@ void Renderer::Tick(float dt)
     }
 
     // 2) Apply pending rebuilds (the scan found changes, or the toggle above flagged them)
-    if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_, /*keepAliveFrames=*/render::kFrameCount + 1)) {
+    if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_)) {
         materialsHotReloaded_ = true;
     }
 }

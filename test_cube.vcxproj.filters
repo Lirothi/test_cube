@@ -570,6 +570,9 @@
     <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/diagnostics/ThrowSelfTest.cpp">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/diagnostics/InvariantFailure.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
@@ -1371,6 +1374,9 @@
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/diagnostics/ThrowSelfTest.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/diagnostics/InvariantFailure.h">

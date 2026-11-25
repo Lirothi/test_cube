@@ -147,8 +147,9 @@ public:
     // Hot reload
     bool FSProbeAndFlagPending();
     // The replaced PSOs and root signature go to the deferred-release service (R16.5): released once the GPU has
-    // finished the frames that may still bind them. `keepAliveFrames` is no longer used (the service's frame numbers).
-    bool HotReloadIfPending(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
+    // finished the frames that may still bind them -- its frame numbers, no keep-alive count of the caller's.
+    // `frameNumber` names the frame in the log line.
+    bool HotReloadIfPending(Renderer* r, uint64_t frameNumber);
 
     struct CBufferField {
         UINT        offset = 0;         // Byte offset of the field inside the cbuffer
@@ -321,7 +322,7 @@ public:
     }
 
     bool RequestFSProbeAsync();
-    bool ApplyPendingHotReloads(Renderer* r, uint64_t frameIndex, uint64_t keepAliveFrames);
+    bool ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber);
     bool IsProbeInFlight() const { return fsProbeInFlight_.load(std::memory_order_acquire); }
     // A6: flag every graphics material whose shader `pred` accepts for a rebuild (raster.bindless
     // toggled at runtime). Returns how many were flagged.

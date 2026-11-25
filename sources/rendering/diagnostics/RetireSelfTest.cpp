@@ -8,8 +8,10 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
+#include <string>
 
 namespace render
 {
@@ -30,6 +32,13 @@ std::uint64_t g_mustComplete = 0;                  // the frame that has to be d
 std::atomic<std::uint64_t> g_releasedAt{ 0 };     // the frame the release step ran in; 0 = not yet
 std::atomic<bool> g_completeAtRelease{ false };   // IsFrameNumberComplete(g_mustComplete) when it ran
 Microsoft::WRL::ComPtr<ID3D12Resource> g_target;  // the copy's destination: lives until the verdict
+// The default arm's crowd (the second review of wave 1, item 4): this many entries retired in one frame must cost the
+// boundaries a fence read per distinct frame number, not one each -- after a level unload thousands wait at once.
+constexpr int kCrowd = 512;
+constexpr std::uint64_t kMaxQuestionsPerBoundary = 32; // the distinct frame numbers waiting, with room to spare
+std::atomic<int> g_crowdReleased{ 0 };
+std::uint64_t g_questionsBefore = 0;  // GetStats().questions at the previous boundary
+std::uint64_t g_maxQuestions = 0;     // the most one boundary asked since the crowd was retired
 
 Microsoft::WRL::ComPtr<ID3D12Resource> MakeBuffer(Renderer& renderer, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state,
                                                   const wchar_t* name)
@@ -154,12 +163,25 @@ bool RetireSelfTestFrame(Renderer& renderer)
         else
         {
             RetireSentinel(renderer, g_retiredAt, [source]() mutable { source.Reset(); });
-            LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test: the source retired in frame {}; its copy goes "
-                     "with the hand-over", g_retiredAt);
+            for (int i = 0; i < kCrowd; ++i)
+            {
+                deferred::Retire([]() { g_crowdReleased.fetch_add(1, std::memory_order_relaxed); }, 0,
+                                 "retire self-test crowd");
+            }
+            g_questionsBefore = deferred::GetStats().questions;
+            LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test: the source retired in frame {}, with a crowd of {} "
+                     "entries; its copy goes with the hand-over", g_retiredAt, kCrowd);
         }
         return false;
     }
     if (!g_started) { return false; }
+    if (g_mode == RetireSelfTestMode::Retire)
+    {
+        // Called right after Renderer::BeginFrame: the difference is what this frame's boundary asked.
+        const std::uint64_t questions = deferred::GetStats().questions;
+        g_maxQuestions = std::max(g_maxQuestions, questions - g_questionsBefore);
+        g_questionsBefore = questions;
+    }
 
     if (g_mode == RetireSelfTestMode::Control)
     {
@@ -187,11 +209,35 @@ bool RetireSelfTestFrame(Renderer& renderer)
         Finish(1);
         return true;
     }
+    if (g_mode == RetireSelfTestMode::Retire)
+    {
+        const int crowdReleased = g_crowdReleased.load(std::memory_order_relaxed);
+        if (crowdReleased < kCrowd)
+        {
+            if (g_frames - kStartFrame < kGiveUpFrames) { return false; } // the crowd goes at the same boundary, or soon
+            LOG_ERROR(logging::LogCategory::RenderRhi, "retire self-test: FAIL -- {} of the crowd's {} entries released {} "
+                      "frames after they were retired", crowdReleased, kCrowd, g_frames - kStartFrame);
+            Finish(1);
+            return true;
+        }
+        if (g_maxQuestions > kMaxQuestionsPerBoundary)
+        {
+            LOG_ERROR(logging::LogCategory::RenderRhi, "retire self-test: FAIL -- a boundary asked the fences {} times with "
+                      "a crowd of {} entries waiting (at most {}: one a distinct frame number)", g_maxQuestions, kCrowd,
+                      kMaxQuestionsPerBoundary);
+            Finish(1);
+            return true;
+        }
+    }
     const deferred::Stats stats = deferred::GetStats();
     LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test{}: PASS -- retired in frame {}, released in frame {} ({} "
-             "frames later) with the GPU done with frame {}; the service holds {} ({} bytes), released {} in all",
+             "frames later) with the GPU done with frame {}; the service holds {} ({} bytes), released {} in all{}",
              g_mode == RetireSelfTestMode::Upload ? " (upload)" : "", g_retiredAt, releasedAt, releasedAt - g_retiredAt,
-             g_mustComplete, stats.waiting, stats.waitingBytes, stats.released);
+             g_mustComplete, stats.waiting, stats.waitingBytes, stats.released,
+             g_mode == RetireSelfTestMode::Retire
+                 ? " -- the crowd of " + std::to_string(kCrowd) + " cost a boundary at most " +
+                       std::to_string(g_maxQuestions) + " fence questions"
+                 : std::string());
     Finish(0);
     return true;
 }

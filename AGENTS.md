@@ -33,7 +33,8 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   `sources/editor/intent/`, rebuild `tools/model_reaper.vcxproj` (close its tray icon: the running exe is locked).
 - Engine gates (`test_cube.exe`; verdict line in the session log + exit code): `--physics-gate[=<name>]` (with `=`),
   `--vfs-selftest`, `--scalability-selftest`, `--scalability-check`, `--scene-stress=<n>` (150 for `mem tags`),
-  `--rt-audit`, `--mem-readout=30`, `--crash-selftest=<arm>`; `python tools/dist/check_gate.py`.
+  `--rt-audit`, `--mem-readout=30`, `--crash-selftest=<arm>`, `--throw-selftest=<site>`;
+  `python tools/dist/check_gate.py`.
 - A gate or test counts only once shown to FAIL without the fix: every gate has a control arm or a self-test.
 
 ## Code rules
@@ -95,8 +96,10 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
 - A bit-packed request or mark buffer does `InterlockedOr` only while the bit is clear.
 - Mesh-shader PSOs stay out of the disk PSO cache (the runtime refuses them back).
 - A task's exception means its `TaskSystem::FailurePolicy`, set by its creator and inherited by tasks created inside
-  it: `Frame` (render-graph passes) = Fatal naming the task, dump; `Background` (default) = Error, `Wait` returns false.
-  A broken contract (a task's dependencies, a graph's capacity) is `InvariantFailure`, never `assert` or `throw`.
+  it: `Frame` (render-graph passes, the view culls) = Fatal naming the task, dump; `Background` (default) = Error, `Wait`
+  returns false. A detached task its owner polls (a `done` flag, a claim) lands through `SubmitDetach(body, landing)`,
+  which runs when the body throws too. A broken contract (a task's dependencies, a graph's capacity) is
+  `InvariantFailure`, never `assert` or `throw`.
 
 ## Checking live: the editor's MCP
 

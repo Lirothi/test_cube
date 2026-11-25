@@ -7,7 +7,8 @@ class Renderer;
 //   (default) a buffer is copied from in a list submitted the way a game half submits (deferred to the hand-over,
 //     Renderer::ExecuteOrDefer) and handed to render::deferred::Retire. PASS when it is released at a later frame AND
 //     Renderer::IsFrameNumberComplete(the frame it was retired in) is true at that moment; FAIL when released early, or
-//     not within 120 frames.
+//     not within 120 frames. With it a crowd of 512 entries is retired: FAIL when a boundary asks the fences more than
+//     32 times (once a distinct frame number waiting, not once an entry -- the second review of wave 1, item 4).
 //   control: the buffer is released at once instead, with the list still to go: the debug layer (Debug) / GBV must
 //     name the destroyed resource -- the verdict is the log's.
 //   upload (R16.8): from the GAME HALF while the render thread draws (App.cpp's game half), an UploadBatch whose upload

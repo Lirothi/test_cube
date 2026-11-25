@@ -46,6 +46,7 @@ struct Stats
     std::uint64_t waiting = 0;      // entries held now
     std::uint64_t waitingBytes = 0; // their bytes (resources: the allocation's size)
     std::uint64_t released = 0;     // since the process started
+    std::uint64_t questions = 0;    // completion questions asked at the boundaries (fence reads), since the start
 };
 Stats GetStats();
 // The mem: line's "retire" provider (render::MemoryProviderFn's shape; the Renderer registers it -- the service itself

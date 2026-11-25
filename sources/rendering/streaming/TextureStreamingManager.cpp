@@ -8,6 +8,7 @@
 
 #include "app/camera/Camera.h"
 #include "app/scene/SceneFrameData.h"
+#include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest=texstream
 #include "core/logging/Log.h"
 #include "core/math/Frustum.h"
 #include "core/profiling/Profiler.h"
@@ -79,6 +80,7 @@ void TextureStreamingManager::Tick(TextureStreaming& ts, Renderer* renderer, con
     {
         if (!taskDone_.load(std::memory_order_acquire)) { return; } // previous task still running
         if (taskLaunched_) { CPU_SCOPE(ProfilerScopes::kTextureStreamingApply); Apply_(ts); taskLaunched_ = false; }
+        diag::ThrowSelfTestLanded(diag::ThrowSite::TexStream); // the cycle after a thrown one starts (--throw-selftest)
         {
             CPU_SCOPE(ProfilerScopes::kTextureStreamingSnapshot);
             Snapshot_(ts, renderer, frame);
@@ -88,9 +90,16 @@ void TextureStreamingManager::Tick(TextureStreaming& ts, Renderer* renderer, con
         taskLaunched_ = true;
         AsyncData* data = async_.get();
         std::atomic<bool>* done = &taskDone_;
-        TaskSystem::Get().SubmitDetach([data, done]()
+        data->workFailed = false;
+        // Lands whether DoWork_ returned or threw: `done` set at the end of the body stayed false after a throw, and
+        // streaming stopped for the process (the second review of wave 1, item 2). A cycle that threw applies nothing.
+        TaskSystem::Get().SubmitDetach([data]()
         {
+            diag::ThrowSelfTestPoint(diag::ThrowSite::TexStream);
             DoWork_(*data);
+        }, [data, done](bool threw)
+        {
+            data->workFailed = threw;
             done->store(true, std::memory_order_release);
         });
         stage_ = 1;
@@ -459,6 +468,14 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
 {
     if (!async_) { return; }
     AsyncData& d = *async_;
+    if (d.workFailed)
+    {
+        // Its numbers are half-written: nothing of this cycle is applied, the next snapshot starts from what was kept.
+        LOG_ERROR_ONCE(logging::LogCategory::Render, "[texstream] a streaming cycle's work threw (the Error above names "
+                       "it): nothing of it applied, the next cycle starts as always");
+        d.workFailed = false;
+        return;
+    }
     memoryBudget_ = d.memoryBudget;
     perfectResetThreshold_ = d.perfectResetThreshold;
 

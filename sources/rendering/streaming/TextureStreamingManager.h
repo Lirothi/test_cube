@@ -87,6 +87,7 @@ private:
         std::uint64_t memBudgeted = 0, memUsed = 0, memWanted = 0;
         double calcMs = 0.0;
         std::vector<std::uint32_t> prioritized, outs, ins; // DoWork_'s working storage, reused cycle to cycle
+        bool workFailed = false; // DoWork_ threw (the task's landing): Apply_ applies nothing of this cycle
     };
     struct Persist { std::uint32_t gen = 0; int budgetMipBias = 0; float lastBoxed = -1.0f; }; // lastBoxed: when it last had a box, < 0 = never
 

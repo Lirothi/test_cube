@@ -925,13 +925,15 @@ void AssetThumbnailCache::PrewarmMaterialTextures(const PendingLoad& load)
     auto ticket = std::make_shared<DecodeTicket>();
     decodeTickets_[load.key] = ticket;
     // SubmitDetach, not DispatchTrack: the frame joins TRACKED tasks at its top (App.cpp), so a
-    // tracked decode would stall the very frame it is meant to keep free.
-    TaskSystem::Get().SubmitDetach([work = std::move(work), ticket]() mutable
+    // tracked decode would stall the very frame it is meant to keep free. The ticket lands whether
+    // the prewarm returned or threw: set at the end of the body, a throw left it pending, and
+    // StartGpuJob put this load back at the queue's head every frame -- no thumbnail after it was
+    // ever made (the second review of wave 1, item 2). A failed prewarm is only a miss.
+    TaskSystem::Get().SubmitDetach([work = std::move(work)]()
     {
         CPU_SCOPE(ProfilerScopes::kAssetThumbnailPreflight);
         for (const Texture2D::CreateDesc& d : work) { texdecode::Prewarm(d); }
-        ticket->done.store(true, std::memory_order_release);
-    });
+    }, [ticket](bool) { ticket->done.store(true, std::memory_order_release); });
 }
 
 void AssetThumbnailCache::LaunchPreflightJobs()

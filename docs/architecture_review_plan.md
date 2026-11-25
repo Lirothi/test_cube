@@ -3112,6 +3112,72 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `--mem-readout=30` — PASS (`retire 0`). Не покрыто: новая выпечка боке блума (R16.8) прогоном не доказана;
   `--retire-selftest` проверяет запись из игровой фазы и из кадра, но не выпуск на задаче графа.
 
+  **Второе ревью волны 1 (2026-11-24, другая сессия, по коммиту `452fb1e3`).** Прочитан весь дифф кода (78 файлов) по
+  областям: задачи, граф, роли, служба R16.1, её пользователи. Проверено и верно: метка службы (`g_frame + kMargin`)
+  держится и для списков игровой фазы — `ExecuteOrDefer` сначала сбрасывает отложенное (`FlushHandOverSubmits`),
+  `WaitForPreviousFrame` сбрасывает его при любой роли, сигнал кадра идёт после; `this` захватывают только
+  `BindlessHeap` и `TextureStreaming`, а слив службы в `Renderer::Shutdown` идёт до `ShutdownImGui` и до их разборки;
+  `Retire` из шага освобождения (вложенный) безопасен; наследование политики задач и чистый узел из пула; имя задачи
+  пасса — литерал `RenderPassToWString`; `TC_THREAD_CHECKS=1` дописывается к определениям (`%(...)`); новые файлы — в
+  `.filters`; исходники — CRLF без одиночных LF; пять `check_*.py` — 0. Перепрогнано на собранном HEAD (Release):
+  `--tasksystem-stress` — PASS (0 failures); `--crash-selftest=pass-throw` — `INVARIANT FAILURE: frame task 'Skybox'
+  threw`, дамп, код 3; `--retire-selftest=upload` — PASS (выпуск в кадре 20, освобождение в 24, GPU закончил 21).
+  Находки (1, 2, 4, 5 исправлены 2026-11-25 по слову владельца — абзац ниже; 3 и 6 ждут):
+  1. *R15.3 не дотянут до задач кадра вне графа.* Задачи отсечения видов (`Scene.cpp:2733`, `:3175`) создаются на
+     потоке рендера вне задачи — политика `Background`; их `Wait` (`:3187-3192`) результат не читает. Бросок в
+     `PrepareViewQueue` — одна строка Error, и кадр рисуется с недостроенной очередью вида: то, что В6 запретил «задаче
+     кадра». Чинить: `CreateTask(…, FailurePolicy::Frame, L"PrepareViews")` или проверка `Wait` → `InvariantFailure`.
+  2. *Отсоединённые задачи, которые при броске не «приземляются»* (было до волны, найдено при сверке охвата R15.3; тот
+     же класс, что M1 у маски воды): флаг готовности ставится в конце тела без `try`, ждущего нет, и политика
+     `Background` даёт только строку Error — `TextureStreamingManager.cpp:91` (`taskDone_` не станет true: менеджер
+     стриминга стоит до конца сессии), `TextureDecodeCache.cpp:104` (`FinishInFlight` не вызван: ключ навсегда «в
+     работе»), `AssetThumbnailCache.cpp:929` (`ticket->done`: очередь миниатюр ждёт), `Material.cpp:2542`
+     (`fsProbeInFlight_` остаётся true: горячая перезагрузка шейдеров больше не проверяет файлы). Чинить: флаг — в
+     охранном объекте / `try`, Error с именем задачи.
+  3. *`rt::BindlessTable::retiredSets_` — корзина мимо службы* (`BindlessTable.cpp:40-45`, `:134`, срок
+     `frameNo_ + kFrameCount`), хотя коммит говорит «every retire bin through it». Гонки сегодня нет: `BeginFrame` ждёт,
+     пока поток RHI дойдёт до `prevSubmit_` (он отстаёт не больше чем на кадр), и затем забор слота. Это несоответствие
+     цели R16 («одна служба»), не ошибка; то же — отметки кольца загрузки стриминга (`TextureStreaming.cpp:546`).
+  4. *Цена границы службы* (`DeferredRelease.cpp:112-120`): `IsFrameNumberComplete` на каждую запись — два
+     `GetCompletedValue` и обход кольца; после выгрузки уровня (сотни-тысячи записей) — тысячи чтений заборов за кадр,
+     несколько кадров. Записи делят метки: «последний завершённый кадр» считать раз за границу.
+  5. *Мёртвый параметр:* `keepAliveFrames` у `Material::HotReloadIfPending` и `ApplyPendingHotReloads` с R16.5 не
+     используется, но передаётся (`Renderer.cpp:1380`, `kFrameCount + 1`) — убрать.
+  6. *Слепые пятна `check_threads.py`:* `'` считается началом символьного литерала — разделитель разрядов `1'000`
+     съедает остаток строки; многострочные сырые строки `R"(…)"` не разбираются; пометка ищется и внутри строковых
+     литералов.
+  Не перепроверялось: Debug, GBV, пути редактора (миниатюры, превью меша) — по отчёту сессии выше.
+
+  **Исправлено по второму ревью (2026-11-25).** (1) Задачи отсечения видов `Scene::PrepareViews` — `CreateTask(…,
+  FailurePolicy::Frame, <имя>)`: имя по типу вида (`PrepareViewQueue (camera view)`, `(shadow view)`, `(shore depth
+  view)`, `(sky occlusion view)`); текст Fatal задачи кадра теперь общий (пасс или отсечение). (2) Новая перегрузка
+  `TaskSystem::SubmitDetach(body, landing)`: `landing(threw)` идёт после тела и при броске (до того, как исключение
+  уйдёт в политику задачи). На неё переведены стриминг текстур (`workFailed` — `Apply_` пропускает цикл, который
+  бросил, целиком), проба файлов шейдеров, билет предразогрева миниатюр; кэш декодов снимает свою заявку в `catch` и
+  бросает дальше (`DecodeClaimed`, общий у `Request` и `Prewarm`). Старая ошибка у стриминга была хуже, чем записано
+  в находке: деструктор `TextureStreamingManager` крутится в `while (!taskDone_) yield()`, так что бросок ещё и
+  вешал процесс на выходе (видно в контрольном прогоне ниже). (4) Граница службы спрашивает заборы раз на метку:
+  завершённость монотонна по номеру кадра, известные «готово до» и «не готово от» покрывают остальные записи;
+  `deferred::Stats::questions` считает вопросы. (5) `keepAliveFrames` убран из `HotReloadIfPending` и
+  `ApplyPendingHotReloads`.
+  Самотесты (новые, `core/diagnostics/ThrowSelfTest`): `--crash-selftest=view-throw[@other]` — задача отсечения
+  бросает один раз, процесс обязан кончиться Fatal с её именем; `--throw-selftest=texstream|texdecode|fsprobe` —
+  отсоединённая задача бросает один раз, её владелец обязан увидеть приземление за 600 кадров (texdecode сам
+  запрашивает декод несуществующего файла). `--retire-selftest` получил толпу из 512 записей в одном кадре: больше
+  32 вопросов к заборам на границе — FAIL. `--tasksystem-stress` — сценарий «detached landing» с контрольным плечом
+  (старая форма, флаг в конце тела, не приземляется). Билет миниатюр отдельным прогоном не проверен — он на той же
+  перегрузке, что проверена стресс-тестом.
+  Прогоны (Release). С исправлениями: `--tasksystem-stress` PASS (0 failures; контроль не приземлился, обе посадки
+  — да); `view-throw` — `INVARIANT FAILURE: frame task 'PrepareViewQueue (camera view)' threw`, код 3; `@other` —
+  `'PrepareViewQueue (shore depth view)'`, код 3; texstream PASS (приземлилась через 7 кадров), texdecode PASS (1),
+  fsprobe PASS (241-242, проба раз в секунду); `--retire-selftest` PASS — толпа стоила границе не больше 2 вопросов;
+  `=upload` PASS; `pass-throw` — Fatal `'Skybox'`, код 3. Контроль — та же сборка с каждой правкой, откатанной на
+  месте (точки броска оставлены): `view-throw` и `@other` — «did not crash», код 1; texdecode и fsprobe — «never
+  landed» через 600 кадров, код 1; texstream — тот же FAIL на кадре 600, затем процесс завис на выходе (деструктор),
+  убит по таймауту; `--retire-selftest` — 594 вопроса на одной границе, FAIL. Собраны Debug, Release_Editor, Release;
+  `intent_regression` и `inspector_regression` (Debug) — PASS; `profiler_regression` и `rt_bindless_regression` (они
+  сами компилируют `TaskSystemLockFree.cpp` и `DeferredRelease.cpp`) — собраны, PASS; пять `check_*.py` — 0.
+
 #### R0. Замеры в дерево и храповик слоёв (S, риск 0)
 
 - **R0.1. `tools/arch_metrics.py`.** Из черновиков `tools/arch/arch_metrics*.py`, `mechanic_cost.py` — один

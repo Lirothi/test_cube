@@ -355,6 +355,41 @@ void ScenarioFailedTasks()
     ts.Stop();
 }
 
+// The second review of wave 1, item 2: a detached task's owner polls for its end. The control is the old shape -- the
+// flag set at the end of the body -- which never lands when the body throws (texture streaming stopped for the process,
+// the decode cache kept a claim); SubmitDetach(body, landing) lands both ways, and says which.
+void ScenarioDetachedLanding()
+{
+    ScenarioDeadline deadline("detached landing");
+    auto& ts = TaskSystem::Get();
+    ts.Start(2);
+    LOG_INFO(logging::LogCategory::Task, "task regression: expecting two intentional detached-task exceptions");
+
+    std::atomic<bool> controlDone{false};
+    std::atomic<bool> controlThrows{true}; // not a constant: the store below stays reachable code (C4702)
+    ts.SubmitDetach([&controlDone, &controlThrows]() {
+        if (controlThrows.load()) {
+            throw std::runtime_error("task regression: intentional detached exception (control: the flag ends the body)");
+        }
+        controlDone.store(true); // the shape the fix replaced
+    });
+    std::atomic<int> thrownLanding{-1};
+    ts.SubmitDetach([]() {
+        throw std::runtime_error("task regression: intentional detached exception (landed)");
+    }, [&thrownLanding](bool threw) { thrownLanding.store(threw ? 1 : 0); });
+    std::atomic<int> finishedLanding{-1};
+    std::atomic<bool> finishedBodyRan{false};
+    ts.SubmitDetach([&finishedBodyRan]() { finishedBodyRan.store(true); },
+                    [&finishedLanding, &finishedBodyRan](bool threw) {
+                        finishedLanding.store(threw ? 1 : (finishedBodyRan.load() ? 0 : 2));
+                    });
+    ts.WaitForAll();
+    RegressionCheck(!controlDone.load(), "control: a detached task whose flag ends its body never lands when it throws");
+    RegressionCheck(thrownLanding.load() == 1, "a detached task that threw lands, told it threw");
+    RegressionCheck(finishedLanding.load() == 0, "a detached task that finished lands after its body, told it did not throw");
+    ts.Stop();
+}
+
 void ScenarioNestedTracking()
 {
     ScenarioDeadline deadline("nested tracking");
@@ -581,6 +616,7 @@ int RunTaskSystemStress(bool overflowDeathTest)
     ScenarioLargeRange();
     ScenarioRangeExceptions();
     ScenarioFailedTasks();
+    ScenarioDetachedLanding();
     ScenarioNestedTracking();
     ScenarioTargetedWait();
     ScenarioPrerequisiteLifetime();

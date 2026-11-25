@@ -41,7 +41,8 @@ public:
         // false from Wait (Failed() is true), its dependents still run. The process goes on.
         Background,
         // A frame cannot go on without it (a render-graph pass: its command list unclosed, its barriers never
-        // issued): a Fatal line naming the task, then abort and the minidump (InvariantFailure).
+        // issued; a view's cull in Scene::PrepareViews: the frame drawn from a half-built queue): a Fatal line naming
+        // the task, then abort and the minidump (InvariantFailure).
         Frame,
     };
 
@@ -128,6 +129,12 @@ public:
                       std::size_t batchSize = 1);
 
     void SubmitDetach(Task t);
+    // A detached task whose owner polls for its end (a `done` flag, an in-flight claim): `landing` runs after `body`
+    // whether it returned (threw = false) or threw (true, before the exception goes on to the task's FailurePolicy --
+    // the Error line naming it). A flag set at the end of the body never landed when the body threw, and its owner
+    // waited for the process: texture streaming, the decode cache's claims, the thumbnail queue, the shader file probe
+    // (the second review of wave 1, item 2; M1's class). `landing` must not throw.
+    void SubmitDetach(Task body, std::function<void(bool threw)> landing);
     void DispatchDetach(std::size_t jobCount,
                         std::function<void(std::size_t)> fn,
                         std::size_t batchSize = 1);
