@@ -272,6 +272,13 @@ GBufferRenderable::~GBufferRenderable()
     if (lampSwitch_ != LampSwitch::Always) { NightLamps::Unregister(this); }
 }
 
+void GBufferRenderable::DetachFromWorld()
+{
+    RenderableObject::DetachFromWorld();
+    // As the destructor, now; Always so it does not again (no SetEmissiveScale: the object is leaving).
+    if (lampSwitch_ != LampSwitch::Always) { NightLamps::Unregister(this); lampSwitch_ = LampSwitch::Always; }
+}
+
 void GBufferRenderable::SetLampSwitch(LampSwitch lampSwitch)
 {
     if (lampSwitch == lampSwitch_) { return; }

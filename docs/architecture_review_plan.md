@@ -3032,35 +3032,35 @@ R3 и R5 — M, с низким риском, друг от друга не за
   | `App.cpp:3737` (смена уровня) | И | парковка: весь состав сцены | ресурсы уровня | оставить: точка простоя R8 |
   | `App.cpp:4295`, `Renderer.cpp:116` | С | — | всё (разборка) | оставить |
   | `SceneStress.cpp:345, 1126, 1260, 1280, 1592` | И/С | как у оригиналов | как у оригиналов | оставить: стенд повторяет путь редактора и уровня |
-  | `Scene.cpp:1304` (`RemoveRuntimeObjects`) | И | парковка: состав (`TC_CHECK_GAME_PARKED_OR_SYNC`) | меши, BLAS, слоты удалённых — сразу | следующая порция: удаление через службу, парковка остаётся |
+  | `Scene.cpp:1304` (`RemoveRuntimeObjects`) | И | парковка: состав (`TC_CHECK_GAME_PARKED_OR_SYNC`) | меши, BLAS, слоты удалённых — сразу | **заменено (11-25)**: `Scene::RetireRemovedObject` (объект отцеплен от мира сразу, уничтожен службой), `WaitRenderForGame` |
   | `Scene.cpp:1469` (`RefreshShadowGpuForEditor`) | И | парковка + переключатели в рендер | дальше `RebuildShadowCasters` | оставить вместе с `:1642` |
   | `Scene.cpp:1642` (`RebuildShadowCasters`), `:3495` (`ReconcileShadowCapacity`), `ShadowGpuData.cpp:2765` | Р/И | — | мега VB/IB; кольца, что ещё влезают, пишутся на месте | оставить: вердикт R16.9 |
-  | `Scene.cpp:1680` (`ReconcileSkyOcclusion`) | Р | — | текстуры карты неба | кандидат (служба + виды в своей куче CPU — сверить) |
+  | `Scene.cpp:1680` (`ReconcileSkyOcclusion`) | Р | — | текстуры карты неба | **заменено (11-25)**: службой (`SkyOcclusionMap::Resize`; кучи видов — CPU-only, сверено) |
   | `Scene.cpp:3618` (`ReconcileShadowMode`) | Р | — | пулы VSM, атласы (цели), пул кэша | оставить: цели с видами в общих кучах; пул кэша — R16.9 |
   | `SceneRenderer.cpp:83` (`ReleaseUnwantedGi`), `:95` (`ReleaseUnwantedClouds`) | Р | — | объёмы проб GI, текстуры облаков | **заменено**: `DdgiVolume::Retire`, `VolumetricCloud::Retire` (кучи видов — CPU) |
   | `DeveloperWindow.cpp:724`, `ContentBrowserPanel.cpp:2861`, `ViewportGizmo.cpp:726` | И | — | атлас значков, раз за сессию | оставить |
   | `AssetThumbnailCache.cpp:1681` | И | — | сбой забора: ресурсы задания | оставить: исключение |
   | `AssetThumbnailCache.cpp:1756, 1776` (`ReleaseAll`) | С | — | всё кэша | оставить: разборка |
-  | `CreateEnvironmentCommand.cpp:70, 88`, `DeleteObjectCommand.cpp:70`, `DuplicateObjectCommand.cpp:107`, `PasteObjectCommand.cpp:243` (лампы) | И | парковка: окружение документа и список ламп | своего нет (буферы ламп растит `RebuildLights`) | следующая порция: `WaitRenderForGame` + рост буферов ламп через службу |
-  | `EnvironmentRuntime.cpp:549` (`RebuildLights`) | И | парковка: списки ламп | буферы ламп растут заранее (покадровый рост освобождал сразу) | там же |
-  | `DeleteObjectCommand.cpp:86, 120`, `DuplicateObjectCommand.cpp:143, 184`, `PasteObjectCommand.cpp:295, 336`, `SetMaterialCommand.cpp:53`, `SetMaterialSlotCommand.cpp:41`, `SetMeshAssetCommand.cpp:63`, `SetParticlePresetCommand.cpp:63`, `SpawnMeshCommand.cpp:66, 90`, `EditorRaceTracks.cpp:69, 94`, `InspectorMultiEdit.cpp:278`, `MaterialEditorPanel.cpp:618`, `MeshEditorPanel.cpp:1551`, `EditorController.cpp:543` | И | парковка: состав сцены (добавить, убрать, пересоздать) | ресурсы убранного — сразу; загрузка после (`SubmitAndWait`) | следующая порция: удаление через службу и `Submit`; пока оставить |
+  | `CreateEnvironmentCommand.cpp:70, 88`, `DeleteObjectCommand.cpp:70`, `DuplicateObjectCommand.cpp:107`, `PasteObjectCommand.cpp:243` (лампы) | И | парковка: окружение документа и список ламп | своего нет (буферы ламп растит `RebuildLights`) | **заменено (11-25)**: `WaitRenderForGame`; старые кольца ламп — службе (`LightManager::Release*LightBuffer`) |
+  | `EnvironmentRuntime.cpp:549` (`RebuildLights`) | И | парковка: списки ламп | буферы ламп растут заранее (покадровый рост освобождал сразу) | **заменено (11-25)**: там же (212 → 1 парковка на «Lamps») |
+  | `DeleteObjectCommand.cpp:86, 120`, `DuplicateObjectCommand.cpp:143, 184`, `PasteObjectCommand.cpp:295, 336`, `SetMaterialCommand.cpp:53`, `SetMaterialSlotCommand.cpp:41`, `SetMeshAssetCommand.cpp:63`, `SetParticlePresetCommand.cpp:63`, `SpawnMeshCommand.cpp:66, 90`, `EditorRaceTracks.cpp:69, 94`, `InspectorMultiEdit.cpp:278`, `MaterialEditorPanel.cpp:618`, `MeshEditorPanel.cpp:1551`, `EditorController.cpp:543` | И | парковка: состав сцены (добавить, убрать, пересоздать) | ресурсы убранного — сразу; загрузка после (`SubmitAndWait`) | **заменено (11-25)**: удаление через службу, `Submit`, `WaitRenderForGame` (пакетные — простой GPU раз, в `RefreshShadowGpuForEditor`) |
   | `EditorController.cpp:750, 759` (живой океан) | И | парковка: объекты океана | симуляция и её объекты | оставить |
-  | `EnvironmentRuntime.cpp:101, 495` (небо) | И | парковка (`Apply`) | текстуры неба — сразу (`SetSkybox`) | кандидат: небо в службу |
+  | `EnvironmentRuntime.cpp:101, 495` (небо) | И | парковка (`Apply`) | текстуры неба — сразу (`SetSkybox`) | **заменено (11-25)**: старое небо — службе (`Scene::SetSkybox`), загрузка `Submit` |
   | `EnvironmentRuntime.cpp:160` (ветер океана) | И | парковка — уже в `Apply` | ресурсы симуляции — служба с R16.7 | **заменено**: `WaitRenderForGame` |
   | `MeshEditorPanel.cpp:2111` (небо превью) | И | — (превью пишется этим же потоком) | старые кубы; загрузка после ждала | **заменено**: кубы в службу, загрузка `Submit` |
   | `MeshEditorPreviewScene.cpp:260` | И | — | свои цели превью по индексу слота кадра в полёте | оставить: нужны цели по номеру кадра |
-  | `MeshEditorPreviewScene.cpp:368` (`Reset`) | И | — | цели и меш превью | кандидат |
+  | `MeshEditorPreviewScene.cpp:368` (`Reset`) | И | — | цели и меш превью | оставить (11-25): редкое (закрыть редактор меша / сменить меш), освобождает кэши мешей и материалов превью и дескрипторы ImGui целиком |
   | `OceanRenderable.cpp:1251` (каустика) | Р | — | старый атлас; новый грузится с ожиданием | оставить: редкая правка, загрузка нужна обеим очередям |
   | `OceanRenderable.cpp:1497` (пересечения маски воды) | Р | — | старые пересечения (виды — куча CPU) | **заменено**: служба |
-  | `Renderer.cpp:512` (`SetBloomFftResidency`) | Р | — | решётки FFT (отложенные цели) | кандидат (цели — сверить виды) |
+  | `Renderer.cpp:512` (`SetBloomFftResidency`) | Р | — | решётки FFT (отложенные цели) | **заменено (11-25)**: решётки — службе (`CreateBloomFftGrids`; виды в CPU-only staging, сверено) |
   | `Renderer.cpp:577` (`SyncAsyncQueueMode`) | Р | очереди кадров в полёте не должны расходиться | — | оставить |
   | `Renderer.cpp:1097` (выбор объекта) | И | нужен результат | — | оставить (забор на чтение — отдельно) |
   | `Renderer.cpp:2199` (`ApplyPendingResize`), `:3118` (`RecreateDeferredTargets`) | С/Р | — | цепочка обмена, цели | оставить: R8 |
   | `Screenshot.cpp:96` | И/С | нужен кадр | — | оставить |
   | `UploadBatch.cpp:89` (`SubmitAndWait`) | любой | его договор | — | оставить (с ревью волны счётчик пишет его ожидание на место вызывающего) |
-  | `VolumetricCloud.cpp:133` (`UploadToRest`) | Р | — | шум и файлы облаков при их создании (облака включили снова); загрузка после | кандидат: `Submit` |
+  | `VolumetricCloud.cpp:133` (`UploadToRest`) | Р | — | шум и файлы облаков при их создании (облака включили снова); загрузка после | оставить (11-25): их читает `Main_CloudShadow` на async compute, а у него предпосылки графики может не быть (`after == kNone`) — копия на direct без ожидания не упорядочена с ним (как каустика) |
   | `VolumetricCloud.cpp:172` (выгрузка в DDS) | Р | — | инструмент разработчика | оставить |
-  | `BloomRenderer.cpp:120, 149` (картинка ядра, корона) | Р | — | загрузка после ждёт | кандидат: `Submit` + служба, как небо превью |
+  | `BloomRenderer.cpp:120, 149` (картинка ядра, корона) | Р | — | загрузка после ждёт | **заменено (11-25)**: старое изображение — службе, `Submit` из половины рендера до графа (блум — только графика) |
 
   **R16.10 сделано частично (2026-11-24): счётчик, таблица и первая порция замен; следующие порции — по строкам
   «следующая порция» и «кандидат».** Якорь `Renderer.cpp:2041-2066` сдвинулся (до шага — `:2062-2087`, после
@@ -3089,6 +3089,8 @@ R3 и R5 — M, с низким риском, друг от друга не за
   попадает: редактор снимается `Stop-Process`, буфер журнала теряется (для следующих замеров — `--log-sync`).
   Три конфигурации и Shipping/Development/Cook — 0 предупреждений; `check_*.py` — 0; `intent_regression`,
   `profiler_regression`, `rt_bindless_regression` — PASS.
+
+  **R16.10 доделан (2026-11-25)** — абзац «Волна 1 доделана» в конце раздела R16; вердикты строк таблицы выше обновлены (11-25).
 
   **Ревью волны 1 (R15 + R16), 2026-11-24.** Смотрел всё в индексе (≈2100 строк) по направлениям: служба R16.1 и её
   места — срок (метка = последняя граница + `kMargin`; запись из игровой фазы уходит с передачей в следующий кадр,
@@ -3122,7 +3124,7 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `.filters`; исходники — CRLF без одиночных LF; пять `check_*.py` — 0. Перепрогнано на собранном HEAD (Release):
   `--tasksystem-stress` — PASS (0 failures); `--crash-selftest=pass-throw` — `INVARIANT FAILURE: frame task 'Skybox'
   threw`, дамп, код 3; `--retire-selftest=upload` — PASS (выпуск в кадре 20, освобождение в 24, GPU закончил 21).
-  Находки (1, 2, 4, 5 исправлены 2026-11-25 по слову владельца — абзац ниже; 3 и 6 ждут):
+  Находки (все шесть исправлены 2026-11-25 по слову владельца: 1, 2, 4, 5 — первый абзац ниже, 3 и 6 — второй):
   1. *R15.3 не дотянут до задач кадра вне графа.* Задачи отсечения видов (`Scene.cpp:2733`, `:3175`) создаются на
      потоке рендера вне задачи — политика `Background`; их `Wait` (`:3187-3192`) результат не читает. Бросок в
      `PrepareViewQueue` — одна строка Error, и кадр рисуется с недостроенной очередью вида: то, что В6 запретил «задаче
@@ -3177,6 +3179,84 @@ R3 и R5 — M, с низким риском, друг от друга не за
   убит по таймауту; `--retire-selftest` — 594 вопроса на одной границе, FAIL. Собраны Debug, Release_Editor, Release;
   `intent_regression` и `inspector_regression` (Debug) — PASS; `profiler_regression` и `rt_bindless_regression` (они
   сами компилируют `TaskSystemLockFree.cpp` и `DeferredRelease.cpp`) — собраны, PASS; пять `check_*.py` — 0.
+
+  **Исправлено по второму ревью, находки 3 и 6 (2026-11-25).** (3) Обе корзины — через службу. `rt::BindlessTable`:
+  набор, который заменила смена поколения текстуры, уходит в `render::deferred::Retire`; шаг выпуска возвращает слот
+  в пул (`SetPool`: свободный список под мьютексом — шаг идёт на потоке границы службы, а набор берёт задача графа
+  `RtSceneAs::Build`; пул общий с шагом, так что шаг после смерти таблицы безопасен; `generation` растёт на каждом
+  `Reset`, и слот, выпущенный до него, не попадает в таблицу, которая нумерует слоты заново). `BindlessTable::BeginFrame`
+  и `frameNo_` убраны. Кольцо загрузки стриминга (`TextureUploadRing`): вместо `Stamp(запись, кадр + kFrameCount)` —
+  `ReleaseUnread` (копии не было: свободна сразу) и `RetireAfterCopy` (флаг записи ставит шаг службы, когда GPU
+  закончил кадр по номеру); `ReleaseCompleted()` снимает с головы готовые записи по порядку выделения; у
+  `TextureStreaming::DropSwap_` ушёл ненужный номер кадра. (6) `check_threads.py`: лексер с состоянием между строками
+  (блочный комментарий, сырая строка `R"x(…)x"` с её разделителем, в том числе через строки); `'` после числа —
+  разделитель разрядов (`1'000`, `0xFF'FF`), после префикса (`u8'a'`) — символьный литерал; пометка `detached-ok:`
+  считается только в тексте комментария (в строке или в строке-комментарии выше), не в строковых литералах.
+  `--selftest` — 19 случаев.
+  Проверки. `rt_bindless_regression` получил проверку обеих корзин: набор и запись кольца держит служба, пока её граница
+  не скажет «кадр готов»; после — слот свободен (и занимается следующей регистрацией), обе записи кольца сняты;
+  набор, выпущенный до `Reset`, после него не возвращается. Контроль: каждая корзина по отдельности пущена мимо службы
+  (освобождение сразу) — FAIL на её проверке («…is held by the deferred-release service»); с правкой — PASS, отладочный
+  слой чистый. `check_threads.py --selftest`: 19 из 19; та же выборка через версию HEAD — 13 из 19, падают ровно шесть
+  случаев слепых мест; по дереву обе версии дают одни и те же 5 мест (0 находок). Живьём (Release):
+  `--texstream-selftest=layout` и `=size` — отказ потока ввода, текстура снята со стриминга, 19 замен прошли, кольцо
+  вернулось к `0/51200 KB` (запись отказа — `ReleaseUnread`, записи копий — через службу); `--retire-selftest` PASS;
+  `--throw-selftest=texstream` PASS; `--scene-stress=150 --rt-audit` — CLEAN, `mem tags: STABLE`, rt audit PASS (454
+  кадра), служба освободила 1385 записей по кадрам. Собраны Debug, Release_Editor, Release; `intent_regression` PASS;
+  пять `check_*.py` — 0.
+
+  **Волна 1 доделана (2026-11-25, слово владельца «доделывай волну 1 полностью»).** *R16.10, оставшиеся порции.*
+  Лампы: `LightManager::Release*LightBuffer` отдаёт старое кольцо и его кучу SRV службе, `RebuildLights` и ветки
+  окружения команд Create/Delete/Duplicate/Paste паркуют рендер без простоя GPU. Удаление: `Scene::RetireRemovedObject`
+  — объект сразу отцепляется от мира (`RenderableObjectBase::DetachFromWorld`: физика, плавучесть, маска воды, ночные
+  лампы — то, что снимал деструктор, так что `ForgetRemoved` после удаления их видит) и уничтожается службой; так
+  `RemoveRuntimeObjects` и `RemoveEditorObject`. Команды и панели, что убирают и пересоздают объекты (Delete, Duplicate,
+  Paste, Spawn, SetMaterial(Slot), SetMeshAsset, SetParticlePreset, гоночные метки, Inspector, Material/Mesh Editor,
+  `RespawnPlacedMeshes`), — парковка и `Submit` вместо `WaitForPreviousFrame` и `SubmitAndWait` (пакетные идут к
+  одному простою в `RefreshShadowGpuForEditor`, его вердикт «оставить»). Кандидаты: небо (`Scene::SetSkybox` отдаёт
+  старое службе, `ApplySkybox` — `Submit`), карта неба сверху (`SkyOcclusionMap::Resize` — службе), решётки FFT блума
+  (`CreateBloomFftGrids` — службе), ядро и корона блума (`RetireTexture` + `Submit`) — заменены; создание облаков и
+  `MeshEditorPreviewScene::Reset` — оставлены, причины в таблице. Парковка — новая `threading::ParkRenderForGame`:
+  `WaitRenderForGame` и флаг «рендер припаркован» до следующей передачи кадра. Первая версия порции звала только
+  `WaitRenderForGame` и флаг не ставила: Release_Editor с `/p:TcThreadChecks=true` за сессию с удалением пальм дал три
+  `thread role:` Error (`Scene::RemoveEditorObject`, `AddInitializedEditorObject`, `RenderableObject::SyncSceneState`:
+  «needs sync, or game with the render half parked»); с `ParkRenderForGame` — ноль. Вызовов `WaitForPreviousFrame` в
+  коде: 66 → 35 в 15 файлах (один счёт для HEAD и дерева: строки кода без комментариев, объявления и определения —
+  «64» выше считал иначе). *Замер* (Release_Editor, wind_test, свой порт 8197, `--log-sync`, скрипт `measure_r1610.py`: «Lamps»
+  выкл/вкл ×2, удалить пальмы (251) + Undo ×2, дублировать + Undo ×2, `bloom.method` 0/1 ×2; старый exe собран из
+  `757bbf47` во временном worktree; A B A B): полных простоев GPU за сессию 3384 / 3384 (592 / 233 мс) → 48 / 48
+  (90 / 94 мс). Ушли места удаления и дублирования (по 502 за серию на место), `EnvironmentRuntime.cpp:549` (318),
+  `Renderer.cpp:514` (4), ядро блума (1); остались пересборка теней (`Scene.cpp` `RefreshShadowGpuForEditor`,
+  `RebuildShadowCasters`), создание облаков, значки. *Картинка* (три вида гейта C; Release_Editor старый и новый из
+  основной папки — шейдеры и контент шаг не трогал): пол 0.036 / 0.052 / 0.028 %, старый против нового 0.22 / 0.04-0.08
+  / 0.07-0.13 % — в полу плана, кадры одинаковы (у лагуны отличия — полоса дальних крон у горизонта).
+  *Непокрытое ревью и шагов R15/R16.* R15.3: глубокий бросок — `--crash-selftest=pass-throw@<Pass>:deep` бросает из
+  `ctx.BeginCL` внутри тела пасса при открытом списке (Skybox открывает свой список сам, поэтому `@Tonemap:deep`;
+  плечо, чей пасс не дошёл до точки броска, через 600 кадров даёт «never reached», а не висит). Утверждение «дамп
+  хранит кадры места броска» оказалось неверным: дамп писался из `abort()` после `catch` в `RunTask`, стек уже
+  размотан. Теперь тело задачи кадра идёт внутри `__try`/`__except` с фильтром, который только смотрит
+  (`EXCEPTION_CONTINUE_SEARCH`): `crash::NoteThrowSite` пишет в лог кадры места броска (`module+0x…`,
+  `tools/symbolize.py` их называет) и минидамп `<время>_<pid>_throw.dmp` с контекстом исключения, а отчёт `abort()`
+  называет этот дамп. Прогон: `RaiseException` ← `RenderGraphPassContext::BeginCL` (RenderGraph.h) ←
+  `SceneRenderer::Pass_Tonemap` ← `RunPassBody` ← `RunNode` ← `RunNotingThrowSite`; у `view-throw` — `ThrowAtSite` ←
+  лямбда `Scene::PrepareViews` ← `RunNotingThrowSite`. R15.4: ветки `graphgroups`, `graphpasses`, `graphdep`,
+  `graphdecl`, `graphcycle` — каждая Fatal с именем пасса или цикла, код 3. R15.5: Release_Editor с ключом —
+  `--thread-check-selftest` («checks compiled in»), сессия 129 с (правки выше, переключатели, снимок, Play 75 с,
+  Stop) — ни одной `thread role:` (контроль — первая версия порции выше). R15.8: `check_threads.py` требует и у
+  `CreateThread` / `_beginthreadex` / `_beginthread` пометку `thread-ok: <где ловится>` (четыре места помечены;
+  `--selftest` — 25 случаев). R16.8: выпечка боке пишет строку Info; под суженным GBV (`SkyOcclusionMap,
+  SkyOcclusionReduce,SkyVisFallback,Tonemap,Skybox` + самопроверка, Debug, `--sweep` разрешения карты неба,
+  `bloom.method` и лепестков) — три выпечки, карта 512 → 256 → 1024 → 64, решётки FFT дважды освобождены и сделаны,
+  единственная строка проверки — `id=935`, `live objects at exit: none`, чистый выход. R16.1: `--retire-selftest=pass`
+  — копия записана и источник выпущен из задачи пасса (Tonemap, рабочий поток): PASS. *Контроли* (Release, правка
+  откатана на месте): пять веток графа без проверок — «did not crash», код 1; глубокий бросок без фильтра — ни строки
+  кадров, дамп места `catch`; плечо `pass` с выпуском сразу — FAIL «released in frame 20 before the GPU had finished
+  frame 20»; `check_threads.py` без пометок — 4 находки. *Гейты* (итоговые бинари): Release — `--scene-stress=150 --rt-audit` CLEAN (mem tags STABLE, rt audit PASS, 454 кадра), то же без аудита при `frame.renderThread:0` (аудит сам включает поток рендера) CLEAN, `--mem-readout=30` PASS, `--retire-selftest` (обычный, `upload`, `pass`) PASS, `--tasksystem-stress` PASS, `--throw-selftest=texstream` PASS, `pass-throw@Tonemap:deep` и `view-throw` — Fatal, кадры места броска, дамп `_throw`, код 3; контрольный замер на итоговом Release_Editor — 48 простоев;
+  Debug `--scene-stress=12` — CLEAN, `thread roles: clean`; `intent_regression`, `inspector_regression` —
+  PASS; пять `check_*.py` — 0; три конфигурации собраны без предупреждений; `profiler_regression`,
+  `rt_bindless_regression`, `model_reaper` собраны. Полный `--scene-stress-gbv` (гейт C для R16, по слову владельца):
+  CLEAN после 300 итераций (889 с), ни одной строки `(ERROR|CORRUPTION|WARNING) id=` в сессионном логе и `InfoQueue`
+  в `logs/scene_stress.log`, `mem tags: STABLE`, `thread roles: clean`, `live objects at exit: none`, чистый выход.
 
 #### R0. Замеры в дерево и храповик слоёв (S, риск 0)
 

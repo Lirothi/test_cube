@@ -1,4 +1,5 @@
 #include "editor/commands/SetMaterialCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -50,14 +51,14 @@ bool SetMaterialCommand::Apply(EditorContext& ctx, const Key& material, const Ke
         std::unique_ptr<RenderableObjectBase> runtime = SceneObjectFactory::CreateStaticMeshFromJson(json);
         if (runtime)
         {
-            ctx.renderer.WaitForPreviousFrame();
+            threading::ParkRenderForGame("SetMaterialCommand"); // R16.10: a park, no GPU idle
             ctx.scene.RemoveEditorObject(id_.value);
             UploadBatch uploads;
             if (uploads.Begin(&ctx.renderer))
             {
                 ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id_.value, std::move(runtime),
                     obj->enabled);
-                uploads.SubmitAndWait(&ctx.renderer);
+                (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
             }
         }
     }

@@ -98,7 +98,8 @@ namespace
     {
         const std::string texture = p.value("texture", std::string());
 
-        ctx.renderer.WaitForPreviousFrame();
+        // R16.10: Apply parked the render thread; the old sky goes through render::deferred (Scene::SetSkybox) and the
+        // new one's upload with the next hand-over -- no GPU idle (it was a WaitForPreviousFrame and a SubmitAndWait).
         if (texture.empty())
         {
             ctx.scene.SetSkybox(nullptr);
@@ -115,7 +116,7 @@ namespace
         // P16.3b: before Init(), which is what measures the sky and logs the resulting scale.
         skybox->SetIlluminanceLux(JF(p, "illuminanceLux", 0.0f));
         skybox->Init(&ctx.renderer, uploads.CommandList(), uploads.KeepAlive());
-        uploads.SubmitAndWait(&ctx.renderer);
+        (void)uploads.Submit(&ctx.renderer);
         // See JsonLevel: HDRI libraries are not calibrated to the engine's linear scale, so the
         // level says how bright its sky is. 1 = the cubemap untouched.
         skybox->SetExposure(JF(p, "intensity", 1.0f));
@@ -492,8 +493,7 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     }
     else if (env.type == "skybox")
     {
-        ctx.renderer.WaitForPreviousFrame();
-        ctx.scene.SetSkybox(nullptr);
+        ctx.scene.SetSkybox(nullptr); // R16.10: the old sky through render::deferred; parked above
     }
     else if (env.type == "cameraExposure")
     {
@@ -538,15 +538,12 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
     // Repopulate the LightManager from the enabled light entities, in document
     // order, exactly like JsonLevel does at load.
     //
-    // Adding a light (duplicate, or re-enabling a loaded-disabled one) can push the
-    // light count past the GPU buffer capacity. The per-frame render path grows a
-    // light buffer by FREEING the old resource and allocating a bigger one; doing
-    // that while a frame is still in flight frees a resource the GPU is using ->
-    // DXGI_ERROR_DEVICE_HUNG. So idle the GPU and pre-grow the buffers here, while
-    // nothing references them; the render path then sees sufficient capacity and
-    // never reallocates mid-flight. (Ensure*Buffer only grows, so disabling a light
-    // keeps the existing buffer.)
-    ctx.renderer.WaitForPreviousFrame();
+    // The light lists below are what the render thread's frame walks: park it (the game half's rule). A grow of the
+    // light rings hands the old buffers to render::deferred (LightManager::Release*LightBuffer), so no GPU idle: this
+    // was a WaitForPreviousFrame -- once per light of a group switched together, 212 for wind_test's "Lamps" (R16.10).
+    // A second park in the same frame returns at once. (Ensure*Buffer only grows, so disabling a light keeps the
+    // existing buffer.)
+    threading::ParkRenderForGame("EnvironmentRuntime::RebuildLights");
 
     LightManager& lm = ctx.scene.GetLightManager();
     lm.SpotLights().clear();

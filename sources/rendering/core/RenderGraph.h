@@ -107,6 +107,15 @@ inline const bool g_dumpBarriers_knob = ::knob::Register(g_dumpBarriers_game, g_
 // process with a Fatal naming the pass. Set once at boot (main.cpp); not a knob.
 inline std::atomic<int> g_passThrowSelfTest{ -1 };
 inline std::atomic<bool> g_passThrowSelfTestThrown{ false };
+// --crash-selftest=pass-throw@<Pass>:deep (the second review of wave 1): the throw comes from inside the pass body instead,
+// right after its BeginCL -- its command list open -- so the report shows a throw from the body's own frames.
+inline std::atomic<bool> g_passThrowSelfTestDeep{ false };
+// --retire-selftest=pass (the second review of wave 1): once, inside the named pass's body right after its BeginCL, on the
+// worker that runs the pass's task, `g_passSelfTestHook` is handed the pass's open list (RetireSelfTest.cpp records a copy
+// into it and retires the copy's source from there). -1 / null = off.
+using PassSelfTestHook = void (*)(ID3D12GraphicsCommandList* cl);
+inline std::atomic<int> g_passSelfTestHookPass{ -1 };
+inline std::atomic<PassSelfTestHook> g_passSelfTestHook{ nullptr };
 } // namespace render
 
 // Debug name for a pass's command list: PIX, GBV and the breadcrumb dump all read it, so the
@@ -204,11 +213,33 @@ struct RenderGraphPassContext {
                 // so the first member's verdict is the group's.
                 render::gbv::ApplyPassPatchMode(groupCL->shared.cl, pass);
             }
+            ThrowIfDeepSelfTest();
+            RunSelfTestHook(groupCL->shared.cl);
             return groupCL->shared;
         }
         Renderer::ThreadCL t = renderer->BeginThreadCommandList(CommandListType(), initialPSO);
         render::gbv::ApplyPassPatchMode(t.cl, pass); // also on a body that never names its list
+        ThrowIfDeepSelfTest();
+        RunSelfTestHook(t.cl);
         return t;
+    }
+
+    // --retire-selftest=pass: the armed pass's open list, once (render::g_passSelfTestHook).
+    void RunSelfTestHook(ID3D12GraphicsCommandList* cl) const
+    {
+        if (render::g_passSelfTestHookPass.load(std::memory_order_relaxed) != static_cast<int>(pass)) { return; }
+        if (const render::PassSelfTestHook hook = render::g_passSelfTestHook.exchange(nullptr)) { hook(cl); }
+    }
+
+    // --crash-selftest=pass-throw@<Pass>:deep: the armed pass throws here, inside its body, its list just opened.
+    void ThrowIfDeepSelfTest() const
+    {
+        if (render::g_passThrowSelfTestDeep.load(std::memory_order_relaxed) &&
+            render::g_passThrowSelfTest.load(std::memory_order_relaxed) == static_cast<int>(pass) &&
+            !render::g_passThrowSelfTestThrown.exchange(true)) {
+            throw std::runtime_error("the crash self-test's exception inside a pass body, its command list open "
+                                     "(--crash-selftest=pass-throw@<Pass>:deep)");
+        }
     }
 
     void EndCL(Renderer::ThreadCL& t) const
@@ -1514,6 +1545,7 @@ private:
         } restore{ flip };
 
         if (render::g_passThrowSelfTest.load(std::memory_order_relaxed) == static_cast<int>(passes_[passIdx].name) &&
+            !render::g_passThrowSelfTestDeep.load(std::memory_order_relaxed) &&
             !render::g_passThrowSelfTestThrown.exchange(true)) {
             throw std::runtime_error("the crash self-test's exception in a pass body (--crash-selftest=pass-throw)");
         }

@@ -662,6 +662,7 @@ void Start(std::uint64_t frame)
     g_stackMode = g_opts.stacks;
     g_sampleEvery = std::max<std::uint32_t>(g_opts.sampleEvery, 1u);
     g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    // thread-ok: not caught -- what leaves WriterMain is std::terminate -> abort -> crash::Report (a dump)
     g_writer = CreateThread(nullptr, 0, &WriterMain, nullptr, 0, nullptr);
     g_markersOn.store(true, std::memory_order_release);
 

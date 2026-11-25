@@ -1,4 +1,5 @@
 #include "editor/ui/MaterialEditorPanel.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #include "core/vfs/Vfs.h"
 #if WITH_EDITOR
 
@@ -613,9 +614,9 @@ int MaterialEditorPanel::ApplyToScene(EditorContext& ctx) const
     }
     if (targets.empty()) { return 0; }
 
-    // One GPU sync for the whole batch. The cache was already evicted, so each respawn's
+    // One park and one upload batch for the whole set. The cache was already evicted, so each respawn's
     // GetOrCreate rebuilds this material fresh (new textures / params / PSO flags).
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("MaterialEditorPanel"); // R16.10: a park, no GPU idle
     UploadBatch uploads;
     if (!uploads.Begin(&ctx.renderer)) { return 0; }
 
@@ -634,7 +635,7 @@ int MaterialEditorPanel::ApplyToScene(EditorContext& ctx) const
         ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime), obj->enabled);
         ++applied;
     }
-    uploads.SubmitAndWait(&ctx.renderer);
+    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
 
     if (applied > 0)
     {

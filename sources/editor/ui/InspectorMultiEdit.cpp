@@ -1,4 +1,5 @@
 #include "editor/ui/InspectorMultiEdit.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -275,14 +276,14 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
         else if (object->type == "particleEmitter") { replacement = SceneObjectFactory::CreateParticleEmitterFromJson(json); }
         if (replacement)
         {
-            ctx.renderer.WaitForPreviousFrame();
+            threading::ParkRenderForGame("InspectorMultiEdit"); // R16.10: a park, no GPU idle
             UploadBatch uploads;
             if (uploads.Begin(&ctx.renderer))
             {
                 ctx.scene.RemoveEditorObject(object->id.value);
                 ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, object->id.value, std::move(replacement),
                     object->enabled);
-                uploads.SubmitAndWait(&ctx.renderer);
+                (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
             }
         }
     }

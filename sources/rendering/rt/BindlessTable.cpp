@@ -1,6 +1,7 @@
 #include "rendering/rt/BindlessTable.h"
 #include "core/logging/Log.h"
 
+#include "rendering/core/DeferredRelease.h" // a retired descriptor set's slot (render::deferred)
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
 
@@ -37,11 +38,10 @@ size_t BindlessTable::KeyHash::operator()(const MaterialKey& key) const
     return static_cast<size_t>(h);
 }
 
-void BindlessTable::BeginFrame(uint64_t frameNo)
+UINT BindlessTable::FreeSetCount() const
 {
-    frameNo_ = frameNo;
-    for (const RetiredSet& r : retiredSets_) { if (r.frame <= frameNo) { freeSets_.push_back(r.slot); } }
-    std::erase_if(retiredSets_, [frameNo](const RetiredSet& r) { return r.frame <= frameNo; });
+    std::lock_guard<std::mutex> lock(setPool_->mutex);
+    return static_cast<UINT>(setPool_->free.size());
 }
 
 void BindlessTable::Init(ID3D12Device* device, render::BindlessHeap* shared)
@@ -75,10 +75,14 @@ void BindlessTable::Reset()
     geomCache_.clear();
     descriptorCache_.clear();
     latestSet_.clear();
-    retiredSets_.clear();
-    freeSets_.clear();
+    {
+        // A set still with the service comes back to a table that numbers its slots afresh: its step finds another
+        // generation and drops it.
+        std::lock_guard<std::mutex> lock(setPool_->mutex);
+        setPool_->free.clear();
+        ++setPool_->generation;
+    }
     setSlotsUsed_ = 0;
-    frameNo_ = 0;
     geomInfo_.clear();
     frameGeometry_ = {};
     geomVersion_ = 0;
@@ -131,28 +135,45 @@ uint32_t BindlessTable::GetOrRegisterDescriptors(Mesh* mesh, const SlotMaterial&
     if (latest != latestSet_.end()) {
         auto old = descriptorCache_.find(latest->second);
         if (old != descriptorCache_.end()) {
-            retiredSets_.push_back(RetiredSet{ old->second, frameNo_ + render::kFrameCount });
+            // Back on the free list once the GPU has finished every frame that may index it -- by frame NUMBER, through
+            // the deferred-release service (the second review of wave 1, item 3).
+            const UINT slot = old->second;
+            std::shared_ptr<SetPool> pool = setPool_;
+            uint64_t generation = 0;
+            {
+                std::lock_guard<std::mutex> lock(pool->mutex);
+                generation = pool->generation;
+            }
+            render::deferred::Retire([pool, slot, generation]() {
+                std::lock_guard<std::mutex> lock(pool->mutex);
+                if (pool->generation == generation) { pool->free.push_back(slot); }
+            }, 0, "rt.bindless.set");
             descriptorCache_.erase(old);
         }
         latestSet_.erase(latest);
     }
     UINT geoSlot = 0;
-    if (!freeSets_.empty()) {
-        geoSlot = freeSets_.back();
-        freeSets_.pop_back();
-    }
-    else if (setSlotsUsed_ >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
-        // On the transition only: every registration after exhaustion lands here again, and the
-        // renderer has already switched to SSR on the first one.
-        if (!buildFailed_) {
-            LOG_ERROR(logging::LogCategory::RenderRt,
-                      "bindless descriptor capacity exhausted ({} geometries); refusing out-of-bounds write, RT off until the next level",
-                      descriptorCache_.size());
+    bool reused = false;
+    {
+        std::lock_guard<std::mutex> lock(setPool_->mutex);
+        if (!setPool_->free.empty()) {
+            geoSlot = setPool_->free.back();
+            setPool_->free.pop_back();
+            reused = true;
         }
-        buildFailed_ = true;
-        return kInvalidGeometry;
     }
-    else {
+    if (!reused) {
+        if (setSlotsUsed_ >= (kMaxDescriptors - kGeoBase) / kDescPerGeom) {
+            // On the transition only: every registration after exhaustion lands here again, and the
+            // renderer has already switched to SSR on the first one.
+            if (!buildFailed_) {
+                LOG_ERROR(logging::LogCategory::RenderRt,
+                          "bindless descriptor capacity exhausted ({} geometries); refusing out-of-bounds write, RT off until the next level",
+                          descriptorCache_.size());
+            }
+            buildFailed_ = true;
+            return kInvalidGeometry;
+        }
         geoSlot = base_ + kGeoBase + kDescPerGeom * setSlotsUsed_++;
     }
 

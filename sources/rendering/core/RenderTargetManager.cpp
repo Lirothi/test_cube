@@ -1,4 +1,5 @@
 #include "rendering/core/RenderTargetManager.h"
+#include "rendering/core/DeferredRelease.h" // R16.10: the bloom FFT grids a residency switch replaces
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/TextureCreate.h"
 #include "rendering/shadows/ShadowSettings.h" // render::g_csmAtlasRes + the S5 gutter
@@ -1246,6 +1247,12 @@ void RenderTargetManager::CreateBloomFftGrids(ID3D12Device* dev, ResourceDeclara
             res.GetAddressOfForCreate()));
         res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
     };
+    // R16.10: a residency switch (Renderer::SetBloomFftResidency, before the graph) replaces grids the frames in flight
+    // may still read -- they go through render::deferred instead of a GPU idle. The views below are in the CPU-only
+    // staging heap, copied when a frame records: the frames recorded before keep theirs.
+    render::deferred::Retire(std::move(bloomFftA_), "bloom.fft");
+    render::deferred::Retire(std::move(bloomFftB_), "bloom.fft");
+    render::deferred::Retire(std::move(bloomFftKernel_), "bloom.fft");
     createGrid(bloomFftA_, L"BloomFftA");
     createGrid(bloomFftB_, L"BloomFftB");
     createGrid(bloomFftKernel_, L"BloomFftKernel");

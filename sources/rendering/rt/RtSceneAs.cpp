@@ -140,9 +140,9 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         return;
     }
 
-    // The retired AS buffers go by themselves (render::deferred, R16.4: once their frame number completed).
+    // The retired AS buffers go by themselves (render::deferred, R16.4: once their frame number completed), and so do
+    // the descriptor sets a texture swap retires (BindlessTable, the second review of wave 1, item 3).
     const uint64_t frameNo = renderer->GetTotalFrameNumber();
-    bindless_.BeginFrame(frameNo); // A2: descriptor sets retired by a texture swap return to the pool
 
     // Gather opaque, single-mesh, CPU-placed instances. Ocean (GPU-displaced) is
     // excluded by design — kept on its planar-reflection path (S13). Instanced clouds

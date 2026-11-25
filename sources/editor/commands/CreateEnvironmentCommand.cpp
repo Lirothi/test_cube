@@ -1,4 +1,5 @@
 #include "editor/commands/CreateEnvironmentCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <utility>
@@ -67,7 +68,7 @@ bool CreateEnvironmentCommand::Execute(EditorContext& ctx)
 
     previousSelection_ = ctx.selection;
 
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("CreateEnvironmentCommand"); // R16.10: a park, no GPU idle
     ctx.document.Environment().push_back(object_);
     if (IsLight(object_))
     {
@@ -85,7 +86,7 @@ bool CreateEnvironmentCommand::Execute(EditorContext& ctx)
 
 void CreateEnvironmentCommand::Undo(EditorContext& ctx)
 {
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("CreateEnvironmentCommand"); // R16.10: a park, no GPU idle
 
     std::vector<EditorObject>& environment = ctx.document.Environment();
     for (auto it = environment.begin(); it != environment.end(); ++it)

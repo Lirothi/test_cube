@@ -6,6 +6,7 @@
 
 #include "core/math/Frustum.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/core/DeferredRelease.h" // a grown light ring's old buffer (R16.10)
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/shadows/ShadowSettings.h" // plan S4: kLocalShadowMinRes
@@ -438,13 +439,22 @@ void LightManager::PackShadowAtlases(const ShadowAtlasPages& pages)
                                        pages.pointPages, pages.maxPages, atlasShrunk_, atlasDropped_, shadowPack_);
 }
 
+// A grow (Ensure*LightBuffer) replaces the ring while frames in flight may still read it -- from the render half before
+// the graph, or from the game half under a park (EnvironmentRuntime::RebuildLights), neither a GPU idle. So the old
+// buffer and its SRV heap go to render::deferred, released once the GPU has finished those frames (R16.10: until then
+// every caller idled the GPU first -- 212 times for one switch of a lamp group).
 void LightManager::ReleasePointLightBuffer(Renderer* renderer)
 {
+    (void)renderer; // the wrapper unregisters itself, at the release
     if (pointLightBuffer_)
     {
-        (void)renderer; // the wrapper unregisters itself
         pointLightBuffer_->Unmap(0, nullptr);
-        pointLightBuffer_.Reset();
+        render::deferred::Retire(std::move(pointLightBuffer_), "lights.point");
+    }
+    if (pointLightSrvHeap_)
+    {
+        render::deferred::Retire([heap = std::move(pointLightSrvHeap_)]() mutable { heap.Reset(); }, 0,
+                                 "lights.point.srv");
     }
     pointLightBufferCPU_ = nullptr;
     pointLightCapacity_ = 0;
@@ -454,11 +464,16 @@ void LightManager::ReleasePointLightBuffer(Renderer* renderer)
 
 void LightManager::ReleaseSpotLightBuffer(Renderer* renderer)
 {
+    (void)renderer; // the wrapper unregisters itself, at the release
     if (spotLightBuffer_)
     {
-        (void)renderer; // the wrapper unregisters itself
         spotLightBuffer_->Unmap(0, nullptr);
-        spotLightBuffer_.Reset();
+        render::deferred::Retire(std::move(spotLightBuffer_), "lights.spot");
+    }
+    if (spotLightSrvHeap_)
+    {
+        render::deferred::Retire([heap = std::move(spotLightSrvHeap_)]() mutable { heap.Reset(); }, 0,
+                                 "lights.spot.srv");
     }
     spotLightBufferCPU_ = nullptr;
     spotLightCapacity_ = 0;

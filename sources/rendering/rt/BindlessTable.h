@@ -4,6 +4,8 @@
 #include <wrl/client.h>
 #include <cstdint>
 #include <array>
+#include <memory>
+#include <mutex>
 #include <vector>
 
 #include "third_party/robin_hood.h"
@@ -129,9 +131,6 @@ public:
                                bool mrMultiply, float alphaCutoff = -1.0f,
                                uint32_t albedoGen = 0, uint32_t mrGen = 0);
 
-    // Frame boundary: descriptor sets retired kFrameCount frames ago go back to the free list.
-    void BeginFrame(uint64_t frameNo);
-
     // Absolute heap index of per-frame scene descriptor `which` for `frameIndex`.
     UINT SceneIndex(UINT frameIndex, UINT which) const
     {
@@ -153,6 +152,8 @@ public:
 
     UINT GeometryCount() const { return static_cast<UINT>(geomInfo_.size()); }
     UINT DescriptorSetCount() const { return static_cast<UINT>(descriptorCache_.size()); }
+    // Retired descriptor-set slots back on the free list (the deferred-release service returned them). Diagnostics.
+    UINT FreeSetCount() const;
 
 private:
     D3D12_CPU_DESCRIPTOR_HANDLE CpuHandle(UINT index) const;
@@ -193,10 +194,16 @@ private:
         size_t operator()(const DescriptorKey& key) const;
         size_t operator()(const MaterialKey& key) const;
     };
-    struct RetiredSet
+    // The free descriptor-set slots. A set a texture swap replaces goes to render::deferred (the second review of wave 1,
+    // item 3: it was a retire bin of this table's, kFrameCount frames counted at its own BeginFrame); the service's
+    // release step -- on the thread of its boundary -- puts the slot back here, so the pool has a lock, and is shared
+    // with the step: a step that runs after this table is gone or Reset finds the pool still there. `generation` moves at
+    // every Reset: a slot retired before it is not a slot of the table after it (the numbering starts again).
+    struct SetPool
     {
-        UINT slot;
-        uint64_t frame; // reusable once the frame number reaches this
+        mutable std::mutex mutex;
+        std::vector<UINT> free;
+        uint64_t generation = 0;
     };
     struct FrameGeometry
     {
@@ -207,10 +214,8 @@ private:
     robin_hood::unordered_map<GeometryKey, uint32_t, KeyHash> geomCache_;
     robin_hood::unordered_map<DescriptorKey, uint32_t, KeyHash> descriptorCache_;
     robin_hood::unordered_map<MaterialKey, DescriptorKey, KeyHash> latestSet_; // material -> its live key
-    std::vector<RetiredSet> retiredSets_;
-    std::vector<UINT> freeSets_;
+    std::shared_ptr<SetPool> setPool_ = std::make_shared<SetPool>();
     UINT setSlotsUsed_ = 0;   // descriptor-set slots ever handed out (free-list reuse does not count)
-    uint64_t frameNo_ = 0;
     std::vector<GeometryInfoGPU> geomInfo_; // latest CPU material state
     std::array<FrameGeometry, render::kFrameCount> frameGeometry_{};
     uint64_t geomVersion_ = 0;

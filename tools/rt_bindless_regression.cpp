@@ -2,6 +2,8 @@
 // Uses the production BindlessTable, with real GPU reads delayed until three CPU frames have
 // updated it. Null Mesh skips only VB/IB creation; material records, SRVs and uploads are real.
 #include "rendering/rt/BindlessTable.h"
+#include "rendering/core/DeferredRelease.h"
+#include "rendering/streaming/TextureUploadRing.h"
 #include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <array>
@@ -216,6 +218,59 @@ int main()
     table.Reset();
     Require(!table.BuildFailed() && table.GeometryCount() == 0 && table.DescriptorSetCount() == 0, "reset state");
     std::puts("PASS: descriptor capacity guard and reset");
+
+    // The second review of wave 1, item 3: a descriptor set a texture swap retires and an upload-ring entry a copy read
+    // go through render::deferred -- held until the service's boundary says their frame completed (they were retire bins
+    // of their own, kFrameCount frames counted).
+    const render::deferred::FrameCompleteFn never = [](const void*, std::uint64_t) { return false; };
+    const render::deferred::FrameCompleteFn always = [](const void*, std::uint64_t) { return true; };
+    table.Init(device.Get());
+    {
+        render::deferred::BeginFrame(100, never, nullptr);
+        const D3D12_CPU_DESCRIPTOR_HANDLE albedo = source->GetCPUDescriptorHandleForHeapStart();
+        const auto registerGeneration = [&](uint32_t generation) {
+            return table.GetOrUpdateMesh(&owners[0], nullptr, albedo, {}, nullptr, 0.5f, 0.0f, false, -1.0f,
+                                         generation, 0);
+        };
+        Require(registerGeneration(1) != rt::BindlessTable::kInvalidGeometry, "a set for texture generation 1");
+        const auto waiting = render::deferred::GetStats().waiting;
+        registerGeneration(2); // generation 1's set is retired
+        Require(render::deferred::GetStats().waiting == waiting + 1,
+                "a descriptor set a texture swap retires is held by the deferred-release service");
+        Require(table.FreeSetCount() == 0, "a retired set is not free at once");
+        render::deferred::BeginFrame(101, never, nullptr);
+        Require(table.FreeSetCount() == 0, "a retired set stays out while the GPU has not finished its frame");
+        render::deferred::BeginFrame(102, always, nullptr);
+        Require(table.FreeSetCount() == 1, "a retired set is free once its frame completed");
+        registerGeneration(3); // takes the freed slot, retires generation 2's set
+        Require(table.FreeSetCount() == 0, "the freed slot is taken by the next registration");
+        table.Reset();
+        render::deferred::BeginFrame(103, always, nullptr);
+        Require(table.FreeSetCount() == 0, "a set retired before a Reset is not a slot of the table after it");
+    }
+    {
+        streaming::TextureUploadRing ring;
+        Require(ring.Init(device.Get(), 1u << 20), "upload ring");
+        std::uint32_t read = 0;
+        std::uint32_t unread = 0;
+        UINT64 offset = 0;
+        Require(ring.Alloc(4096, read, offset) && ring.Alloc(4096, unread, offset), "upload ring entries");
+        const auto waiting = render::deferred::GetStats().waiting;
+        ring.RetireAfterCopy(read);
+        ring.ReleaseUnread(unread);
+        Require(render::deferred::GetStats().waiting == waiting + 1,
+                "an upload-ring entry a copy read is held by the deferred-release service");
+        ring.ReleaseCompleted();
+        Require(ring.BytesInUse() == 8192, "the ring's head waits for its frame, and holds the entry behind it");
+        render::deferred::BeginFrame(104, never, nullptr);
+        ring.ReleaseCompleted();
+        Require(ring.BytesInUse() == 8192, "the head stays while the GPU has not finished its frame");
+        render::deferred::BeginFrame(105, always, nullptr);
+        ring.ReleaseCompleted();
+        Require(ring.BytesInUse() == 0 && ring.LiveEntries() == 0, "both entries free once the head's frame completed");
+        ring.Shutdown();
+    }
+    std::puts("PASS: retired descriptor sets and upload-ring entries go through the deferred-release service");
     if (info) {
         for (UINT64 i = 0; i < info->GetNumStoredMessages(); ++i) {
             SIZE_T bytes = 0;

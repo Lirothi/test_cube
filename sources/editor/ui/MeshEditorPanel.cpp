@@ -1,4 +1,5 @@
 #include "editor/ui/MeshEditorPanel.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
@@ -1547,9 +1548,9 @@ int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
     if (targets.empty()) { return 0; }
 
     // Respawn each (CreateStaticMeshFromJson re-runs ResolveMeshAsset, which re-reads the just-saved
-    // mesh.json — so the new defaults land, while any per-object override still wins). One GPU sync
+    // mesh.json — so the new defaults land, while any per-object override still wins). One park
     // for the whole batch rather than per-object (a grove can be dozens of instances).
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("MeshEditorPanel"); // R16.10: a park, no GPU idle
     UploadBatch uploads;
     if (!uploads.Begin(&ctx.renderer)) { return 0; }
 
@@ -1568,7 +1569,7 @@ int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
         ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime), obj->enabled);
         ++applied;
     }
-    uploads.SubmitAndWait(&ctx.renderer);
+    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
     if (applied > 0)
     {
         // Like Material Editor, this direct live-apply bypasses EditorCommandStack's automatic

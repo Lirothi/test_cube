@@ -1,4 +1,5 @@
 #include "editor/commands/SetMeshAssetCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <memory>
@@ -60,13 +61,13 @@ bool SetMeshAssetCommand::Apply(EditorContext& ctx, const nlohmann::json& proper
         return false;
     }
 
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("SetMeshAssetCommand"); // R16.10: a park, no GPU idle
     ctx.scene.RemoveEditorObject(id_.value);
     UploadBatch uploads;
     if (uploads.Begin(&ctx.renderer))
     {
         ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id_.value, std::move(runtime), obj->enabled);
-        uploads.SubmitAndWait(&ctx.renderer);
+        (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
     }
     return true;
 }

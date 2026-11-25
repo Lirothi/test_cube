@@ -1,4 +1,5 @@
 #include "editor/commands/SetMaterialSlotCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -38,13 +39,13 @@ void SetMaterialSlotCommand::Respawn(EditorContext& ctx, EditorObjectId id) cons
     {
         return;
     }
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("SetMaterialSlotCommand"); // R16.10: a park, no GPU idle
     ctx.scene.RemoveEditorObject(id.value);
     UploadBatch uploads;
     if (uploads.Begin(&ctx.renderer))
     {
         ctx.scene.AddInitializedEditorObject(ctx.renderer, uploads, id.value, std::move(runtime), obj->enabled);
-        uploads.SubmitAndWait(&ctx.renderer);
+        (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
     }
 }
 

@@ -14,6 +14,7 @@ public:
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     ~GBufferRenderable() override;
+    void DetachFromWorld() override; // RenderableObject's, and the night lamps
 
     void Init(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,

@@ -148,7 +148,8 @@ public:
     // `scene.replicate` stress grid's step; not a per-frame call.
     AABB ComputeStaticBounds() const;
     bool AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj);
-    // Runtime objects (no editor identity) out of the scene; the GPU idle first. At the hand-over or parked. How many went.
+    // Runtime objects (no editor identity) out of the scene, at the hand-over or parked (it parks). Their GPU resources go
+    // once the frames in flight are done (RetireRemovedObject). How many went.
     std::size_t RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone);
     // The race's own boats (game::Race::TakeSpawns / TakeDespawns), at the hand-over: made where the grid is, taken out after.
     void SyncRaceBoats(Renderer* renderer);
@@ -190,6 +191,8 @@ public:
     // change, a Material/Mesh Editor save) showed it again while the document still said hidden.
     bool AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id,
         std::unique_ptr<RenderableObjectBase> obj, bool visible);
+    // Out of the scene now (parked or at the hand-over); its GPU resources once the frames in flight are done
+    // (RetireRemovedObject) -- no GPU idle needed before it.
     bool RemoveEditorObject(SceneObjectId id);
     // Rebuild the shadow-caster GPU data + the consolidated mega VB/IB after an editor caster-set
     // change (spawn/delete). Runs on a fresh GPU-idle upload batch, so the VSM per-page draw keeps its
@@ -330,6 +333,11 @@ private:
     // them immediately; waiting for PrepareViews is too late because UpdateCascades reads the
     // previous frame's cascade queues first.
     void BumpStaticSetVersion();
+    // A removed object (R16.10): out of the world now (RenderableObjectBase::DetachFromWorld, so the physics world's
+    // ForgetRemoved after the removal sees it), destroyed through render::deferred once the GPU has finished the frames
+    // that may read its buffers, its mesh's last reference, its textures -- an editor delete or respawn idled the GPU
+    // for that until then.
+    static void RetireRemovedObject(std::unique_ptr<RenderableObjectBase> object);
     // Game thread plan G4b': the render half's side of a caster-set change -- its queues dropped, its version moved.
     void ApplyStaticSetToRender();
 

@@ -24,7 +24,7 @@ class Renderer;
 //
 // Its size is two knobs (SceneRenderSettings::skyVisFallbackResolution / skyVisFallbackTexel): the occlusion level's
 // texels a side and the world size of one. The texel moves only the placement (a redraw); the resolution re-creates the
-// textures, at a GPU-idle point (Scene::ReconcileSkyOcclusion -> Resize).
+// textures (Scene::ReconcileSkyOcclusion -> Resize; the old ones through render::deferred).
 //
 // The views are culled by Scene::PrepareViews (a frame that draws enqueues them); SceneRenderer draws and reduces them
 // in the prologue (Main_SkyOcclusionMap, Main_SkyOcclusionReduce) and traces after the G-buffer (Main_SkyVisFallback).
@@ -82,8 +82,9 @@ public:
     // The textures exist (at Resolution()).
     bool Built() const { return ready_; }
     std::uint32_t Resolution() const { return nearSize_; }
-    // The GPU is IDLE (the caller waited): the textures go, made again at `resolution` (0 = freed, Prepare makes them
-    // when the map is wanted again). Nothing drawn survives it.
+    // Before the graph, nothing recording: the textures go to render::deferred (frames in flight may still read them;
+    // R16.10 -- the caller idled the GPU until then), made again at `resolution` (0 = freed, Prepare makes them when the
+    // map is wanted again). Nothing drawn survives it.
     void Resize(Renderer* renderer, std::uint32_t resolution);
     // A level was unloaded: nothing drawn is this level's (the resources stay).
     void Invalidate();

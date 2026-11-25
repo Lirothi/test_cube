@@ -58,6 +58,7 @@ public:
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
+    void DetachFromWorld() override; // buoyancy, water mask, physics (the destructor's three)
 
     RenderableObject* AsRenderableObject() override { return this; }
     const RenderableObject* AsRenderableObject() const override { return this; }

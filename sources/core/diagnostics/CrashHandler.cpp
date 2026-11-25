@@ -38,6 +38,9 @@ namespace
     DWORD g_threadId = 0;
     wchar_t g_dumpPath[1024] = {};
     bool g_dumpWritten = false;
+    // NoteThrowSite's dump (a frame task's exception, written where it was thrown): the report that follows names it
+    // instead of writing one of its own -- of the catch site, the stack already unwound.
+    wchar_t g_throwSiteDump[1024] = {};
     std::atomic<unsigned> g_deviceRemovedReason{ 0 };
 
     // Made at Install and waiting: a thread out of stack cannot call MiniDumpWriteDump itself, and a dump of the process is
@@ -159,7 +162,13 @@ namespace
         g_pointers = pointers;
         g_threadId = self;
         bool dumped = false;
-        if (g_request && g_done)
+        if (g_throwSiteDump[0] != L'\0')
+        {
+            // A frame task's exception: its dump was written where it was thrown (NoteThrowSite), the stack whole.
+            wcscpy_s(g_dumpPath, g_throwSiteDump);
+            dumped = true;
+        }
+        else if (g_request && g_done)
         {
             SetEvent(g_request);
             dumped = WaitForSingleObject(g_done, 60000) == WAIT_OBJECT_0 && g_dumpWritten;
@@ -287,6 +296,7 @@ void Install(const Options& options)
     }
     g_request = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    // thread-ok: nowhere needed -- DumpWriter calls C APIs only (swprintf_s, CreateFileW, MiniDumpWriteDump)
     if (const HANDLE writer = CreateThread(nullptr, 256 * 1024, DumpWriter, nullptr, 0, nullptr)) { CloseHandle(writer); }
 
     SetUnhandledExceptionFilter(UnhandledFilter);
@@ -384,6 +394,61 @@ int SelfTest(const std::string& arm, Options options, std::span<const SelfTestAr
     }
     LOG_ERROR(logging::LogCategory::Core, "crash self-test: {} did not crash", arm);
     return 1;
+}
+
+void NoteThrowSite(::_EXCEPTION_POINTERS* pointers)
+{
+    // The first one only: the report that follows names one dump.
+    if (!pointers || !pointers->ContextRecord || g_throwSiteDump[0] != L'\0') { return; }
+    // The frames from the exception's own context, as DeviceRemovalWatch walks a thread: module+offset, named by
+    // tools/symbolize.py.
+    CONTEXT context = *pointers->ContextRecord;
+    std::string frames;
+    for (int i = 0; i < 32 && context.Rip != 0; ++i)
+    {
+        frames += ' ';
+        frames += ModuleAndOffset(reinterpret_cast<const void*>(context.Rip));
+        DWORD64 imageBase = 0;
+        const PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+        if (!fn)
+        {
+            MEMORY_BASIC_INFORMATION mbi = {};
+            if (VirtualQuery(reinterpret_cast<void*>(context.Rsp), &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT) { break; }
+            context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+            context.Rsp += 8;
+            continue;
+        }
+        void* handlerData = nullptr;
+        DWORD64 establisher = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
+    }
+    // The dump with the exception's context, on this thread: a C++ throw, not a fault -- its stack is sound.
+    bool written = false;
+    if (g_installed.load() && !g_folder.empty())
+    {
+        SYSTEMTIME t{};
+        GetLocalTime(&t);
+        swprintf_s(g_throwSiteDump, L"%s\\%04u%02u%02u_%02u%02u%02u_%lu_throw.dmp", g_folder.c_str(), t.wYear, t.wMonth,
+                   t.wDay, t.wHour, t.wMinute, t.wSecond, GetCurrentProcessId());
+        const HANDLE file = CreateFileW(g_throwSiteDump, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE)
+        {
+            MINIDUMP_EXCEPTION_INFORMATION info{};
+            info.ThreadId = GetCurrentThreadId();
+            info.ExceptionPointers = pointers;
+            info.ClientPointers = FALSE;
+            const MINIDUMP_TYPE type = static_cast<MINIDUMP_TYPE>(MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory |
+                                                                  MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+            written = MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file, type, &info, nullptr, nullptr) != FALSE;
+            CloseHandle(file);
+        }
+        if (!written) { g_throwSiteDump[0] = L'\0'; }
+    }
+    char dumpUtf8[1024] = {};
+    WideCharToMultiByte(CP_UTF8, 0, g_throwSiteDump, -1, dumpUtf8, sizeof(dumpUtf8) - 1, nullptr, nullptr);
+    LOG_ERROR(logging::LogCategory::Core, "crash: a frame task's exception, where it was thrown:{} -- {} {}", frames,
+              written ? "minidump" : "NO minidump", dumpUtf8);
+    logging::Flush(2000);
 }
 
 void ArmSelfTestInFrame()

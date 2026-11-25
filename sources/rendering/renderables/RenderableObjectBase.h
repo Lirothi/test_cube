@@ -99,6 +99,11 @@ class RenderableObjectBase
 public:
     RenderableObjectBase() = default;
     virtual ~RenderableObjectBase() noexcept = default;
+    // The object leaves the world now, its GPU resources later (Scene::RetireRemovedObject, R16.10): every registration
+    // its destructor would drop (physics, buoyancy, water mask, night lamps) goes here, at the removal, so the world's
+    // ForgetRemoved sees it; the destructor, run once the GPU has finished the frames that read the object, then finds
+    // nothing left to unregister. Called once, on the game half, with the render thread parked.
+    virtual void DetachFromWorld() {}
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) = 0;
     virtual void Tick(float /*dt*/) = 0;
     virtual void PostTick(float /*dt*/) {}

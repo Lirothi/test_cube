@@ -25,7 +25,7 @@ namespace streaming {
 
 // Plan A2: mips travel disk -> upload ring (worker) -> new resource (graphics-queue copies in
 // Main_TextureStreaming, the frame's first pass) -> Texture2D::AdoptResource at the next frame's
-// boundary; the old resource waits kFrameCount frames in the retire bin. UE's AsyncCreate +
+// boundary; the old resource and the ring's entry go through render::deferred. UE's AsyncCreate +
 // CopySharedMips + FinalizeStreaming, with the copies inside the graph (plan §5). Owned by
 // Renderer; main thread only, except the worker's reads into the ring.
 class TextureStreaming
@@ -105,7 +105,7 @@ private:
     bool IssueSwap_(std::uint32_t entryIdx, UINT wanted, float lastRenderAge = 0.0f);
     void UpdateFades_(Renderer* renderer);
     float Now_() const;
-    void DropSwap_(Swap* s, std::uint64_t frameNo);
+    void DropSwap_(Swap* s);
     void Readout_(std::uint64_t frameNo);
 
     ID3D12Device* device_ = nullptr;

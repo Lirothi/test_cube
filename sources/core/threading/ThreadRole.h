@@ -41,8 +41,9 @@ private:
 
 inline bool RoleIs(ThreadRole a, ThreadRole b) noexcept { return CurrentRole() == a || CurrentRole() == b; }
 
-// The render half is PARKED (plan section 3.7): the game half waited the GPU out (Renderer::WaitForPreviousFrame
-// from the game role) and nothing renders until the next hand-over clears it. Only then may the game half change
+// The render half is PARKED (plan section 3.7): nothing renders until the next hand-over clears it -- the game half
+// waited the GPU out (Renderer::WaitForPreviousFrame from the game role), or only the render thread's frame in flight
+// (ParkRenderForGame: what the game then frees goes through render::deferred). Only then may the game half change
 // what the render half walks -- the scene's membership, the renderer's targets, the queue.
 void NoteRenderParked() noexcept;
 void ClearRenderParked() noexcept;
@@ -65,6 +66,11 @@ void ParkRender();
 // subsystem the editor mutates) waits for that frame first -- correct by construction, at the price of that frame's
 // overlap. Counted per site; LogGameWaits prints the sites (Info, `core`) and starts over.
 void WaitRenderForGame(const char* site);
+// R16.10: the park a game-half edit of the scene's membership needs (TC_CHECK_GAME_PARKED_OR_SYNC), without a GPU idle:
+// WaitRenderForGame, then the render half noted PARKED until the next hand-over (Scene::Sync clears it) -- the render
+// thread does not start a frame before that hand-over anyway, but the checks (and HandOverSubmitsGoNow) ask the flag.
+// What the edit frees goes through render::deferred. Nothing off the game role.
+void ParkRenderForGame(const char* site);
 void LogGameWaits(double seconds);
 // On the game thread: the render thread is drawing a frame now (the UI runs beside it), so a per-frame-slot resource
 // the UI picks by Renderer::GetCurrentFrameIndex may still be the GPU's. False on one thread.

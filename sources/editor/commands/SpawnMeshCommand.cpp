@@ -1,4 +1,5 @@
 #include "editor/commands/SpawnMeshCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <memory>
@@ -61,9 +62,9 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    // Mutate the live scene with a full GPU sync around the change. Safe here:
+    // Mutate the live scene with the render thread parked (R16.10: no GPU idle). Safe here:
     // this runs in the editor draw/Tick window, before scene render recording.
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("SpawnMeshCommand"); // R16.10: a park, no GPU idle
     UploadBatch uploads;
     if (!uploads.Begin(&ctx.renderer))
     {
@@ -72,7 +73,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
     }
     const bool added = ctx.scene.AddInitializedEditorObject(
         ctx.renderer, uploads, object_.id.value, std::move(runtime), object_.enabled);
-    uploads.SubmitAndWait(&ctx.renderer);
+    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
 
     if (!added)
     {
@@ -87,7 +88,7 @@ bool SpawnMeshCommand::Execute(EditorContext& ctx)
 
 void SpawnMeshCommand::Undo(EditorContext& ctx)
 {
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("SpawnMeshCommand"); // R16.10: a park, no GPU idle
     ctx.scene.RemoveEditorObject(object_.id.value);
     ctx.document.Remove(object_.id);
     ctx.selection = previousSelection_;

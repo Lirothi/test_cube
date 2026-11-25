@@ -1,4 +1,5 @@
 #include "editor/scene/EditorRaceTracks.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -66,7 +67,7 @@ namespace
             if (runtimeObjects.empty()) { return false; }
             previousSelection_ = ctx.selection;
             ctx.document.Add(object_);
-            ctx.renderer.WaitForPreviousFrame();
+            threading::ParkRenderForGame("EditorRaceTracks"); // R16.10: a park, no GPU idle
             UploadBatch uploads;
             if (!uploads.Begin(&ctx.renderer))
             {
@@ -83,7 +84,7 @@ namespace
                     return false;
                 }
             }
-            uploads.SubmitAndWait(&ctx.renderer);
+            (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
             if (select_) { ctx.selection.Add(object_.id); }
             ctx.document.SetDirty(true);
             return true;
@@ -91,7 +92,7 @@ namespace
 
         void Undo(EditorContext& ctx) override
         {
-            ctx.renderer.WaitForPreviousFrame();
+            threading::ParkRenderForGame("EditorRaceTracks"); // R16.10: a park, no GPU idle
             ctx.scene.RemoveEditorObject(object_.id.value);
             ctx.document.Remove(object_.id);
             ctx.selection = previousSelection_;

@@ -3,31 +3,39 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
+#include <memory>
 
 namespace streaming {
 
 // Persistent-mapped UPLOAD ring for streamed mips (plan A2.1). Allocation and release on the main
 // thread only; the IO worker just writes bytes into Cpu() + offset. Entries release in allocation
-// order once their frame stamp has passed (the copy's frame + kFrameCount), so one slow read at the
-// head holds the ring -- sized (50 MB) well above a frame's traffic on purpose.
+// order once nothing on the GPU can read them any more -- an entry a copy was recorded from goes
+// through render::deferred (released once the GPU has finished that frame NUMBER; until the second
+// review of wave 1, item 3, it was kFrameCount frames counted here) -- so one slow read at the head
+// holds the ring: sized (50 MB) well above a frame's traffic on purpose.
 class TextureUploadRing
 {
 public:
     static constexpr UINT64 kPlacementAlign = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT; // 512
-    static constexpr UINT64 kUnstamped = ~0ull;
 
     bool Init(ID3D12Device* device, UINT64 bytes);
     void Shutdown();
     bool Ready() const { return buffer_ != nullptr; }
 
     // Reserve `bytes` (rounded up to 512) contiguous bytes; false when the ring has no room yet.
-    // Returns an entry id and the byte offset from the buffer start.
+    // Returns an entry id and the byte offset from the buffer start. Until one of the two calls below,
+    // the entry blocks the head.
     bool Alloc(UINT64 bytes, std::uint32_t& outEntry, UINT64& outOffset);
-    // The frame after which the entry may be reused; kUnstamped entries block the head.
-    void Stamp(std::uint32_t entry, std::uint64_t releaseFrame);
-    void ReleaseCompleted(std::uint64_t frameNo);
+    // Nothing on the GPU read the entry (its swap was dropped before a copy): free at the next ReleaseCompleted.
+    void ReleaseUnread(std::uint32_t entry);
+    // A copy from the entry was recorded in the frame being built: free once the GPU has finished it (the service's
+    // release step marks it; ReleaseCompleted then takes it off the head).
+    void RetireAfterCopy(std::uint32_t entry);
+    // Frees the head's entries that are done, in allocation order.
+    void ReleaseCompleted();
 
     ID3D12Resource* Buffer() const { return buffer_.Get(); }
     std::uint8_t* Cpu() const { return cpu_; }
@@ -41,7 +49,9 @@ private:
         std::uint32_t id = 0;
         UINT64 offset = 0;
         UINT64 bytes = 0;
-        std::uint64_t releaseFrame = kUnstamped;
+        // Null while in use; set by ReleaseUnread (already true) or RetireAfterCopy (true once the service's step ran,
+        // on the thread of its boundary). Shared with that step: a step after Shutdown finds its flag still there.
+        std::shared_ptr<std::atomic<bool>> done;
     };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer_;

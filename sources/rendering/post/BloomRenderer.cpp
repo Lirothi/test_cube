@@ -37,6 +37,18 @@
 #include "rendering/lighting/DirectionalLight.h" // stage 9: the sun's direction and disc
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
+#include "rendering/core/DeferredRelease.h" // R16.10: a reloaded kernel or corona image's old texture
+
+// R16.10: an image about to be reloaded goes to render::deferred whole (frames in flight may still sample it), and its
+// slot gets a fresh texture to load into.
+static void RetireTexture(std::shared_ptr<Texture2D>& texture, const char* what)
+{
+    if (texture)
+    {
+        render::deferred::Retire([old = std::move(texture)]() mutable { old.reset(); }, 0, what);
+    }
+    texture = std::make_shared<Texture2D>();
+}
 
 // UE'S GAUSSIAN BLOOM, as weights on the pyramid's levels. UE sum six blurs of the scene
 // (PostProcessBloomSetup.cpp, AddGaussianBloomPasses), each Bloom{n}Size percent of the view width
@@ -117,20 +129,24 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
         bloomKernelKey_ = {};
         if (!want.empty())
         {
-            renderer->WaitForPreviousFrame();
+            // R16.10: no GPU idle. The old image goes through render::deferred (frames in flight may still sample it);
+            // the new one's upload is submitted from the render half before this frame's graph, on the same graphics
+            // queue as every bloom pass that reads it (none runs on async compute) -- it was a WaitForPreviousFrame and
+            // a SubmitAndWait.
+            RetireTexture(bloomKernelTex_, "bloom.kernel");
             UploadBatch up;
             if (up.Begin(renderer))
             {
                 Texture2D::CreateDesc desc;
                 desc.path = vfs::Widen(want);
                 desc.usage = Texture2D::Usage::LinearData;
-                bloomKernelTex_.SetMemTag(MemTag::Bloom);
-                bloomKernelReady_ = bloomKernelTex_.CreateFromFile(
+                bloomKernelTex_->SetMemTag(MemTag::Bloom);
+                bloomKernelReady_ = bloomKernelTex_->CreateFromFile(
                     renderer, up.CommandList(), desc, up.KeepAlive());
                 // P8C-2o: the same file again, on the CPU, for the centre/scatter survey. A
                 // failure here is not a failure to bloom -- the split falls back to neutral.
                 if (bloomKernelReady_) { ReadKernelPixels(desc.path.c_str()); }
-                up.SubmitAndWait(renderer);
+                (void)up.Submit(renderer);
             }
         }
     }
@@ -146,16 +162,16 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
             coronaReady_ = false;
             if (!want.empty())
             {
-                renderer->WaitForPreviousFrame();
+                RetireTexture(coronaTex_, "bloom.corona"); // R16.10: as the kernel above
                 UploadBatch up;
                 if (up.Begin(renderer))
                 {
                     Texture2D::CreateDesc desc;
                     desc.path = vfs::Widen(want);
                     desc.usage = Texture2D::Usage::AlbedoSRGB;
-                    coronaTex_.SetMemTag(MemTag::Bloom);
-                    coronaReady_ = coronaTex_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
-                    up.SubmitAndWait(renderer);
+                    coronaTex_->SetMemTag(MemTag::Bloom);
+                    coronaReady_ = coronaTex_->CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
+                    (void)up.Submit(renderer);
                 }
                 if (!coronaReady_)
                 {
@@ -1268,7 +1284,7 @@ SunRaysConstants BloomRenderer::SunRays() const
     {
         c.shape.z = std::max(settings.sunRaysTextureSizeDeg, 0.5f) * kDeg;
         c.extra.z = 1.0f;
-        c.extra.w = static_cast<float>(std::max(coronaTex_.GetWidth(), 1u));
+        c.extra.w = static_cast<float>(std::max(coronaTex_->GetWidth(), 1u));
     }
     return c;
 }
@@ -1632,7 +1648,7 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // how many kernel texels fall in one grid texel; 1 means the kernel is being MAGNIFIED, the
     // common case (at convSize 1.0 it is upscaled) and then a single bilinear tap is exact.
     {
-        const float kernelTexels = static_cast<float>(std::max(bloomKernelTex_.GetWidth(), 1u));
+        const float kernelTexels = static_cast<float>(std::max(bloomKernelTex_->GetWidth(), 1u));
         const float ratio = kernelTexels / std::max(conv.kernelSpanTexels, 1.0f);
         // P8C-2v -- THE TAP COUNT IS FIXED, THE FOOTPRINT IS WHAT MOVES.
         //
@@ -1980,6 +1996,10 @@ void BloomRenderer::BakeFlareBokeh(Renderer* renderer, uint32_t blades)
     flareBokehPending_ = static_cast<std::int32_t>(slot);
     flareBokehSafeFrame_ = renderer->GetTotalFrameNumber() + render::kFrameCount + 1u;
     flareBokehBlades_ = blades;
+    // Rare (a blade-count change): the proof a run reads that the bake happened (R16.8 left it unproven).
+    LOG_INFO(logging::LogCategory::Render, "lens flare bokeh: {} blades baked into slot {} in frame {} -- sampled from "
+             "frame {} on; the upload's buffers held by render::deferred", blades, slot, renderer->GetTotalFrameNumber(),
+             flareBokehSafeFrame_);
 }
 
 // DLSS-split: the upscale, on its own command list so its Streamline recording overlaps the

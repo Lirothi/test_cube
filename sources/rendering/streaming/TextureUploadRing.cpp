@@ -1,6 +1,7 @@
 #include "rendering/streaming/TextureUploadRing.h"
 
 #include "core/logging/Log.h"
+#include "rendering/core/DeferredRelease.h" // an entry a copy read goes once its frame completed (render::deferred)
 #include "rendering/core/GpuAlloc.h"
 
 namespace streaming {
@@ -88,17 +89,29 @@ bool TextureUploadRing::Alloc(UINT64 bytes, std::uint32_t& outEntry, UINT64& out
     return true;
 }
 
-void TextureUploadRing::Stamp(std::uint32_t entry, std::uint64_t releaseFrame)
+void TextureUploadRing::ReleaseUnread(std::uint32_t entry)
 {
     for (Entry& e : entries_)
     {
-        if (e.id == entry) { e.releaseFrame = releaseFrame; return; }
+        if (e.id == entry) { e.done = std::make_shared<std::atomic<bool>>(true); return; }
     }
 }
 
-void TextureUploadRing::ReleaseCompleted(std::uint64_t frameNo)
+void TextureUploadRing::RetireAfterCopy(std::uint32_t entry)
 {
-    while (!entries_.empty() && entries_.front().releaseFrame <= frameNo)
+    for (Entry& e : entries_)
+    {
+        if (e.id != entry) { continue; }
+        e.done = std::make_shared<std::atomic<bool>>(false);
+        render::deferred::Retire([done = e.done]() { done->store(true, std::memory_order_release); }, 0,
+                                 "tex.stream.ring");
+        return;
+    }
+}
+
+void TextureUploadRing::ReleaseCompleted()
+{
+    while (!entries_.empty() && entries_.front().done && entries_.front().done->load(std::memory_order_acquire))
     {
         inUse_ -= entries_.front().bytes;
         entries_.pop_front();

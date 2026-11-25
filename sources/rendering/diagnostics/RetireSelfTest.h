@@ -15,9 +15,12 @@ class Renderer;
 //     buffer lives only in the batch's keep-alive is submitted and the batch dropped at once -- its list waits for the
 //     NEXT hand-over. PASS when what the batch held is released only after the GPU finished the frame that list goes
 //     with (the frame number at Submit + 1); a release by the number of the call alone fails it.
+//   pass (the second review of wave 1): the copy is recorded INSIDE a render-graph pass ('Tonemap', through
+//     render::g_passSelfTestHook) and its source retired from that pass's task, on a worker. PASS as the default arm's
+//     first half: released at a later frame, with the GPU done with the frame the pass recorded.
 namespace render
 {
-enum class RetireSelfTestMode { Retire, Control, Upload };
+enum class RetireSelfTestMode { Retire, Control, Upload, Pass };
 void ArmRetireSelfTest(RetireSelfTestMode mode);
 // The game thread, once a frame after Renderer::BeginFrame (App.cpp): true when the verdict is in and the app should quit.
 bool RetireSelfTestFrame(Renderer& renderer);

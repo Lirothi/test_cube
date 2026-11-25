@@ -1,4 +1,5 @@
 #include "editor/EditorController.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #include "core/vfs/Vfs.h"
 
 #include "core/diagnostics/BootProfile.h"
@@ -538,9 +539,9 @@ namespace
     {
         if (targets.empty()) { return 0; }
 
-        // One GPU sync and one upload batch for the whole set, not per object: a grove is dozens
-        // of instances and a stall each would be visible.
-        ctx.renderer.WaitForPreviousFrame();
+        // One park and one upload batch for the whole set, not per object: a grove is dozens
+        // of instances. (The GPU idles once after, in RefreshShadowGpuForEditor.)
+        threading::ParkRenderForGame("EditorController"); // R16.10: a park, no GPU idle
         UploadBatch uploads;
         if (!uploads.Begin(&ctx.renderer)) { return 0; }
 
@@ -561,7 +562,7 @@ namespace
                 obj->enabled);
             ++applied;
         }
-        uploads.SubmitAndWait(&ctx.renderer);
+        (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
         if (applied > 0)
         {
             ctx.scene.RefreshShadowGpuForEditor(ctx.renderer);
@@ -684,7 +685,7 @@ namespace
             materials->EvictCachedForTextures(touched, &staleMaterials);
         }
 
-        // One respawn for both reasons, so a grove of props pays a single GPU sync.
+        // One respawn for both reasons, so a grove of props pays a single park and caster refresh.
         //
         // The "gltf::<selector>@<ordinal>" keys in staleMaterials deliberately match nothing here:
         // a document names a glTF auto-material as "auto", not by selector. Those objects are

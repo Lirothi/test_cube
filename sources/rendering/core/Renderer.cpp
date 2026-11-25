@@ -511,7 +511,8 @@ uint64_t Renderer::GetDeferredTargetsGeneration() const { return s_deferredTarge
 bool Renderer::SetBloomFftResidency(bool held)
 {
     if (!GetDevice() || !rtManager_.IsCreated() || rtManager_.IsBloomFftHeld() == held) { return false; }
-    WaitForPreviousFrame(); // nothing in flight reads the grids replaced below
+    // R16.10: the grids replaced below go through render::deferred (RenderTargetManager::CreateBloomFftGrids) -- this
+    // was a WaitForPreviousFrame.
     rtManager_.SetBloomFftResidency(GetDevice(), Declarations(), held);
     // The grids are deferred targets: a new generation makes the bloom rebuild its cached kernel spectrum
     // (BloomRenderer's BloomKernelKey) -- a grid made again comes back empty.

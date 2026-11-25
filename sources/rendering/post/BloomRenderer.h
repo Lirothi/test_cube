@@ -252,8 +252,9 @@ private:
     // P8C-2: the photographed convolution kernel (UE's DefaultBloomKernel as an FP16 DDS with
     // mips). Loaded once, lazily, at the frame-gate site -- WITHOUT it the convolution method
     // refuses to enable (UE's own gate: IsFFTBloomEnabled is false with no kernel texture), rather
-    // than falling back to a procedural kernel that no longer exists.
-    Texture2D bloomKernelTex_;
+    // than falling back to a procedural kernel that no longer exists. Shared so a reload hands the
+    // old image to render::deferred (R16.10: frames in flight may still sample it) and never null.
+    std::shared_ptr<Texture2D> bloomKernelTex_ = std::make_shared<Texture2D>();
     bool bloomKernelReady_ = false;
     D3D12_CPU_DESCRIPTOR_HANDLE convInput_{};   // SetConvolutionInput
     // The conv shader's t2 slot for EVERY conv dispatch site -- the table is positional, so the
@@ -264,7 +265,7 @@ private:
     // kernel never loads). All three conv-table assembly sites must come through here.
     D3D12_CPU_DESCRIPTOR_HANDLE KernelSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const
     {
-        return bloomKernelReady_ ? bloomKernelTex_.GetSRVCPU() : fallback;
+        return bloomKernelReady_ ? bloomKernelTex_->GetSRVCPU() : fallback;
     }
     // P8C-2r: which image is currently resident. Empty means none; comparing it against the
     // setting is the whole reload gate, which is why the old once-only `bloomKernelTried_`
@@ -275,10 +276,10 @@ public:
     // `fallback` while none is resident -- the table is positional, so something is always staged.
     D3D12_CPU_DESCRIPTOR_HANDLE CoronaSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const
     {
-        return coronaReady_ ? coronaTex_.GetSRVCPU() : fallback;
+        return coronaReady_ ? coronaTex_->GetSRVCPU() : fallback;
     }
 private:
-    Texture2D coronaTex_;
+    std::shared_ptr<Texture2D> coronaTex_ = std::make_shared<Texture2D>(); // as bloomKernelTex_
     bool coronaReady_ = false;
     std::string coronaLoadedPath_;
     // P8C-2o -- THE SAME PIXELS ON THE CPU, for UE's centre/scatter survey.

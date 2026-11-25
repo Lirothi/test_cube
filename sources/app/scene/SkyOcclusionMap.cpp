@@ -5,6 +5,7 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
+#include "rendering/core/DeferredRelease.h" // R16.10: a resize retires the old levels
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/RenderLayers.h"
@@ -202,7 +203,15 @@ void SkyOcclusionMap::Resize(Renderer* renderer, std::uint32_t resolution)
 {
     if (!ready_) { return; }
     const std::uint32_t was = nearSize_;
-    ReleaseTextures();
+    // R16.10: frames in flight may still read the levels -- they go through render::deferred, so a resize needs no GPU
+    // idle (Scene::ReconcileSkyOcclusion). Their views live in this map's own CPU-only heaps, which Prepare rewrites:
+    // the frames recorded before copied theirs at their recording.
+    render::deferred::Retire(std::move(top_), "skyocc.top");
+    render::deferred::Retire(std::move(bottom_), "skyocc.bottom");
+    render::deferred::Retire(std::move(terrain_), "skyocc.terrain");
+    render::deferred::Retire(std::move(near_), "skyocc.near");
+    render::deferred::Retire(std::move(far_), "skyocc.far");
+    ReleaseTextures(); // what is left of them: nothing
     ready_ = false;
     nearSize_ = 0;
     Invalidate();

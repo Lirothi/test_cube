@@ -138,9 +138,9 @@ bool TextureStreaming::Alive_(const Swap& s) const
     return s.entry < entries_.size() && entries_[s.entry].tex != nullptr && entries_[s.entry].gen == s.gen;
 }
 
-void TextureStreaming::DropSwap_(Swap* s, std::uint64_t frameNo)
+void TextureStreaming::DropSwap_(Swap* s)
 {
-    if (s->hasRing) { ring_.Stamp(s->ringEntry, frameNo); } // nothing on the GPU read it
+    if (s->hasRing) { ring_.ReleaseUnread(s->ringEntry); } // nothing on the GPU read it
     if (s->io)
     {
         s->io->cancel.store(true, std::memory_order_release);
@@ -196,7 +196,7 @@ bool TextureStreaming::CancelRequest(std::uint32_t i)
     if (i >= entries_.size() || !entries_[i].swap) { return false; }
     Swap* s = entries_[i].swap;
     if (s->stage == Swap::Stage::Copied) { return false; } // on the GPU already; it lands next frame
-    DropSwap_(s, frameNo_);
+    DropSwap_(s);
     return true;
 }
 
@@ -224,7 +224,7 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
         lastFrameTime_ = now;
         frameHadSwaps_ = false;
     }
-    ring_.ReleaseCompleted(frameNo);
+    ring_.ReleaseCompleted();
     std::erase_if(orphanIo_, [](const std::unique_ptr<IoRequest>& r) { return r->Finished(); });
 
     for (std::size_t i = 0; i < swaps_.size();)
@@ -272,7 +272,7 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
             }
             break;
         case Swap::Stage::WaitIo:
-            if (!alive) { DropSwap_(s, frameNo); removed = true; break; }
+            if (!alive) { DropSwap_(s); removed = true; break; }
             switch (s->io->GetState())
             {
             case IoRequest::State::Done:
@@ -294,20 +294,20 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
                     LOG_WARNING(logging::LogCategory::Asset, "texture streaming: {} is off streaming, with {} of its {} mips resident",
                                 e.tex->GetSourcePath(), e.tex->GetResidentMips(), e.tex->GetFileMipCount());
                 }
-                DropSwap_(s, frameNo);
+                DropSwap_(s);
                 removed = true;
                 break;
             case IoRequest::State::Failed:
             case IoRequest::State::Cancelled:
                 ++swapsFailed_;
-                DropSwap_(s, frameNo);
+                DropSwap_(s);
                 removed = true;
                 break;
             default: break;
             }
             break;
         case Swap::Stage::ReadyToCopy:
-            if (!alive) { DropSwap_(s, frameNo); removed = true; }
+            if (!alive) { DropSwap_(s); removed = true; }
             break;
         }
         if (!removed) { ++i; }
@@ -487,7 +487,7 @@ std::function<void(RenderGraphPassContext)> TextureStreaming::BuildPass(Renderer
         ID3D12Resource* old = tex->GetResource();
         if (!old || tex->GetResidentMips() != s->oldResident)
         {
-            DropSwap_(s, frameNo);
+            DropSwap_(s);
             continue;
         }
         // Created in its RESTING state: the barrier compile assumes every declared resource rests
@@ -499,7 +499,7 @@ std::function<void(RenderGraphPassContext)> TextureStreaming::BuildPass(Renderer
         {
             LOG_ERROR(logging::LogCategory::Render, "[texstream] CreateCommittedTexture failed for {} ({} mips)", tex->GetSourcePath(), s->newResident);
             ++swapsFailed_;
-            DropSwap_(s, frameNo);
+            DropSwap_(s);
             continue;
         }
         s->newRes.DeclareCreated(renderer->Declarations(), kShaderReadStates, kShaderReadStates, name.c_str());
@@ -543,7 +543,9 @@ std::function<void(RenderGraphPassContext)> TextureStreaming::BuildPass(Renderer
         ctx.Use(s->newRes.Get(), kShaderReadStates);
         s->stage = Swap::Stage::Copied;
         s->copyFrame = frameNo;
-        if (s->hasRing) { ring_.Stamp(s->ringEntry, frameNo + render::kFrameCount); }
+        // Through render::deferred: freed once the GPU has finished this frame NUMBER (the second review of wave 1,
+        // item 3; it was frameNo + kFrameCount counted here).
+        if (s->hasRing) { ring_.RetireAfterCopy(s->ringEntry); }
         if (s->newResident > s->oldResident) { bytesStreamedIn_ += s->newBytes - entries_[s->entry].tex->GetResidentBytes(); }
     }
     frameHadSwaps_ = true;

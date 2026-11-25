@@ -87,6 +87,14 @@ RenderableObject::~RenderableObject()
     if (physicsRegistered_) { physics::Unregister(this); }
 }
 
+void RenderableObject::DetachFromWorld()
+{
+    // As the destructor, now; the flags cleared so it does not again.
+    if (buoyant_) { OceanBuoyancy::Unregister(this); buoyant_ = false; }
+    if (waterMask_) { ocean::watermask::Unregister(this); waterMask_ = false; }
+    if (physicsRegistered_) { physics::Unregister(this); physicsRegistered_ = false; }
+}
+
 void RenderableObject::SetWaterMask(bool mask)
 {
     if (mask == waterMask_) { return; }

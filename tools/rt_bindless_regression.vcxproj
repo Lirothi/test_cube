@@ -29,6 +29,7 @@
     <ClCompile Include="rt_bindless_regression.cpp" />
     <ClCompile Include="..\sources\rendering\rt\BindlessTable.cpp" />
     <ClCompile Include="..\sources\rendering\core\DeferredRelease.cpp" />
+    <ClCompile Include="..\sources\rendering\streaming\TextureUploadRing.cpp" />
     <ClCompile Include="..\sources\rendering\descriptors\BindlessHeap.cpp" />
     <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
     <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />

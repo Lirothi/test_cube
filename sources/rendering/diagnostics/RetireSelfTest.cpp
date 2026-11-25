@@ -5,6 +5,7 @@
 #include "core/threading/ThreadRole.h"
 #include "rendering/core/DeferredRelease.h"
 #include "rendering/core/GpuAlloc.h"
+#include "rendering/core/RenderGraph.h" // the pass arm: render::g_passSelfTestHook
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 
@@ -39,6 +40,10 @@ constexpr std::uint64_t kMaxQuestionsPerBoundary = 32; // the distinct frame num
 std::atomic<int> g_crowdReleased{ 0 };
 std::uint64_t g_questionsBefore = 0;  // GetStats().questions at the previous boundary
 std::uint64_t g_maxQuestions = 0;     // the most one boundary asked since the crowd was retired
+// The pass arm (the second review of wave 1): the copy is recorded, and its source retired, inside a render-graph pass's
+// task (render::g_passSelfTestHook) -- the service's stamp taken on a worker, in the frame the pass records.
+const Renderer* g_passRenderer = nullptr;
+Microsoft::WRL::ComPtr<ID3D12Resource> g_passSource;
 
 Microsoft::WRL::ComPtr<ID3D12Resource> MakeBuffer(Renderer& renderer, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state,
                                                   const wchar_t* name)
@@ -79,6 +84,22 @@ void RetireSentinel(const Renderer& renderer, std::uint64_t mustComplete, std::f
         g_releasedAt.store(r->GetTotalFrameNumber());
         if (alsoRelease) { alsoRelease(); }
     }, kBytes, "retire self-test");
+}
+
+const char* ModeSuffix()
+{
+    return g_mode == RetireSelfTestMode::Upload ? " (upload)" : g_mode == RetireSelfTestMode::Pass ? " (pass)" : "";
+}
+
+// On the worker that runs the armed pass's task, its list just opened (RenderGraphPassContext::BeginCL).
+void PassHook(ID3D12GraphicsCommandList* cl)
+{
+    if (!cl || !g_passRenderer || !g_passSource || !g_target) { return; }
+    cl->CopyBufferRegion(g_target.Get(), 0, g_passSource.Get(), 0, kBytes);
+    g_retiredAt = g_passRenderer->GetTotalFrameNumber(); // the frame this pass records
+    RetireSentinel(*g_passRenderer, g_retiredAt, [source = std::move(g_passSource)]() mutable { source.Reset(); });
+    LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test (pass): a copy recorded in pass 'Tonemap' and its source "
+             "retired from the pass's task in frame {}", g_retiredAt);
 }
 } // namespace
 
@@ -134,7 +155,25 @@ bool RetireSelfTestFrame(Renderer& renderer)
 {
     if (!g_armed || g_exitCode >= 0) { return false; }
     ++g_frames;
-    if (g_frames == kStartFrame && g_mode != RetireSelfTestMode::Upload)
+    if (g_frames == kStartFrame && g_mode == RetireSelfTestMode::Pass)
+    {
+        g_started = true;
+        g_passSource = MakeBuffer(renderer, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"RetireSelfTest.PassSource");
+        g_target = MakeBuffer(renderer, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"RetireSelfTest.Target");
+        if (!g_passSource || !g_target)
+        {
+            LOG_ERROR(logging::LogCategory::RenderRhi, "retire self-test (pass): FAIL -- could not make its buffers");
+            Finish(1);
+            return true;
+        }
+        g_passRenderer = &renderer;
+        g_passSelfTestHookPass.store(static_cast<int>(RenderPass::Main_Tonemap), std::memory_order_relaxed);
+        g_passSelfTestHook.store(&PassHook);
+        LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test (pass): armed in frame {} -- the next 'Tonemap' pass "
+                 "copies and retires from its task", renderer.GetTotalFrameNumber());
+        return false;
+    }
+    if (g_frames == kStartFrame && g_mode != RetireSelfTestMode::Upload && g_mode != RetireSelfTestMode::Pass)
     {
         g_started = true;
         Microsoft::WRL::ComPtr<ID3D12Resource> source =
@@ -204,7 +243,7 @@ bool RetireSelfTestFrame(Renderer& renderer)
     if (early)
     {
         LOG_ERROR(logging::LogCategory::RenderRhi, "retire self-test{}: FAIL -- retired in frame {}, released in frame {} "
-                  "before the GPU had finished frame {}", g_mode == RetireSelfTestMode::Upload ? " (upload)" : "",
+                  "before the GPU had finished frame {}", ModeSuffix(),
                   g_retiredAt, releasedAt, g_mustComplete);
         Finish(1);
         return true;
@@ -232,7 +271,7 @@ bool RetireSelfTestFrame(Renderer& renderer)
     const deferred::Stats stats = deferred::GetStats();
     LOG_INFO(logging::LogCategory::RenderRhi, "retire self-test{}: PASS -- retired in frame {}, released in frame {} ({} "
              "frames later) with the GPU done with frame {}; the service holds {} ({} bytes), released {} in all{}",
-             g_mode == RetireSelfTestMode::Upload ? " (upload)" : "", g_retiredAt, releasedAt, releasedAt - g_retiredAt,
+             ModeSuffix(), g_retiredAt, releasedAt, releasedAt - g_retiredAt,
              g_mustComplete, stats.waiting, stats.waitingBytes, stats.released,
              g_mode == RetireSelfTestMode::Retire
                  ? " -- the crowd of " + std::to_string(kCrowd) + " cost a boundary at most " +

@@ -36,6 +36,7 @@
 #include "core/task/TaskSystem.h"
 #include "core/diagnostics/ThrowSelfTest.h" // --crash-selftest=view-throw: a culling task throws once
 #include "core/threading/ThreadRole.h" // game thread plan: who may touch what, and when
+#include "rendering/core/DeferredRelease.h" // R16.10: a removed object's GPU resources (RetireRemovedObject)
 #include "core/threading/Knob.h"       // G5: the knobs cross at the hand-over
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -1204,6 +1205,13 @@ void Scene::SetDirectionalLight(DirectionalLight light)
 
 void Scene::SetSkybox(std::unique_ptr<Skybox> skybox)
 {
+    // R16.10: frames in flight may still sample the old sky (its cube, its SRVs) -- it goes through render::deferred,
+    // so the editor's sky edit parks instead of idling the GPU (EnvironmentRuntime::ApplySkybox / Remove).
+    if (skyBox_)
+    {
+        std::shared_ptr<Skybox> old(std::move(skyBox_)); // std::function copies its callable
+        render::deferred::Retire([old]() mutable { old.reset(); }, 0, "scene.skybox");
+    }
     skyBox_ = std::move(skybox);
 }
 
@@ -1298,16 +1306,28 @@ void Scene::SyncRaceBoats(Renderer* renderer)
     }
 }
 
+void Scene::RetireRemovedObject(std::unique_ptr<RenderableObjectBase> object)
+{
+    if (!object) { return; }
+    object->DetachFromWorld();
+    std::shared_ptr<RenderableObjectBase> held(std::move(object)); // std::function copies its callable
+    render::deferred::Retire([held]() mutable { held.reset(); }, 0, "scene.object");
+}
+
 std::size_t Scene::RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone)
 {
+    (void)renderer;
     TC_CHECK_GAME_PARKED_OR_SYNC("Scene::RemoveRuntimeObjects");
     if (gone.empty()) { return 0; }
-    renderer.WaitForPreviousFrame(); // the frames in flight still read their buffers
+    // R16.10: was a WaitForPreviousFrame ("the frames in flight still read their buffers"); the buffers go through
+    // render::deferred now (RetireRemovedObject), and what the render thread walks is the caller's park.
+    threading::ParkRenderForGame("Scene::RemoveRuntimeObjects");
     std::size_t removed = 0;
     for (size_t i = 0; i < objects_.size();)
     {
         if (objects_[i] && std::find(gone.begin(), gone.end(), objects_[i].get()) != gone.end())
         {
+            RetireRemovedObject(std::move(objects_[i]));
             objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
 #if WITH_EDITOR
             objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
@@ -1439,6 +1459,7 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
     {
         if (objectIds_[i] == id)
         {
+            RetireRemovedObject(std::move(objects_[i])); // R16.10: its GPU resources once its frames are done
             objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
             objectIds_.erase(objectIds_.begin() + static_cast<ptrdiff_t>(i));
             removed = true;
@@ -1672,13 +1693,13 @@ bool Scene::SkyOcclusionWanted(const Renderer* renderer) const
 void Scene::ReconcileSkyOcclusion(Renderer* renderer)
 {
     // The sky-from-above map (plan S's fallback): its textures follow skyVis.fallbackResolution and go when it is not
-    // wanted -- freed or re-made here, with the GPU idle, never from the frame (the frames in flight read the levels).
-    // Made where it is first wanted (PrepareViews: a creation needs no wait).
+    // wanted -- freed or re-made here, never from the frame. The frames in flight read the old levels: they go through
+    // render::deferred (SkyOcclusionMap::Resize; R16.10 -- this was a WaitForPreviousFrame). Made where it is first
+    // wanted (PrepareViews: a creation needs no wait).
     if (!renderer || !skyOcclusion_.Built()) { return; }
     const bool wanted = SkyOcclusionWanted(renderer);
     const std::uint32_t want = wanted ? SkyOcclusionMap::ClampResolution(frameData_.settings.skyVisFallbackResolution) : 0u;
     if (want == skyOcclusion_.Resolution()) { return; }
-    renderer->WaitForPreviousFrame(); // nothing in flight reads the textures re-made below
     skyOcclusion_.Resize(renderer, want);
 }
 
@@ -3775,7 +3796,7 @@ void Scene::Render(Renderer* renderer) {
 
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
     ReconcileShadowLodCurve(renderer); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
-    ReconcileSkyOcclusion(renderer);   // the sky-from-above map's size, or freeing it (GPU idle)
+    ReconcileSkyOcclusion(renderer);   // the sky-from-above map's size, or freeing it (render::deferred)
     // The GI probe volumes a graphics level (or a knob) turned off give their memory back (GPU idle).
     sceneRenderer_.ReleaseUnwantedGi(renderer, frameData_.settings.giEnabled && renderer->IsRaytracingSupported(),
                                      frameData_.settings.giFarCascade);

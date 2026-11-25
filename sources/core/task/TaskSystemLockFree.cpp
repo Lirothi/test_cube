@@ -9,6 +9,8 @@
 
 #ifdef TASKSYSTEM_USE_LOCKFREE
 
+#include <Windows.h> // a frame task's SEH filter (RunNotingThrowSite)
+
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
@@ -395,6 +397,28 @@ void TaskSystem::ReleaseRef(TaskWithDeps* task)
     }
 }
 
+namespace {
+// A frame task's exception is fatal (OnTaskThrew): its report should show where it was thrown. The catch in RunTask runs
+// after the stack has unwound, so this filter -- searched first, before any unwinding -- hands the exception's context
+// to the crash handler (crash::NoteThrowSite: the throw site's frames and a minidump of them) and lets the search go on
+// to that catch. A body's own try/catch is searched before it: only what leaves the body is noted. No C++ object with a
+// destructor may live in a function with __try (C2712), hence the function pointer.
+int NoteFrameTaskThrowSite(EXCEPTION_POINTERS* pointers)
+{
+    crash::NoteThrowSite(pointers);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void RunNotingThrowSite(void (*run)(void*), void* arg)
+{
+    __try {
+        run(arg);
+    } __except (NoteFrameTaskThrowSite(GetExceptionInformation())) {
+        // Never entered: the filter only looks.
+    }
+}
+} // namespace
+
 void TaskSystem::RunTask(TaskWithDeps* task)
 {
     if (!task) {
@@ -407,7 +431,11 @@ void TaskSystem::RunTask(TaskWithDeps* task)
         MEM_SCOPE(static_cast<MemTag>(task->memTag_));
         threading::RoleScope roleScope(static_cast<threading::ThreadRole>(task->role_));
         threading::TaskBodyScope taskBody; // FrameQuiet: a task's body, whichever thread runs it (R15.6)
-        task->Execute();
+        if (task->failurePolicy_ == FailurePolicy::Frame) {
+            RunNotingThrowSite([](void* t) { static_cast<TaskWithDeps*>(t)->Execute(); }, task);
+        } else {
+            task->Execute();
+        }
     } catch (const std::exception& error) {
         // Wait remains non-throwing; what the exception means is the task's FailurePolicy (R15.3).
         OnTaskThrew(task, error.what());

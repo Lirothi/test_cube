@@ -1,4 +1,5 @@
 #include "editor/commands/PasteObjectCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <exception>
@@ -240,7 +241,7 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
             object_.id = ctx.document.AllocateId();
         }
         previousSelection_ = ctx.selection;
-        ctx.renderer.WaitForPreviousFrame();
+        threading::ParkRenderForGame("PasteObjectCommand"); // R16.10: a park, no GPU idle
         ctx.document.Environment().push_back(object_);
         EnvironmentRuntime::RebuildLights(ctx);
         if (addToSelection_) { ctx.selection.Add(object_.id); }
@@ -292,7 +293,7 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
     }
     ctx.document.Add(object_);
 
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("PasteObjectCommand"); // R16.10: a park, no GPU idle
     UploadBatch uploads;
     if (!uploads.Begin(&ctx.renderer))
     {
@@ -324,7 +325,7 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    uploads.SubmitAndWait(&ctx.renderer);
+    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
     if (addToSelection_) { ctx.selection.Add(object_.id); }
     else { ctx.selection.Replace(object_.id); }
     ctx.document.SetDirty(true);
@@ -333,7 +334,7 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
 
 void PasteObjectCommand::Undo(EditorContext& ctx)
 {
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("PasteObjectCommand"); // R16.10: a park, no GPU idle
     if (isEnvironment_)
     {
         std::vector<EditorObject>& environment = ctx.document.Environment();

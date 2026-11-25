@@ -843,6 +843,7 @@ namespace logging
         if (!config.synchronous)
         {
             unsigned threadId = 0;
+            // thread-ok: not caught -- what leaves WriterMain is std::terminate -> abort -> crash::Report (a dump)
             const uintptr_t handle = _beginthreadex(nullptr, 0, &WriterMain, state, 0, &threadId);
             if (handle == 0)
             {

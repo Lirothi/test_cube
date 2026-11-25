@@ -26,8 +26,8 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   also Shipping, Development and Cook. `/p:TcThreadChecks=true` compiles the thread-role checks into Release_Editor
   (`TC_THREAD_CHECKS=1`; `--thread-check-selftest` proves them on); switching it rebuilds the configuration whole.
 - Before a commit: `python tools/check_logging.py`, `check_render_knobs.py`, `check_gpu_alloc.py`, `check_file_io.py`,
-  `check_threads.py` (a `.detach()` says where its exceptions are caught: `// detached-ok: <where>`) (exit code =
-  findings).
+  `check_threads.py` (a `.detach()` says where its exceptions are caught: `// detached-ok: <where>`; a
+  `CreateThread`/`_beginthreadex` start: `// thread-ok: <where>`) (exit code = findings).
 - Editor gate: `tools/intent_regression.vcxproj` (Debug; links the Debug game's objects by its tlog, so build that
   first) -> `x64\Debug\intent_regression.exe`, last line `PASS`; `inspector_regression` likewise. After changing
   `sources/editor/intent/`, rebuild `tools/model_reaper.vcxproj` (close its tray icon: the running exe is locked).
@@ -80,7 +80,8 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
 - `frame.renderThread` 1 (default): `Scene::Render` runs on thread `Render` while the game thread runs the next frame's
   game half (UI, editor, MCP, `Scene::Tick`). Game-half code that reaches what the frame in flight uses calls
   `threading::WaitRenderForGame("<site>")` first or hands over at `Sync`; a UI panel waits only where it reaches render
-  objects, never as a whole.
+  objects, never as a whole. An edit of the scene's membership parks with `threading::ParkRenderForGame` (the flag
+  `TC_CHECK_GAME_PARKED_OR_SYNC` asks, no GPU idle) and frees through `render::deferred`.
 - `frame.rhiThread` 1: every queue op of a frame in flight goes through `Renderer::Rhi().Run`, never the queue; to
   need them done, `Flush` (`WaitForPreviousFrame` does).
 - Input is latched per frame (`InputManager::NewFrame` right after the frame's pump).

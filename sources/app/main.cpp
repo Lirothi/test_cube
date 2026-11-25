@@ -414,6 +414,11 @@ int WINAPI WinMain(
                 { "taskdep", &CrashSelfTestTaskDependencyAfterSubmit },
                 { "taskdep-scheduled", &CrashSelfTestTaskDependencyOnScheduled },
                 { "graphcap", &render::CrashSelfTestGraphCap },
+                { "graphgroups", &render::CrashSelfTestGraphGroups },
+                { "graphpasses", &render::CrashSelfTestGraphPasses },
+                { "graphdep", &render::CrashSelfTestGraphDep },
+                { "graphdecl", &render::CrashSelfTestGraphDecl },
+                { "graphcycle", &render::CrashSelfTestGraphCycle },
             };
             return crash::SelfTest(arm, options, kMoreArms);
         }
@@ -729,14 +734,15 @@ int WINAPI WinMain(
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
     ParseTimeOfDayArgs(lpCmdLine);
-    // "--retire-selftest[=control|upload]" (docs/architecture_review_plan.md R16.1, R16.8): the deferred-release
+    // "--retire-selftest[=control|upload|pass]" (docs/architecture_review_plan.md R16.1, R16.8): the deferred-release
     // service's own proof --
     // the game starts as always, a buffer is retired on its 20th frame, the verdict is the exit code
     // (rendering/diagnostics/RetireSelfTest.h).
     if (lpCmdLine && std::strstr(lpCmdLine, "--retire-selftest") != nullptr) {
         const std::string arm = ExtractArgValue(lpCmdLine, "--retire-selftest");
         render::ArmRetireSelfTest(arm == "control" ? render::RetireSelfTestMode::Control
-                                  : arm == "upload" ? render::RetireSelfTestMode::Upload : render::RetireSelfTestMode::Retire);
+                                  : arm == "upload" ? render::RetireSelfTestMode::Upload
+                                  : arm == "pass" ? render::RetireSelfTestMode::Pass : render::RetireSelfTestMode::Retire);
     }
     // "--rt-audit[=<seconds>]" and "--rt-audit-selftest": the render thread's audit (app/diagnostics/RtAudit.h). Above
     // the scene-stress branch: the audit rides the harness's level churn too (its verdict at the harness's end).

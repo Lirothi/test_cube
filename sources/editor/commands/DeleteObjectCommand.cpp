@@ -1,4 +1,5 @@
 #include "editor/commands/DeleteObjectCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -67,7 +68,7 @@ bool DeleteObjectCommand::Execute(EditorContext& ctx)
 
     if (isEnvironment_)
     {
-        ctx.renderer.WaitForPreviousFrame();
+        threading::ParkRenderForGame("DeleteObjectCommand"); // R16.10: a park, no GPU idle
         std::vector<EditorObject>& environment = ctx.document.Environment();
         for (auto it = environment.begin(); it != environment.end(); ++it)
         {
@@ -83,7 +84,7 @@ bool DeleteObjectCommand::Execute(EditorContext& ctx)
         return true;
     }
 
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("DeleteObjectCommand"); // R16.10: a park, no GPU idle
     runtimeRemoved_ = ctx.scene.RemoveEditorObject(id_.value);
     ctx.document.Remove(id_);
 
@@ -117,7 +118,7 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
             objectRegistry.Create(object_.type, creationCtx, o);
         if (!runtimeObjects.empty())
         {
-            ctx.renderer.WaitForPreviousFrame();
+            threading::ParkRenderForGame("DeleteObjectCommand"); // R16.10: a park, no GPU idle
             UploadBatch uploads;
             if (uploads.Begin(&ctx.renderer))
             {
@@ -135,7 +136,7 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
 
                 if (addedAny)
                 {
-                    uploads.SubmitAndWait(&ctx.renderer);
+                    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
 
 #ifndef NDEBUG
                     if (object_.type == "staticMesh" &&

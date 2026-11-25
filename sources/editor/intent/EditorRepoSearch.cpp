@@ -40,6 +40,7 @@ namespace
             catch (...) { c->error = std::current_exception(); }
             return 0;
         };
+        // thread-ok: `entry` catches all and the caller rethrows it after the join
         const HANDLE thread = ::CreateThread(nullptr, 64u << 20, entry, &call, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
         if (!thread)
         {

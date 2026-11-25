@@ -1,4 +1,5 @@
 #include "editor/commands/DuplicateObjectCommand.h"
+#include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #if WITH_EDITOR
 
 #include <memory>
@@ -102,9 +103,9 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
     {
         // Lights are not runtime scene objects; the duplicate is a new environment
         // entity that RebuildLights folds into the LightManager (CPU-only, no GPU
-        // upload). The whole-scene idle keeps it consistent with the object path.
+        // upload). The park keeps it consistent with the object path.
         previousSelection_ = ctx.selection;
-        ctx.renderer.WaitForPreviousFrame();
+        threading::ParkRenderForGame("DuplicateObjectCommand"); // R16.10: a park, no GPU idle
         ctx.document.Environment().push_back(object_);
         EnvironmentRuntime::RebuildLights(ctx);
         if (addToSelection_) { ctx.selection.Add(object_.id); }
@@ -140,7 +141,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
     previousSelection_ = ctx.selection;
     ctx.document.Add(object_);
 
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("DuplicateObjectCommand"); // R16.10: a park, no GPU idle
     UploadBatch uploads;
     if (!uploads.Begin(&ctx.renderer))
     {
@@ -172,7 +173,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
         return false;
     }
 
-    uploads.SubmitAndWait(&ctx.renderer);
+    (void)uploads.Submit(&ctx.renderer); // R16.10: with the hand-over (render::deferred)
     if (addToSelection_) { ctx.selection.Add(object_.id); }
     else { ctx.selection.Replace(object_.id); }
     ctx.document.SetDirty(true);
@@ -181,7 +182,7 @@ bool DuplicateObjectCommand::Execute(EditorContext& ctx)
 
 void DuplicateObjectCommand::Undo(EditorContext& ctx)
 {
-    ctx.renderer.WaitForPreviousFrame();
+    threading::ParkRenderForGame("DuplicateObjectCommand"); // R16.10: a park, no GPU idle
     if (isEnvironment_)
     {
         std::vector<EditorObject>& environment = ctx.document.Environment();

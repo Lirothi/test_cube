@@ -125,6 +125,16 @@ void WaitRenderForGame(const char* site)
     ParkRender();
 }
 
+void ParkRenderForGame(const char* site)
+{
+    if (t_role != ThreadRole::Game)
+    {
+        return; // the render half itself, or the hand-over (nothing renders then)
+    }
+    WaitRenderForGame(site);
+    NoteRenderParked();
+}
+
 bool RenderBusyForGame()
 {
     if (t_role != ThreadRole::Game)

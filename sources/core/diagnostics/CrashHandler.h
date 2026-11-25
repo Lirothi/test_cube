@@ -11,6 +11,8 @@
 // The dump is written by a thread made at Install, so a thread out of stack still gets one. What it cannot catch:
 // __fastfail and /GS (0xC0000409) leave the process without running anything in it -- the exit code and the log's last
 // lines are all there is (WER or an outside watcher would be needed).
+struct _EXCEPTION_POINTERS; // <Windows.h>'s, declared here so the header does not pull Windows in
+
 namespace crash
 {
     struct Options
@@ -31,6 +33,12 @@ namespace crash
     void NoteDeviceRemoved(unsigned reason);
     // std::terminate's handler is per thread in the MSVC CRT: a thread of ours calls this when it starts.
     void InstallThisThread();
+    // A frame task's exception, first chance (TaskSystem::RunTask's SEH filter, before the stack unwinds to its catch):
+    // the throw site's frames go to the log (module+offset, named by tools/symbolize.py) and a minidump is written with
+    // the exception's context. The report that follows (InvariantFailure, abort) names that dump instead of writing one
+    // of the catch site, where the stack has already unwound (the second review of wave 1: R15.3 said the dump held the
+    // throw site; it held RunTask's catch). The first call only.
+    void NoteThrowSite(::_EXCEPTION_POINTERS* pointers);
 
     // An arm another subsystem owns (its own contract broken on purpose: the task system's dependency rules, ...): `run`
     // is expected not to return.
