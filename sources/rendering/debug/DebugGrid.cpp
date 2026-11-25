@@ -3,7 +3,7 @@
 
 #include <DirectXMath.h>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"

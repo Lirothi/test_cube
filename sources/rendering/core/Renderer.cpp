@@ -31,8 +31,8 @@
 #include "core/threading/ThreadRole.h"
 #include "core/threading/RenderThread.h" // G10b: threading::g_rhiThreadEnabled
 #include "core/threading/Knob.h"
-#include "app/Systems.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
+#include "rendering/core/RenderGraph.h" // render::DebugObjectLabel (came through the old Camera.h)
 #include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
 #include "rendering/core/DlssHandler.h"
 #include "rendering/shadows/ShadowSettings.h" // S5: kCascadeAtlasBorder
@@ -1340,7 +1340,6 @@ void Renderer::ReportLiveObjects()
 void Renderer::Tick(float dt)
 {
     CPU_SCOPE(ProfilerScopes::kRendererTick);
-    fontManager_.Tick();
 
     if (fps_ <= 0.0f)
     {

@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/game/VesselStats.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"

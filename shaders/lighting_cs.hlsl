@@ -10,6 +10,8 @@
 
 #pragma pack_matrix(row_major)
 
+#include "shared/shader_types.h"   // TC_REGISTER
+#include "shared/lighting_slots.h" // the pass's registers by name (architecture plan R5.3), shared with the C++
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
 // SMRT's adaptive ray count uses wave intrinsics, which UE gate with #if COMPUTESHADER because
@@ -22,23 +24,23 @@
 #include "caustics.hlsli"
 #include "cloud_shadow_common.hlsli"
 
-Texture2D GB0 : register(t0);
-Texture2D GB1 : register(t1);
-Texture2D GB2 : register(t2);
-Texture2D GBVelocity : register(t3);
-Texture2D DepthT : register(t4);
-Texture2D ShadowAtlas : register(t5);
-StructuredBuffer<uint> VsmPageTable : register(t6); // Rung 2 / Step 24f: directional clipmap page table
-Texture2D VsmPool : register(t7);                    // VSM physical page pool depth
-Texture2D GBAux : register(t8);
-Texture2D CausticsAtlas : register(t9);
+Texture2D GB0 : TC_REGISTER(t, LIGHTING_T_GB0);
+Texture2D GB1 : TC_REGISTER(t, LIGHTING_T_GB1);
+Texture2D GB2 : TC_REGISTER(t, LIGHTING_T_GB2);
+Texture2D GBVelocity : TC_REGISTER(t, LIGHTING_T_GB_VELOCITY);
+Texture2D DepthT : TC_REGISTER(t, LIGHTING_T_DEPTH);
+Texture2D ShadowAtlas : TC_REGISTER(t, LIGHTING_T_SHADOW_ATLAS);
+StructuredBuffer<uint> VsmPageTable : TC_REGISTER(t, LIGHTING_T_VSM_PAGE_TABLE); // Rung 2 / Step 24f: directional clipmap page table
+Texture2D VsmPool : TC_REGISTER(t, LIGHTING_T_VSM_POOL);                    // VSM physical page pool depth
+Texture2D GBAux : TC_REGISTER(t, LIGHTING_T_GB_AUX);
+Texture2D CausticsAtlas : TC_REGISTER(t, LIGHTING_T_CAUSTICS);
 // F8: cosine-convolved sky irradiance, already divided by PI, so a Lambertian surface multiplies
 // its albedo by this directly. Inert unless `skyIrradianceEnabled` says the level has one.
-TextureCube SkyIrradiance : register(t10);
+TextureCube SkyIrradiance : TC_REGISTER(t, LIGHTING_T_SKY_IRRADIANCE);
 // P6B item 7: dynamic screen-space AO at RENDER resolution. Read only when `gtaoEnabled`;
 // the target is not written at all when the pass is off, so an unconditional read would be
 // sampling whatever was left in it.
-Texture2D GtaoTex : register(t11);
+Texture2D GtaoTex : TC_REGISTER(t, LIGHTING_T_GTAO);
 // The sky's INDIRECT SPECULAR moved here from compose. It has to be added before the screen-space
 // reflection pass runs, because that pass samples this very target: with the term still in compose,
 // a metal seen inside a reflection was a black disc with a highlight -- a metal has no diffuse, so
@@ -46,37 +48,37 @@ Texture2D GtaoTex : register(t11);
 // split and why the total is unchanged.
 // t12: GGX-prefiltered sky radiance   t13: split-sum environment BRDF   t14: the raw sky cube,
 // used only by levels whose sky arrived without prefiltered derivatives.
-TextureCube SkySpecular : register(t12);
-Texture2D BrdfLut : register(t13);
-TextureCube SkyboxTex : register(t14);
+TextureCube SkySpecular : TC_REGISTER(t, LIGHTING_T_SKY_SPECULAR);
+Texture2D BrdfLut : TC_REGISTER(t, LIGHTING_T_BRDF_LUT);
+TextureCube SkyboxTex : TC_REGISTER(t, LIGHTING_T_SKYBOX);
 // t15: plan C3, the cloud shadow map (dummy when no clouds; `cloudShadowParams.x` gates the read).
-Texture2D<float4> CloudShadowMap : register(t15);
+Texture2D<float4> CloudShadowMap : TC_REGISTER(t, LIGHTING_T_CLOUD_SHADOW);
 // t16: S15, this frame's SDSM partitions. `csmSdsmPartitions` (0 in Legacy and VSM) gates the read;
 // a placeholder SRV is bound otherwise, because a VOLATILE table may not have a hole.
-StructuredBuffer<SdsmPartition> SdsmPartitions : register(t16);
+StructuredBuffer<SdsmPartition> SdsmPartitions : TC_REGISTER(t, LIGHTING_T_SDSM_PARTITIONS);
 // Interior lighting plan S: the RT sky visibility's bent normal (rt_sky_visibility_cs.hlsl, half res,
 // .w its device depth). Gated by the cbuffer's skyVisParams.x; a dummy sits here when it is off.
-Texture2D<float4> SkyVisTex : register(t17);
+Texture2D<float4> SkyVisTex : TC_REGISTER(t, LIGHTING_T_SKY_VIS);
 // Interior lighting plan D: the GI probe volume (ddgi_common.hlsli) -- irradiance and depth-moment
 // atlases and the per-probe state. Gated by ddgiParams.x; placeholders sit here when it is off.
-Texture2D<float4> DdgiIrradianceTex : register(t18);
-Texture2D<float4> DdgiDepthTex : register(t19);
-StructuredBuffer<uint4> DdgiProbeState : register(t20);
+Texture2D<float4> DdgiIrradianceTex : TC_REGISTER(t, LIGHTING_T_DDGI_IRRADIANCE);
+Texture2D<float4> DdgiDepthTex : TC_REGISTER(t, LIGHTING_T_DDGI_DEPTH);
+StructuredBuffer<uint4> DdgiProbeState : TC_REGISTER(t, LIGHTING_T_DDGI_PROBE_STATE);
 // ...and its far cascade (gated by ddgiFarParams.x), the same three.
-Texture2D<float4> DdgiFarIrradianceTex : register(t21);
-Texture2D<float4> DdgiFarDepthTex : register(t22);
-StructuredBuffer<uint4> DdgiFarProbeState : register(t23);
-RWTexture2D<float4> LightTarget : register(u0);
+Texture2D<float4> DdgiFarIrradianceTex : TC_REGISTER(t, LIGHTING_T_DDGI_FAR_IRRADIANCE);
+Texture2D<float4> DdgiFarDepthTex : TC_REGISTER(t, LIGHTING_T_DDGI_FAR_DEPTH);
+StructuredBuffer<uint4> DdgiFarProbeState : TC_REGISTER(t, LIGHTING_T_DDGI_FAR_PROBE_STATE);
+RWTexture2D<float4> LightTarget : TC_REGISTER(u, LIGHTING_U_LIGHT_TARGET);
 
-SamplerState gSmpPoint : register(s0);
-SamplerComparisonState gSmpLinear : register(s1);
-SamplerState gSmpLinearWrap : register(s2);
+SamplerState gSmpPoint : TC_REGISTER(s, LIGHTING_S_POINT_CLAMP);
+SamplerComparisonState gSmpLinear : TC_REGISTER(s, LIGHTING_S_COMPARISON_LINEAR);
+SamplerState gSmpLinearWrap : TC_REGISTER(s, LIGHTING_S_LINEAR_WRAP);
 // s3: LinearCLAMP. The BRDF LUT is a 2D table indexed by (NdotV, roughness) and MUST be clamped --
 // reading it through the caustics sampler (LinearWrap, the only linear one this pass had) wraps
 // both edges and quietly returns the wrong Fresnel there. compose has always read it clamped, and
 // the two passes now have to agree exactly or the sky term one adds and the other subtracts stop
 // cancelling.
-SamplerState gSmpLinearClamp : register(s3);
+SamplerState gSmpLinearClamp : TC_REGISTER(s, LIGHTING_S_LINEAR_CLAMP);
 
 #include "lighting_cb.hlsli" // the b0 cbuffer + MakeCsmParams, shared with fog_scatter_cs.hlsl
 #include "sky_visibility.hlsli" // plan S: UE's DFAO formulas, shared with compose
@@ -334,6 +336,10 @@ float SunGeometricTerminator(uint2 px, float3 P, float3 V, float3 L, float verte
     return saturate(dot(Ng, L) * 20.0f);
 }
 
+// The tables below are sized by number in the string; the counts are lighting_slots.h's (architecture plan R5.3).
+#if LIGHTING_SRV_COUNT != 24 || LIGHTING_SAMPLER_COUNT != 4
+#error "LIGHTING_RS: the SRV / sampler table sizes no longer match shared/lighting_slots.h"
+#endif
 #define LIGHTING_RS \
     "CBV(b0)," \
     "DescriptorTable(SRV(t0, numDescriptors=24, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \

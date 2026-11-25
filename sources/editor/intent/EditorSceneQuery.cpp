@@ -7,7 +7,7 @@
 #include <limits>
 #include <map>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorObjectMatch.h"

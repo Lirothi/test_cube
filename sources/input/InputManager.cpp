@@ -1,5 +1,10 @@
 #include "input/InputManager.h"
+#include "core/logging/Log.h"
+#include "core/vfs/Vfs.h" // Narrow
+#include "input/InputActions.h"
+#include <algorithm>
 #include <hidusage.h>
+#include <iterator>
 #include <vector>
 
 void InputManager::Initialize(HWND hwnd) {
@@ -24,6 +29,9 @@ void InputManager::NewFrame() {
     pendingDX_ = 0;
     pendingDY_ = 0;
     pendingWheel_ = 0;
+    takenThisFrame_.clear();
+    injectedPresses_ = std::move(pendingInjectedPresses_);
+    pendingInjectedPresses_.clear();
 }
 
 void InputManager::SetMouseCapture(bool capture) {
@@ -127,21 +135,91 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 }
 
 bool InputManager::LoadActions(const std::wstring& path) {
-    return actions_.LoadFromJsonFile(path);
+    if (!actions_.LoadFromJsonFile(path)) {
+        return false;
+    }
+    // R12.1: the file against the actions the code reads (input/InputActions.h). A name the code reads and the file
+    // does not bind is a key that silently does nothing -- an Error, the run goes on; a name the file binds and nothing
+    // reads is a key the controls overlay shows for nothing -- a Warning.
+    for (std::string_view name : actions::kAll) {
+        if (!actions_.Has(name)) {
+            LOG_ERROR(logging::LogCategory::App, "input bindings: the code reads action '{}' but {} does not bind it",
+                      name, vfs::Narrow(path));
+        }
+    }
+    for (std::string_view name : actions_.Names()) {
+        if (std::find(std::begin(actions::kAll), std::end(actions::kAll), name) == std::end(actions::kAll)) {
+            LOG_WARNING(logging::LogCategory::App, "input bindings: {} binds action '{}' but no code reads it",
+                        vfs::Narrow(path), name);
+        }
+    }
+    return true;
+}
+
+namespace {
+bool Holds(const std::vector<std::string>& names, std::string_view name) {
+    return std::find(names.begin(), names.end(), name) != names.end();
+}
 }
 
 bool InputManager::IsActionDown(std::string_view name) const {
-    return actions_.IsActionDown(name, *this);
+    return (keysCount_ && actions_.IsActionDown(name, *this)) || Holds(injectedHeld_, name);
 }
 
 bool InputManager::WasActionPressed(std::string_view name) const {
-    return actions_.WasActionPressed(name, *this);
+    return (keysCount_ && actions_.WasActionPressed(name, *this)) || Holds(injectedPresses_, name);
+}
+
+bool InputManager::TakeActionPress(std::string_view name) {
+    if (!WasActionPressed(name)) {
+        return false;
+    }
+    for (const std::string& taken : takenThisFrame_) {
+        if (taken == name) {
+            return false;
+        }
+    }
+    takenThisFrame_.emplace_back(name);
+    return true;
 }
 
 bool InputManager::WasActionReleased(std::string_view name) const {
-    return actions_.WasActionReleased(name, *this);
+    return keysCount_ && actions_.WasActionReleased(name, *this);
 }
 
 float InputManager::GetActionAxis(std::string_view name) const {
-    return actions_.GetAxis(name, *this);
+    float value = keysCount_ ? actions_.GetAxis(name, *this) : 0.0f;
+    for (const auto& axis : injectedAxes_) {
+        if (axis.first == name) {
+            value += axis.second;
+        }
+    }
+    return value;
+}
+
+void InputManager::InjectPress(std::string_view name) {
+    pendingInjectedPresses_.emplace_back(name);
+}
+
+void InputManager::InjectHeld(std::string_view name, bool held) {
+    const auto it = std::find(injectedHeld_.begin(), injectedHeld_.end(), name);
+    if (held && it == injectedHeld_.end()) {
+        injectedHeld_.emplace_back(name);
+    }
+    if (!held && it != injectedHeld_.end()) {
+        injectedHeld_.erase(it);
+    }
+}
+
+void InputManager::InjectAxis(std::string_view name, float value) {
+    const auto it = std::find_if(injectedAxes_.begin(), injectedAxes_.end(), [&](const auto& a) { return a.first == name; });
+    if (it != injectedAxes_.end()) {
+        if (value == 0.0f) {
+            injectedAxes_.erase(it);
+        } else {
+            it->second = value;
+        }
+    } else if (value != 0.0f) {
+        injectedAxes_.emplace_back(std::string(name), value);
+    }
 }

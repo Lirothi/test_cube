@@ -19,6 +19,9 @@
     <Filter Include="sources\app\ui">
       <UniqueIdentifier>{10b794f9-6252-4338-a7cf-a17c4396881f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\harness">
+      <UniqueIdentifier>{C01CE8F2-7EE6-4FA6-B7DA-B7A78C31F444}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\diagnostics">
       <UniqueIdentifier>{00d55c0d-417a-46be-899e-d59e8c5bfccb}</UniqueIdentifier>
     </Filter>
@@ -97,6 +100,9 @@
     <Filter Include="sources\core\vfs">
       <UniqueIdentifier>{ed371c37-c607-5551-822c-ba572a48fb37}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\settings">
+      <UniqueIdentifier>{CE952DB9-EF04-4FDB-B6B2-BA5999D83ECD}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\input">
       <UniqueIdentifier>{849f6304-d894-4dd4-9d93-005e85a0b4e2}</UniqueIdentifier>
     </Filter>
@@ -120,6 +126,15 @@
     </Filter>
     <Filter Include="sources\rendering\visibility">
       <UniqueIdentifier>{9ab19082-de2c-4bba-987b-777159fe53a0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rendering\view">
+      <UniqueIdentifier>{A1D98400-CADE-4BD1-9ADF-40EA440FA8CE}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rendering\scene">
+      <UniqueIdentifier>{F53EB37C-B158-499B-8C99-623E41600A1F}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rendering\wind">
+      <UniqueIdentifier>{91160311-9117-440A-A3F1-204346D58ED3}</UniqueIdentifier>
     </Filter>
     <Filter Include="sources\rendering\debug">
       <UniqueIdentifier>{5b663f47-cdab-4683-891d-f6186e6cdece}</UniqueIdentifier>
@@ -187,6 +202,9 @@
     <Filter Include="shaders">
       <UniqueIdentifier>{01504546-7cdf-4026-ad57-b74156b71b63}</UniqueIdentifier>
     </Filter>
+    <Filter Include="shaders\shared">
+      <UniqueIdentifier>{08F9EB4C-9609-47C9-940D-D2F9BEDAC860}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\math">
       <UniqueIdentifier>{9245a199-dbad-464b-949f-23a9500801ad}</UniqueIdentifier>
     </Filter>
@@ -237,7 +255,25 @@
     <ClCompile Include="sources/app/Shipping.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/BootSwitches.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/harness/CaptureHarnesses.cpp">
+      <Filter>sources\app\harness</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/harness/GateHarnesses.cpp">
+      <Filter>sources\app\harness</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/harness/IntentHarness.cpp">
+      <Filter>sources\app\harness</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/harness/SettingsDumpHarness.cpp">
+      <Filter>sources\app\harness</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/settings/Scalability.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/BloomSettingRows.cpp">
       <Filter>sources\app\settings</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/settings/UserSettings.cpp">
@@ -438,6 +474,9 @@
     <ClCompile Include="sources/app/ui/LogWindow.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/ui/ProfilerHud.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/ui/MemoryTab.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
@@ -486,8 +525,11 @@
     <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp">
       <Filter>sources\editor\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/camera/Camera.cpp">
+    <ClCompile Include="sources/app/camera/CameraController.cpp">
       <Filter>sources\app\camera</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/view/Camera.cpp">
+      <Filter>sources\rendering\view</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
@@ -519,8 +561,8 @@
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderConfig.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderer.cpp">
       <Filter>sources\app\scene</Filter>
@@ -590,6 +632,9 @@
     </ClCompile>
     <ClCompile Include="sources/core/vfs/Vfs.cpp">
       <Filter>sources\core\vfs</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/settings/SettingsRegistry.cpp">
+      <Filter>sources\core\settings</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/vfs/VfsTools.cpp">
       <Filter>sources\core\vfs</Filter>
@@ -810,6 +855,9 @@
     <ClCompile Include="sources/rendering/core/GpuAlloc.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/GpuProfiler.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/DeviceRemovalWatch.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -996,6 +1044,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/settings/Scalability.h">
+      <Filter>sources\app\settings</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/settings/SettingContext.h">
       <Filter>sources\app\settings</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/settings/UserSettings.h">
@@ -1241,6 +1292,27 @@
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/BootOptions.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/BootSwitches.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/harness/Harness.h">
+      <Filter>sources\app\harness</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/harness/CaptureHarnesses.h">
+      <Filter>sources\app\harness</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/harness/GateHarnesses.h">
+      <Filter>sources\app\harness</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/harness/IntentHarness.h">
+      <Filter>sources\app\harness</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/harness/SettingsDumpHarness.h">
+      <Filter>sources\app\harness</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/diagnostics/SceneStress.h">
       <Filter>sources\app\diagnostics</Filter>
     </ClInclude>
@@ -1295,8 +1367,11 @@
     <ClInclude Include="sources/app/game/VesselCamera.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/camera/Camera.h">
+    <ClInclude Include="sources/app/camera/CameraController.h">
       <Filter>sources\app\camera</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/view/Camera.h">
+      <Filter>sources\rendering\view</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h">
       <Filter>sources\rendering\lighting</Filter>
@@ -1308,6 +1383,9 @@
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/Level.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/levels/LevelDocumentSink.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/LevelManager.h">
@@ -1322,19 +1400,22 @@
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneFrameData.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneFrameData.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/GtaoSettingsJson.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneRenderConfig.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneRenderConfig.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderInternal.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/post/BloomRenderer.h">
+      <Filter>sources\rendering\post</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/post/BloomSettings.h">
       <Filter>sources\rendering\post</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneRenderer.h">
@@ -1370,6 +1451,9 @@
     <ClInclude Include="sources/core/profiling/Profiler.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/profiling/ProfilerDetail.h">
+      <Filter>sources\core\profiling</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
@@ -1399,6 +1483,9 @@
     </ClInclude>
     <ClInclude Include="sources/core/vfs/Vfs.h">
       <Filter>sources\core\vfs</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/settings/SettingsRegistry.h">
+      <Filter>sources\core\settings</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/vfs/VfsMounts.h">
       <Filter>sources\core\vfs</Filter>
@@ -1467,6 +1554,9 @@
       <Filter>sources\input</Filter>
     </ClInclude>
     <ClInclude Include="sources/input/InputManager.h">
+      <Filter>sources\input</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/input/InputActions.h">
       <Filter>sources\input</Filter>
     </ClInclude>
     <ClInclude Include="sources/materials/Material.h">
@@ -1553,8 +1643,8 @@
     <ClInclude Include="sources/vfx/ParticleTypes.h">
       <Filter>sources\vfx</Filter>
     </ClInclude>
-    <ClInclude Include="sources/vfx/WindState.h">
-      <Filter>sources\vfx</Filter>
+    <ClInclude Include="sources/rendering/wind/WindState.h">
+      <Filter>sources\rendering\wind</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h">
       <Filter>sources\ocean</Filter>
@@ -1763,6 +1853,15 @@
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/GtaoSettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/HeightFogSettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/SsrSettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
@@ -1809,6 +1908,9 @@
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/Mesh.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/MeshPrimitives.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/MeshManager.h">
@@ -1984,6 +2086,12 @@
     </None>
     <None Include="shaders\water_composite_cs.hlsl">
       <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shared\shader_types.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\lighting_slots.h">
+      <Filter>shaders\shared</Filter>
     </None>
     <None Include="shaders\wind.hlsli">
       <Filter>shaders</Filter>

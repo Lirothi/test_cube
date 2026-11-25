@@ -6,6 +6,7 @@
 // trimmed one is a second thing to review.
 
 #include "app/scene/SceneRenderer.h"
+#include "shaders/shared/shader_types.h" // R5.1: the C++ / HLSL shared layout
 #include "core/logging/Log.h"
 
 #include <algorithm>
@@ -27,7 +28,7 @@
 #include "rendering/core/GpuAlloc.h" // --upload-ring-check's readback of the RT constants
 #include "rendering/core/RenderConstants.h"
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
@@ -44,7 +45,7 @@
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
-#include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
+#include "rendering/wind/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -55,6 +56,11 @@
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
 #include "app/scene/SceneRenderInternal.h"
+
+// Architecture plan R5.1: shaders/shared/shader_types.h is read by C++ and by water_composite_cs.hlsl alike; its probe
+// has WaterCompositeCB's layout, so both compilers agree on it before a real constant buffer moves there (R5.3).
+static_assert(sizeof(shader_shared::SharedLayoutProbe) == sizeof(scene_internal::WaterCompositeConstants),
+              "shaders/shared/shader_types.h: the probe must have WaterCompositeCB's layout (112 bytes)");
 using namespace scene_internal;
 
 // ---- the SSR constant fills + Pass_ScreenSpaceReflections ----

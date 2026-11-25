@@ -24,7 +24,7 @@
 #include "rendering/core/UploadManager.h"
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSpectrum.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 
 using Microsoft::WRL::ComPtr;
 

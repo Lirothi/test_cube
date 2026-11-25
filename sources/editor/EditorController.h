@@ -149,35 +149,6 @@ private:
     // Kept only so a layout saved before the two panels became one still loads; nothing
     // opens a window with it any more.
     bool showModelChat_ = false;
-    // "--intent=<phrase>" is in flight: submitted, waiting for the source to settle.
-    bool headlessIntentPending_ = false;
-    // Editor frames drawn since boot. The harness waits for a few before submitting: firing
-    // on frame zero ran a command while the renderer was still standing its resources up,
-    // and took the process with it. Nobody can type that fast, so this is a harness-only
-    // hazard -- but a harness that crashes is not a harness.
-    int headlessIntentWarmupFrames_ = 0;
-    // --intent-repeat: which pass this is, the phrase to repeat, and when it was submitted.
-    // The elapsed time is the whole point of repeating -- the first pass carries the system
-    // prompt's prefill and no later one does.
-    int headlessIntentPass_ = 0;
-    std::string headlessIntentPhrase_;
-    double headlessIntentStartedSec_ = 0.0;
-    // True from the first pass's submission until the last one's verdict. Separate from
-    // headlessIntentPending_, which is only true while ONE pass is in flight -- between two
-    // passes both the phrase and the pending flag are clear, and without this the run
-    // silently ended after pass 1.
-    bool headlessIntentRunning_ = false;
-    // Same warmup reasoning as the intent harness, counted separately because --chat can be
-    // used without --intent and that counter only advances while the intent block runs.
-    int headlessChatWarmupFrames_ = 0;
-    // `--then=`: the second phrase waits for the first to finish, and "finished" is a
-    // busy->idle transition rather than a timer -- the first answer can take forty seconds
-    // or four, and a fixed wait would be wrong in both directions.
-    // True when `--then=` was given: the harness then presses Run for every command it
-    // produces, because there is nobody there to press it.
-    bool harnessRunsCommands_ = false;
-    bool headlessChatSawBusy_ = false;
-    int headlessChatSettleFrames_ = 0;
     // The model's own warmup: server started and system prompt prefilled, before anyone
     // types. Same frame delay as the harness, for the same reason -- the level's runtime
     // objects are still arriving over the first few frames and the prompt is built from them.

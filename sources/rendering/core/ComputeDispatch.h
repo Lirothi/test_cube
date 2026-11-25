@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
+#include <cstddef>
 #include <initializer_list>
 #include <utility>
 
@@ -18,14 +20,17 @@
 // Resource state transitions stay at the call site (until the render graph owns them).
 inline constexpr UINT kComputeDispatchGroupSize = 8;
 
-template <typename WriteCBFn>
-inline void RecordComputeDispatch(
+namespace compute_dispatch_detail
+{
+// The body of both forms below; SrvTable is an initializer_list or a std::array (Renderer::StageSrvUavTable takes both).
+template <typename WriteCBFn, typename SrvTable>
+inline void Record(
     Renderer* renderer,
     ID3D12GraphicsCommandList* cl,
     Material* material,
     UINT cbSizeBytes,
     WriteCBFn&& writeConstants, // void(uint8_t* dest); called only when cbSizeBytes > 0
-    std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srvTable,
+    const SrvTable& srvTable,
     std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> uavTable,
     D3D12_GPU_DESCRIPTOR_HANDLE samplerTable,
     UINT width, UINT height,
@@ -64,6 +69,43 @@ inline void RecordComputeDispatch(
     {
         renderer->UAVBarrier(cl, uavBarrierResource);
     }
+}
+}
+
+template <typename WriteCBFn>
+inline void RecordComputeDispatch(
+    Renderer* renderer,
+    ID3D12GraphicsCommandList* cl,
+    Material* material,
+    UINT cbSizeBytes,
+    WriteCBFn&& writeConstants, // void(uint8_t* dest); called only when cbSizeBytes > 0
+    std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> srvTable,
+    std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> uavTable,
+    D3D12_GPU_DESCRIPTOR_HANDLE samplerTable,
+    UINT width, UINT height,
+    ID3D12Resource* uavBarrierResource = nullptr)
+{
+    compute_dispatch_detail::Record(renderer, cl, material, cbSizeBytes, std::forward<WriteCBFn>(writeConstants),
+        srvTable, uavTable, samplerTable, width, height, uavBarrierResource);
+}
+
+// The SRV table as an array -- a pass whose slots are named (shaders/shared/<pass>_slots.h, architecture plan R5.3) fills
+// it by name instead of by position.
+template <typename WriteCBFn, std::size_t N>
+inline void RecordComputeDispatch(
+    Renderer* renderer,
+    ID3D12GraphicsCommandList* cl,
+    Material* material,
+    UINT cbSizeBytes,
+    WriteCBFn&& writeConstants, // void(uint8_t* dest); called only when cbSizeBytes > 0
+    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, N>& srvTable,
+    std::initializer_list<D3D12_CPU_DESCRIPTOR_HANDLE> uavTable,
+    D3D12_GPU_DESCRIPTOR_HANDLE samplerTable,
+    UINT width, UINT height,
+    ID3D12Resource* uavBarrierResource = nullptr)
+{
+    compute_dispatch_detail::Record(renderer, cl, material, cbSizeBytes, std::forward<WriteCBFn>(writeConstants),
+        srvTable, uavTable, samplerTable, width, height, uavBarrierResource);
 }
 
 // Overload for passes without a constant buffer.

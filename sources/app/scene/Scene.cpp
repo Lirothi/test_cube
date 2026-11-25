@@ -13,7 +13,7 @@
 #include <string>
 #include <utility>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
@@ -577,7 +577,7 @@ void Scene::ApplyStaticSetToRender()
     renderQueueSourcesValid_ = false;
     shadowCasterSource_.Clear();
     cameraObjectSource_.Clear();
-    renderCamera_.GetView().queue.Clear();
+    cameraView_.queue.Clear();
     for (SceneView& view : cascadeViews_) { view.queue.Clear(); }
     for (SceneView& view : clipmapViews_) { view.queue.Clear(); }
     for (SceneView& view : spotShadowViews_) { view.queue.Clear(); }
@@ -1873,6 +1873,7 @@ void Scene::TickPhysics(float deltaTime)
 {
     physics_.SetOcean(FindOceanRenderable());
     physics_.SetCamera(camera_.GetPosition());
+    physics_.SetDebugDraw(Systems::GetRenderer().GetDebugDrawSystem());
     physics_.Tick(deltaTime);
     Math::float3 eye;
     if (physics_.PlayerEye(eye)) { camera_.SetPosition(eye); } // the player: the hand-over takes this frame's pose
@@ -2213,9 +2214,22 @@ void Scene::ConsiderLightOcclusion(const Frustum& cameraFrustum)
     }
 }
 
+void Scene::SyncCameraView()
+{
+    cameraView_.view = renderCamera_.GetViewMatrix();
+    cameraView_.invView = renderCamera_.GetInvViewMatrix();
+    cameraView_.proj = renderCamera_.GetProjMatrix();
+    cameraView_.invProj = renderCamera_.GetInvProjMatrix();
+    cameraView_.position = renderCamera_.GetPosition();
+    cameraView_.hfov = renderCamera_.GetBaseHFov();
+    cameraView_.zNear = renderCamera_.GetZNear();
+    cameraView_.zFar = renderCamera_.GetZFar();
+    cameraView_.renderLayerMask = renderCamera_.GetRenderLayerMask();
+}
+
 int Scene::VisibilitySlotFor(const SceneView& view) const
 {
-    if (&view == &renderCamera_.GetView()) { return static_cast<int>(render::kVisibilityViewCamera); }
+    if (&view == &cameraView_) { return static_cast<int>(render::kVisibilityViewCamera); }
     const SceneView* first = cascadeViews_.data();
     if (&view >= first && &view < first + cascadeViews_.size())
     {
@@ -2405,13 +2419,13 @@ void Scene::Sync(Renderer* renderer)
         ocean::watermask::Collect(masks);
         ocean->SetWaterMasks(std::move(masks));
     }
-    if (vesselCamera_.Active() && !physics::GameSettings().player.testFreeCamera)
+    if (vesselCamera_.Active() && !game::ScriptCamera().free)
     {
         // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
         const OceanRenderable* ocean = FindOceanRenderable();
         vesselCamera_.Apply(camera_, game::PoseOf(physics_.GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
     }
-    else if (RenderableObject* watched = !physics::GameSettings().player.testFreeCamera ? race_.WatchedVessel() : nullptr)
+    else if (RenderableObject* watched = !game::ScriptCamera().free ? race_.WatchedVessel() : nullptr)
     {
         // race.watch: a bot's boat, from the pose this frame draws it at -- the helm's chase camera, on another hull. Another
         // boat is a cut.
@@ -2648,12 +2662,13 @@ void Scene::PrepareViews(Renderer* renderer)
     render::g_lodOutputWidthPx = static_cast<float>(std::max(renderer->GetWidth(), 1u));
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    SceneView& mainView = renderCamera_.GetView();
+    SceneView& mainView = cameraView_;
     SceneView* shoreViewPtr = nullptr;
     const uint32_t camMask = renderCamera_.GetRenderLayerMask();
     std::optional<Profiler::ScopedCpu> prepareViewsSetupScope(
         std::in_place, ProfilerScopes::kPrepareViewsSetup);
     renderCamera_.CalcMatrices(renderer);
+    SyncCameraView();
     if (renderCameraCut_)
     {
         // The game camera was cut (set_camera, framing, a bookmark: its CalcMatrices, then ResetHistory). The render
@@ -2666,7 +2681,7 @@ void Scene::PrepareViews(Renderer* renderer)
     // Publish this frame's pass inputs. SceneRenderer's pass bodies read frameData_,
     // not Scene members.
     frameData_.camera = &renderCamera_;
-    frameData_.mainView = &renderCamera_.GetView();
+    frameData_.mainView = &cameraView_;
     frameData_.cascadeViews = &cascadeViews_;
     frameData_.clipmapViews = &clipmapViews_;
     frameData_.clipmapSquares = &clipmapSquares_;
@@ -3960,7 +3975,7 @@ void Scene::Render(Renderer* renderer) {
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         // S4: the camera, this frame's (PrepareViews above built it).
-        const SceneView& camView = renderCamera_.GetView();
+        const SceneView& camView = cameraView_;
         frustums[maxViews] = &camView.frustum;
         // Local-light plan S9e: each local view's light bounds, and -- atlas modes, the knob -- UE's hull of its light and
         // the camera frustum (one per light: a point light's six faces share it). VSM caches pages: no hull (UE).
@@ -4116,7 +4131,7 @@ void Scene::Clear()
     selectedEditorObjectIds_.clear();
     selectionOutlineRadius_ = 1;
 #endif
-    renderCamera_.GetView().queue.Clear();
+    cameraView_.queue.Clear();
     for (auto& view : cascadeViews_)
     {
         view.queue.Clear();

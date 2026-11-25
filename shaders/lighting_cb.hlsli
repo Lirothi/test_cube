@@ -8,7 +8,10 @@
 #ifndef LIGHTING_CB_HLSLI
 #define LIGHTING_CB_HLSLI
 
-cbuffer PerFrame : register(b0)
+#include "shared/shader_types.h"
+#include "shared/lighting_slots.h" // LIGHTING_B_PER_FRAME
+
+cbuffer PerFrame : TC_REGISTER(b, LIGHTING_B_PER_FRAME)
 {
     float3 sunDirWS;
     float ambientIntensity;

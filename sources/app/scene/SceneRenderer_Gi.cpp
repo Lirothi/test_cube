@@ -18,7 +18,7 @@
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/Skybox.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/SceneRenderInternal.h"
 
 namespace {

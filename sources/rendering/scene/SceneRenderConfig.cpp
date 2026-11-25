@@ -1,4 +1,4 @@
-#include "app/scene/SceneRenderConfig.h"
+#include "rendering/scene/SceneRenderConfig.h"
 
 #include <algorithm>
 

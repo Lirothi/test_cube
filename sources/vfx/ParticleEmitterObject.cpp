@@ -12,14 +12,14 @@
 
 #include <Windows.h>
 
-#include "app/camera/Camera.h"
-#include "app/scene/SceneFrameData.h" // g_skyIrradianceSrv / Scale
+#include "rendering/view/Camera.h"
+#include "rendering/scene/SceneFrameData.h" // g_skyIrradianceSrv / Scale
 #include "core/Helpers.h"
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "ocean/WaterMask.h" // g_waterMaskFrame: the hulls a collideHulls particle dies in
-#include "vfx/WindState.h" // W8: g_windDriftXZ
+#include "rendering/wind/WindState.h" // W8: g_windDriftXZ
 #include "rendering/core/CommandListBindState.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"

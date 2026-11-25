@@ -20,7 +20,6 @@
 #include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 
-#include "app/Systems.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/CrashHandler.h"
 #include "core/logging/Log.h"
@@ -1282,11 +1281,6 @@ namespace physics
             }
             PlayerInput input = playerPossessed ? playerInput : PlayerInput{};
             playerInput.jump = false;
-            input.move = input.move + Math::float3(tuning.testMoveX, 0.0f, tuning.testMoveZ);
-            input.jump = input.jump || tuning.testJump;
-            input.crouch = input.crouch || tuning.testCrouch;
-            input.sprint = input.sprint || tuning.testSprint;
-            tuning.testJump = false;
 
             float water = kNoWater;
             if (ocean && ocean->IsVisibleGame())
@@ -1564,10 +1558,10 @@ namespace physics
             Display(static_cast<float>(std::clamp(accumulator / stepSeconds, 0.0, 1.0)));
         }
 
-        void DrawDebug(const Math::float3& eye)
+        void DrawDebug(const Math::float3& eye, DebugDrawSystem* debugDraw)
         {
             const Settings& settings = GameSettings();
-            if (settings.debug == 0)
+            if (settings.debug == 0 || !debugDraw) // no draw system: a world without a scene (the gates)
             {
                 lines.reset();
                 return;
@@ -1575,7 +1569,7 @@ namespace physics
             Join();
             MEM_SCOPE(MemTag::Physics);
             if (!lines) { lines = std::make_unique<LineRenderer>(); }
-            lines->Begin(Systems::GetRenderer().GetDebugDrawSystem(), eye, settings.debugRadius);
+            lines->Begin(debugDraw, eye, settings.debugRadius);
             JPH::BodyManager::DrawSettings draw;
             draw.mDrawShape = true;
             draw.mDrawShapeWireframe = true;
@@ -1607,7 +1601,7 @@ namespace physics
         m.SetSimulating(settings.simulate);
         // These two read the world, and a step about to start would make them wait for all of it.
         m.TickPlayer(deltaTime);
-        m.DrawDebug(camera_);
+        m.DrawDebug(camera_, debugDraw_);
         if (m.simulating) { m.Simulate(deltaTime); }
     }
 

@@ -6,7 +6,7 @@
 #include <cmath>
 #include <cstdio>
 
-#include "app/camera/Camera.h"
+#include "app/camera/CameraController.h"
 #include "app/settings/Scalability.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"

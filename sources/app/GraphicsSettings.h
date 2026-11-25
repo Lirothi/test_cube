@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-#include "app/scene/SceneRenderConfig.h"
+#include "rendering/scene/SceneRenderConfig.h"
 
 class Renderer;
 class Scene;

@@ -58,6 +58,9 @@ struct Readout
     int failures = 0;
 };
 Readout g_read;
+// A --mem-selftest or --mem-readout that could not be read: the run measured something other than it was asked to, so
+// it fails (ExitCode 2) instead of reporting a PASS -- a control with a misspelt tag proved nothing (R3.3b, 2026-11-25).
+bool g_switchBroken = false;
 
 bool TagByName(const std::string& name, MemTag& out)
 {
@@ -95,7 +98,8 @@ bool ParseSelfTest(const char* cmdLine)
     if (tokens.empty()) { return false; }
     if (tokens[0].rfind("leak@", 0) != 0 || !TagByName(tokens[0].substr(5), g_self.tag))
     {
-        LOG_ERROR(logging::LogCategory::Core, "--mem-selftest: expected leak@<tag> with a tag of MemTags.h, got '{}' -- no self-test", tokens[0]);
+        LOG_ERROR(logging::LogCategory::Core, "--mem-selftest: expected leak@<tag> with a tag of MemTags.h, got '{}' -- no self-test, the run fails", tokens[0]);
+        g_switchBroken = true;
         return false;
     }
     for (std::size_t i = 1; i < tokens.size(); ++i)
@@ -119,7 +123,8 @@ bool ParseReadout(const char* cmdLine)
     g_read.seconds = std::atof(tokens[0].c_str());
     if (g_read.seconds <= 0.0)
     {
-        LOG_ERROR(logging::LogCategory::Core, "--mem-readout: expected a window in seconds, got '{}' -- no readout", tokens[0]);
+        LOG_ERROR(logging::LogCategory::Core, "--mem-readout: expected a window in seconds, got '{}' -- no readout, the run fails", tokens[0]);
+        g_switchBroken = true;
         return false;
     }
     for (std::size_t i = 1; i < tokens.size(); ++i)
@@ -303,7 +308,7 @@ void ReleaseSelfTest()
 
 int ExitCode()
 {
-    return g_read.failures;
+    return g_switchBroken ? std::max(2, g_read.failures) : g_read.failures;
 }
 
 void ReadTagBytes(std::vector<std::int64_t>& out)

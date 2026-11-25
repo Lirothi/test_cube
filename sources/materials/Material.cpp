@@ -40,6 +40,7 @@
 #pragma comment(lib, "dxcompiler.lib")
 
 #include "core/Helpers.h"
+#include "rendering/core/Renderer.h"
 #include "rendering/core/RenderContext.h"
 #include "rendering/core/CommandListBindState.h"
 #include "core/task/TaskSystem.h"
@@ -2921,10 +2922,13 @@ int Material::CookShaders(const std::wstring& listFile, const std::wstring& outP
         files.push_back(std::move(marker));
     }
     // The safety net: the sources, so a permutation the record missed still compiles (plan §5 item 4).
-    for (const char* pattern : { "*.hlsl", "*.hlsli" })
+    // shaders/ itself, and shaders/shared/ -- the headers C++ and HLSL both read (architecture plan R5.1): a shader that
+    // includes one compiles from the package only if the header is in it.
+    for (const auto& [folder, pattern] : { std::pair{ "shaders", "*.hlsl" }, std::pair{ "shaders", "*.hlsli" },
+                                          std::pair{ "shaders/shared", "*.h" } })
     {
         if (!withSources) { break; }
-        vfs::List("shaders", pattern, [&](const vfs::ListEntry& e)
+        vfs::List(folder, pattern, [&](const vfs::ListEntry& e)
         {
             if (e.directory) { return; }
             vfs::pak::BuildFile f;

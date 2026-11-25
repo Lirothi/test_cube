@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/SkyOcclusionMap.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -20,7 +20,7 @@
 #include "rendering/lighting/Skybox.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/renderables/RenderableObject.h"
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"
 using namespace scene_internal;

@@ -1,7 +1,7 @@
 #include "app/AppController.h"
 #include "core/memory/MemScope.h"
 
-#include "app/App.h" // g_hudHidden (--no-hud)
+#include "app/App.h" // Boot().frame.hudHidden (--no-hud)
 #include "app/BuildVersion.h" // the Development build's mark
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
@@ -11,6 +11,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
 #include "input/InputManager.h"
+#include "input/InputActions.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -65,18 +66,17 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     constexpr bool kDeveloperKeys = true;
 #endif
     const bool toggleDeveloperWindow = kDeveloperKeys &&
-        (input.WasActionPressed("ToggleDeveloperPanel") ||
-        input.WasActionPressed("ToggleBindings") ||
+        (input.WasActionPressed(actions::kToggleDeveloperPanel) ||
         ImGui::IsKeyPressed(ImGuiKey_F1, false)) &&
         !(playSession_.Playing() && input.IsKeyDown(VK_SHIFT)); // Shift+F1 is the mouse's in Play
 #if WITH_EDITOR
     const bool toggleLevelEditor = ImGui::IsKeyPressed(ImGuiKey_F2, false);
 #endif
     const bool toggleTextureInspector = kDeveloperKeys &&
-        (input.WasActionPressed("ToggleTextureInspector") ||
+        (input.WasActionPressed(actions::kToggleTextureInspector) ||
         ImGui::IsKeyPressed(ImGuiKey_F4, false));
     const bool toggleOceanControls = kDeveloperKeys &&
-        (input.WasActionPressed("ToggleOceanControls") ||
+        (input.WasActionPressed(actions::kToggleOceanControls) ||
         ImGui::IsKeyPressed(ImGuiKey_F7, false));
 
     if (toggleDeveloperWindow)
@@ -97,37 +97,37 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     {
         developerWindow_.ToggleOceanControls();
     }
-    if (g_bootLogWindow)
+    if (Boot().editor.logWindow)
     {
-        g_bootLogWindow = false; // once: "--log-window" opens the viewer for a headless capture
+        Boot().editor.logWindow = false; // once: "--log-window" opens the viewer for a headless capture
         developerWindow_.ToggleLogWindow();
     }
-    if (g_bootMemoryWindow)
+    if (Boot().editor.memoryWindow)
     {
-        g_bootMemoryWindow = false; // once: "--mem-window" opens the Memory tab for a headless capture
+        Boot().editor.memoryWindow = false; // once: "--mem-window" opens the Memory tab for a headless capture
         developerWindow_.OpenMemoryTab();
     }
-    if (!g_bootDevTab.empty())
+    if (!Boot().editor.devTab.empty())
     {
-        if (!developerWindow_.OpenTab(g_bootDevTab)) // once, like --mem-window
+        if (!developerWindow_.OpenTab(Boot().editor.devTab)) // once, like --mem-window
         {
             LOG_WARNING(logging::LogCategory::App, "--dev-tab={}: no Developer Controls tab has that label "
                         "(Scalability, Frame, AA / Scale, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
-                        "Tessy, Physics, Streaming, Memory, Bindings)", g_bootDevTab);
+                        "Tessy, Physics, Streaming, Memory, Bindings)", Boot().editor.devTab);
         }
-        g_bootDevTab.clear();
+        Boot().editor.devTab.clear();
     }
-    if (!g_bootSettingsMenu.empty())
+    if (!Boot().editor.settingsMenu.empty())
     {
         // once: "--settings-menu[=<tab>|menu]" for a headless capture
-        if (g_bootSettingsMenu == "menu") { gameMenuOpen_ = true; }
-        else { settingsMenu_.OpenTab(g_bootSettingsMenu); }
-        g_bootSettingsMenu.clear();
+        if (Boot().editor.settingsMenu == "menu") { gameMenuOpen_ = true; }
+        else { settingsMenu_.OpenTab(Boot().editor.settingsMenu); }
+        Boot().editor.settingsMenu.clear();
     }
 #if WITH_EDITOR
-    if (g_bootEditor)
+    if (Boot().editor.openEditor)
     {
-        g_bootEditor = false; // once: "--editor" opens the editor for a headless capture
+        Boot().editor.openEditor = false; // once: "--editor" opens the editor for a headless capture
         editorController_.SetOpen(true);
     }
 #endif
@@ -138,11 +138,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // not work for the overlay"). The Ctrl combinations below still yield to any keyboard focus (Ctrl+V pastes).
     if (kDeveloperKeys && !renderer.ImGuiWantsTextInput())
     {
-        if (input.WasActionPressed("ToggleProfiler"))
+        if (input.WasActionPressed(actions::kToggleProfiler))
         {
             settings_.showProfiler = !settings_.showProfiler;
         }
-        if (input.WasActionPressed("Wireframe"))
+        if (input.WasActionPressed(actions::kWireframe))
         {
             renderer.SetWireframeMode(!renderer.GetWireframeMode());
         }
@@ -152,16 +152,16 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             render::g_instancingEnabled_game = !render::g_instancingEnabled_game;
         }
 #else
-        if (input.WasActionPressed("ToggleInstancing"))
+        if (input.WasActionPressed(actions::kToggleInstancing))
         {
             render::g_instancingEnabled_game = !render::g_instancingEnabled_game; // F2: A/B Step 4 auto-instancing
         }
 #endif
-        if (input.WasActionPressed("ToggleLOD"))
+        if (input.WasActionPressed(actions::kToggleLOD))
         {
             render::g_lodEnabled_game = !render::g_lodEnabled_game; // F10: A/B Step 6 mesh LOD
         }
-        if (input.WasActionPressed("CycleReflectionSource"))
+        if (input.WasActionPressed(actions::kCycleReflectionSource))
         {
             // F5: cycle None -> SkyOnly -> SSR -> RT -> None (skip RT on
             // non-RT hardware).
@@ -174,7 +174,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             default:                        settings_.reflectionSource = ReflectionSource::None; break;
             }
         }
-        if (input.WasActionPressed("ToggleRTDebugView"))
+        if (input.WasActionPressed(actions::kToggleRTDebugView))
         {
             settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> Reflection target
         }
@@ -182,18 +182,18 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 
     if (kDeveloperKeys && !uiCapturingKeyboard)
     {
-        if (input.WasActionPressed("ToggleIndirectShadows"))
+        if (input.WasActionPressed(actions::kToggleIndirectShadows))
         {
             // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
             render::g_indirectShadowsEnabled_game = !render::g_indirectShadowsEnabled_game;
         }
-        if (input.WasActionPressed("ToggleGiIndirectShadows"))
+        if (input.WasActionPressed(actions::kToggleGiIndirectShadows))
         {
             // Ctrl+G: A/B folding GPU-instanced casters into the indirect/VSM shadow path (ON) vs
             // the Legacy CPU RenderShadow tail only (OFF — nothing in VSM, today's behavior).
             render::g_giIndirectShadowsEnabled_game = !render::g_giIndirectShadowsEnabled_game;
         }
-        if (input.WasActionPressed("ToggleVsmPageRequest"))
+        if (input.WasActionPressed(actions::kToggleVsmPageRequest))
         {
             // Ctrl+V: CYCLE the active shadow method Legacy(CSM/atlas) -> VSM -> SDSM -> Legacy
             // (Step 24a; S15 added the third). Drives which sampler the light/glass shaders use,
@@ -212,31 +212,31 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             renderer.SetDlssMode(mode);
         };
 
-        if (input.WasActionPressed("SetDlssQualityOff"))
+        if (input.WasActionPressed(actions::kSetDlssQualityOff))
         {
             setDlssMode(sl::DLSSMode::eOff);
         }
-        if (input.WasActionPressed("SetDlssQualityMaxPerformance"))
+        if (input.WasActionPressed(actions::kSetDlssQualityMaxPerformance))
         {
             setDlssMode(sl::DLSSMode::eMaxPerformance);
         }
-        if (input.WasActionPressed("SetDlssQualityBalanced"))
+        if (input.WasActionPressed(actions::kSetDlssQualityBalanced))
         {
             setDlssMode(sl::DLSSMode::eBalanced);
         }
-        if (input.WasActionPressed("SetDlssQualityMaxQuality"))
+        if (input.WasActionPressed(actions::kSetDlssQualityMaxQuality))
         {
             setDlssMode(sl::DLSSMode::eMaxQuality);
         }
-        if (input.WasActionPressed("SetDlssQualityUltraPerformance"))
+        if (input.WasActionPressed(actions::kSetDlssQualityUltraPerformance))
         {
             setDlssMode(sl::DLSSMode::eUltraPerformance);
         }
-        if (input.WasActionPressed("SetDlssQualityUltraQuality"))
+        if (input.WasActionPressed(actions::kSetDlssQualityUltraQuality))
         {
             setDlssMode(sl::DLSSMode::eUltraQuality);
         }
-        if (input.WasActionPressed("SetDlssQualityDLAA"))
+        if (input.WasActionPressed(actions::kSetDlssQualityDLAA))
         {
             setDlssMode(sl::DLSSMode::eDLAA);
         }
@@ -319,12 +319,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #if WITH_EDITOR
         if (allowCameraInput && editorController_.IsOpen())
         {
-            allowCameraInput = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
+            allowCameraInput = input.IsActionDown(actions::kLookToggle) && !input.IsKeyDown(VK_MENU);
         }
 #endif
         if (allowCameraInput)
         {
-            scene.CameraRef().UpdateFromInput(input, deltaTime);
+            scene.CameraControllerRef().UpdateFromInput(input, deltaTime);
         }
         else if (input.IsMouseCaptured())
         {
@@ -339,22 +339,22 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 {
     const bool typing = renderer.ImGuiWantsTextInput();
     // Through ImGui as well: a panel with the keyboard's focus keeps a letter from InputManager (App::WndProc).
-    const bool escape = !typing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || input.WasActionPressed("StopPlay"));
-    const bool eject = !typing && input.WasActionPressed("PossessEject");
-    const bool freeMouse = !typing && input.WasActionPressed("FreeMouse");
+    const bool escape = !typing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || input.TakeActionPress(actions::kStopPlay));
+    const bool eject = !typing && input.TakeActionPress(actions::kPossessEject);
+    const bool freeMouse = !typing && input.TakeActionPress(actions::kFreeMouse);
 #if WITH_EDITOR
     // The editor's world stands: only a session runs it. The panels go with the start and come back with the stop.
     using PlayRequest = EditorController::PlayRequest;
     PlayRequest request = editorController_.ConsumePlayRequest();
-    if (!typing && ((ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::GetIO().KeyAlt) || input.WasActionPressed("Play")))
+    if (!typing && ((ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::GetIO().KeyAlt) || input.TakeActionPress(actions::kPlay)))
     {
         request = PlayRequest{ PlayRequest::Kind::Play, false, true };
     }
-    const bool fromBoot = g_bootPlay;
+    const bool fromBoot = Boot().editor.play;
     if (fromBoot)
     {
-        g_bootPlay = false;
-        request = PlayRequest{ PlayRequest::Kind::Play, g_camOverride, false }; // --cam-pos names where to start; a script does not take the owner's mouse
+        Boot().editor.play = false;
+        request = PlayRequest{ PlayRequest::Kind::Play, Boot().frame.camOverride, false }; // --cam-pos names where to start; a script does not take the owner's mouse
     }
     if (!playSession_.Playing())
     {
@@ -380,7 +380,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     {
         if (eject) { playSession_.TogglePossess(scene); }
         if (freeMouse) { playSession_.ToggleFreeMouse(); }
-        if (!typing && input.WasActionPressed("KeepSimulation"))
+        if (!typing && input.TakeActionPress(actions::kKeepSimulation))
         {
             playSession_.SetStatus(editorController_.KeepSimulation(renderer, scene, levelManager), ImGui::GetTime() + 4.0);
         }
@@ -397,17 +397,17 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     const bool detecting = settings::TheScalability().AutodetectForced();
     if (!playSession_.Playing())
     {
-        if (g_bootPlay || (eject && !detecting))
+        if (Boot().editor.play || (eject && !detecting))
         {
             const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
-            const bool fromCamera = g_bootPlay && g_camOverride;
+            const bool fromCamera = Boot().editor.play && Boot().frame.camOverride;
             // Shipping's level rule: a level without a Player Start keeps the free camera (F8 still walks from it).
-            const bool freeByRule = g_bootPlay && !eject && g_playByLevelRule && !start;
+            const bool freeByRule = Boot().editor.play && !eject && Boot().dist.playByLevelRule && !start;
             if (!freeByRule)
             {
                 playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &scene.LevelRaceCourse(), eject, false);
             }
-            g_bootPlay = false;
+            Boot().editor.play = false;
         }
     }
     else if (!detecting)
@@ -593,7 +593,7 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
     }
 #else
     const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
-    if (g_playByLevelRule)
+    if (Boot().dist.playByLevelRule)
     {
         // Shipping (owner, 2026-11-13): each level by its own rule -- its Player Start: first person from it; none: the
         // free camera where the level put it (its freeCameraStart, else the origin -- JsonLevel::Load).
@@ -629,7 +629,7 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     };
     // "--no-hud" (see App.h): PublishHud still begins the buffer, so it is emptied rather than left holding the
     // previous frame's text; only the lines are skipped.
-    if (g_hudHidden)
+    if (Boot().frame.hudHidden)
     {
         return;
     }
@@ -657,7 +657,7 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     }();
     line(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f),
         L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, Shadows: %hs",
-        camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
+        camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, scene.CameraControllerRef().GetMoveSpeedMult(),
         renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique,
         render::ShadowModeLabel(render::g_shadowMode_game));
     // The level's clock, so a screenshot also carries its hour (`--time=HH:MM` reproduces it).

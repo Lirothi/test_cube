@@ -7,7 +7,8 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
 #include "rendering/core/FrameResource.h"
-#include "app/camera/Camera.h"
+#include "rendering/meshes/MeshPrimitives.h"
+#include "rendering/view/Camera.h"
 
 #include <cmath>
 #include <cstdint>

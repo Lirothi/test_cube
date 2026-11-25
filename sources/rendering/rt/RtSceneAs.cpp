@@ -15,9 +15,9 @@
 #include <cstring>
 #include <vector>
 
-#include "app/camera/Camera.h"
-#include "app/scene/SceneFrameData.h"
-#include "vfx/WindState.h"
+#include "rendering/view/Camera.h"
+#include "rendering/scene/SceneFrameData.h"
+#include "rendering/wind/WindState.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/BarrierTranslation.h"

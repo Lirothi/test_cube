@@ -16,24 +16,24 @@
 #include "rendering/shadows/LocalShadowCache.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/SdsmShadows.h"
-#include "app/camera/Camera.h"
+#include "app/camera/CameraController.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/LightManager.h"
 
-#include "app/scene/SceneRenderConfig.h"
+#include "rendering/scene/SceneRenderConfig.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneView.h"
 #include "app/scene/SkyOcclusionMap.h"
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
 #include "core/task/TaskSystem.h" // viewTasks_
 #include "core/threading/ThreadRole.h" // game thread plan: the accessors say which half they belong to
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
 #include "rendering/visibility/OcclusionQueries.h"
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 #include "vfx/VesselSpray.h"
 #include "ocean/OceanBuoyancy.h"
 #include "physics/PhysicsWorld.h"
@@ -51,6 +51,9 @@ public:
     // frame's about to render, refreshed at the hand-over (Sync). The render half has its own (RenderCamera).
     Camera& CameraRef() { TC_CHECK_GAME("Scene::CameraRef"); return camera_; }
     const Camera& CameraRef() const { TC_CHECK_GAME("Scene::CameraRef"); return camera_; }
+    // What steers the game camera: the free fly, the look and its smoothing, the wheel's speed (game half only).
+    CameraController& CameraControllerRef() { TC_CHECK_GAME("Scene::CameraControllerRef"); return cameraController_; }
+    const CameraController& CameraControllerRef() const { TC_CHECK_GAME("Scene::CameraControllerRef"); return cameraController_; }
     // The render half's camera: the game camera's pose taken at Sync, its own jitter, matrices and history.
     const Camera& RenderCamera() const { TC_CHECK_RENDER("Scene::RenderCamera"); return renderCamera_; }
 
@@ -361,6 +364,9 @@ private:
     // Occlusion plan S0: which render::VisibilityStats slot a view writes (camera 0, cascades
     // 1..4), or -1 for the views that have none (local lights, clipmap levels).
     int VisibilitySlotFor(const SceneView& view) const;
+    // The render camera's matrices, lens and layers into the main view (architecture plan R1.4: the view was the
+    // camera's own member, which its CalcMatrices wrote). Right after renderCamera_.CalcMatrices.
+    void SyncCameraView();
     // Occlusion plan S3a: on the CAMERA view's prepare task, after the frustum cull and the chunk
     // masks -- consults the history for every surviving opaque object (per chunk for terrain),
     // drops the occluded ones from the visible buckets, ANDs occluded chunks out of the mask and
@@ -492,10 +498,12 @@ private:
     std::uint64_t sdsmCacheFrame_ = ~0ull; // the frame the analyze last ran; a gap = the mode was off
     LightManager lightManager_{};
     Camera camera_;       // the GAME camera (CameraRef)
+    CameraController cameraController_{camera_}; // its input (CameraControllerRef)
     // Game thread plan G2: the render half's copies, written only by Sync (and by the render half itself), never read by
     // the game half -- the camera (pose taken, matrices and history its own), the suns, the wind, the cascade knobs and
     // the editor selection the frame draws.
     Camera renderCamera_;
+    SceneView cameraView_; // the main view: renderCamera_'s matrices (SyncCameraView), the frustum, the queue
     bool renderCameraCut_ = false; // the game camera was cut since the last frame: repeat it after CalcMatrices
     DirectionalLight renderSun_;
     DirectionalLight renderSkySun_;

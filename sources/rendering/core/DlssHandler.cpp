@@ -9,7 +9,7 @@
 #include <cstring>
 
 #include "rendering/core/Renderer.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "streamline/include/sl.h"

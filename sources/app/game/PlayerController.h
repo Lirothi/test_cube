@@ -1,6 +1,7 @@
 #pragma once
 
 class Camera;
+class CameraController;
 class InputManager;
 namespace physics { class World; }
 
@@ -10,5 +11,5 @@ class PlayerController
 {
 public:
     // `hasControls` false (the mouse is free, a window has it): no look and no keys, the body stops of itself.
-    void Tick(InputManager& input, Camera& camera, physics::World& world, bool hasControls, float deltaTime);
+    void Tick(InputManager& input, Camera& camera, CameraController& look, physics::World& world, bool hasControls, float deltaTime);
 };

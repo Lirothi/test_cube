@@ -3,29 +3,15 @@
 #include <cstdint>
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
-#include "app/scene/SceneView.h"
 
 using namespace DirectX;
 
-class InputManager;
 class Renderer;
 
-// Mouse smoothing (Developer Controls > Frame "Mouse smoothing", graphics_settings.json frame.mouseSmoothingMs,
-// --set=camera.mouseSmoothing:<ms>): the time constant the look input eases in with (Camera::UpdateFromInput);
-// 0 = every frame's mouse motion is applied at once.
-inline float g_cameraMouseSmoothingMs = 0.0f;
-inline constexpr float kCameraMouseSmoothingMaxMs = 500.0f;
-// The player's look (docs/scalability_plan.md §6.2 item 4; the menu's Controls, user_settings.json controls.*, `--set
-// controls.sensitivity|invertY`): the look's speed x this, over the bindings' own sensitivity (input/bindings.json), and
-// its vertical turned the other way. Camera::AddLookInput -- the one road every look takes. Game half only.
-inline float g_cameraLookSensitivity = 1.0f;
-inline bool g_cameraInvertY = false;
-// The player's field of view (§6.2 item 3, §10 item 15; the menu's Image > Field of view, user_settings.json image.fovDeg,
-// `--set image.fovDeg`): degrees HORIZONTAL AT 16:9, and the vertical that gives is kept -- a wider screen sees wider,
-// not less high (Hor+). 0 = the level's own (its hfovDeg, horizontal at any aspect, as before). The game half sets it on
-// its camera every frame (AppController); the render camera takes it with the pose.
-inline float g_cameraPlayerFovDeg = 0.0f;
-
+// The camera's view (architecture plan R1.4): where it stands, how it looks, its lens and layers, and the matrices the
+// renderer reads -- with the TAA jitter and last frame's history. The free-fly and look input, the mouse smoothing and
+// the player's look settings are app/camera/CameraController's; the scene's main view (its queue, its frustum) is the
+// Scene's, which copies this camera's matrices into it (Scene::SyncCameraView).
 class Camera {
 public:
     Camera(
@@ -34,18 +20,10 @@ public:
         : position_(pos), pitch_(pitch), yaw_(yaw), roll_(roll)
     {
         UpdateRotation();
-        view_.type = SceneView::Type::Camera;
-        view_.renderLayerMask = kRenderLayerAll;
-        view_.hfov = XMConvertToRadians(90.0f);
-        view_.zNear = 0.01f;
-        view_.zFar = 10000.0f;
+        hfov_ = XMConvertToRadians(90.0f);
+        zNear_ = 0.01f;
+        zFar_ = 10000.0f;
     }
-
-    // The free camera. `mouseLook`: the mouse turns it without the button (Play, ejected: the session holds the mouse).
-    void UpdateFromInput(InputManager& input, float dt, bool mouseLook = false);
-    // The look alone, for a camera something else moves (PlayerController): this frame's mouse joins what is owed, and the smoothing pays it.
-    void AddLookInput(InputManager& input);
-    void TakeOwedLook(float dt);
 
     // Camera movement helpers
     void MoveForward(float d)   { MoveRelative(0, 0, d); }
@@ -61,16 +39,16 @@ public:
 
     // Setters
     void SetPosition(const float3& pos) { position_ = pos; }
-    // Setting the orientation drops whatever the smoothed look input still owed (UpdateFromInput): a camera put somewhere
-    // by code must not glide on from there.
+    // Setting the orientation drops whatever the smoothed look input still owed (CameraController): a camera put
+    // somewhere by code must not glide on from there. The controller sees it by GetLookResets.
     void SetYawPitch(float yaw, float pitch) {
-        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw(); UpdateRotation(); lookOwedYaw_ = lookOwedPitch_ = 0.0f;
+        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw(); UpdateRotation(); ++lookResets_;
     }
     // Roll is deliberately NOT clamped the way pitch is: banking past vertical is a legitimate
     // pose, and the gimbal-lock reason for clamping pitch does not apply to the last angle.
     void SetYawPitchRoll(float yaw, float pitch, float roll) {
         yaw_ = yaw; pitch_ = pitch; roll_ = roll; ClampPitch(); WrapYaw(); WrapRoll(); UpdateRotation();
-        lookOwedYaw_ = lookOwedPitch_ = 0.0f;
+        ++lookResets_;
     }
     void SetRoll(float roll) { roll_ = roll; WrapRoll(); UpdateRotation(); }
     float GetYaw() const { return yaw_; }
@@ -81,22 +59,24 @@ public:
     // and none of them pays for a matrix build per call.
     const mat4& GetRotationMatrix() const { return rotation_; }
 
-    void SetHFov(float fov) { view_.hfov = fov; }
+    void SetHFov(float fov) { hfov_ = fov; }
     // The field of view the projection uses: the level's (SetHFov), or the player's at this aspect (SetPlayerFovDeg),
     // as of the last CalcMatrices.
-    float GetHFov() const { return effectiveHfov_ > 0.0f ? effectiveHfov_ : view_.hfov; }
+    float GetHFov() const { return effectiveHfov_ > 0.0f ? effectiveHfov_ : hfov_; }
+    // The level's own (SetHFov), whatever the player's: what the scene's main view carries.
+    float GetBaseHFov() const { return hfov_; }
     // 0 = the level's; otherwise degrees horizontal at 16:9, Hor+ (g_cameraPlayerFovDeg).
     void SetPlayerFovDeg(float deg) { playerFovDeg_ = deg; }
 
-    void SetZNearFar(float znear, float zfar) { view_.zNear = znear; view_.zFar = zfar; }
-    float GetZNear() const { return view_.zNear; }
-    float GetZFar() const { return view_.zFar; }
+    void SetZNearFar(float znear, float zfar) { zNear_ = znear; zFar_ = zfar; }
+    float GetZNear() const { return zNear_; }
+    float GetZFar() const { return zFar_; }
 
     // Fetch the view matrix
-    const mat4& GetViewMatrix() const { return view_.view; }
-    const mat4& GetProjMatrix() const { return view_.proj; }
-    const mat4& GetInvViewMatrix() const { return view_.invView; }
-    const mat4& GetInvProjMatrix() const { return view_.invProj; }
+    const mat4& GetViewMatrix() const { return view_; }
+    const mat4& GetProjMatrix() const { return proj_; }
+    const mat4& GetInvViewMatrix() const { return invView_; }
+    const mat4& GetInvProjMatrix() const { return invProj_; }
     const mat4& GetPrevViewMatrix() const { return prevView_; }
     const mat4& GetPrevProjMatrix() const { return prevProj_; }
     const mat4& GetProjMatrixNoJitter() const { return nonJitteredProj_; }
@@ -111,6 +91,9 @@ public:
     // Temporal consumers compare this revision instead of trying to infer a cut from a large
     // camera delta (a fast, continuous move is still valid history).
     uint64_t GetHistoryRevision() const { return historyRevision_; }
+    // Counts the orientation set by code (SetYawPitch, SetYawPitchRoll) and the cuts (ResetHistory): the look input a
+    // CameraController still owes this camera is dropped when it changes.
+    uint64_t GetLookResets() const { return lookResets_; }
 
     const float3& GetDirection() const { return dir_; }
 
@@ -122,38 +105,19 @@ public:
     // true once per cut, and the render camera repeats the cut after ITS CalcMatrices, as the game side did.
     bool TakePose(const Camera& game);
 
-    SceneView& GetView() { return view_; }
-    const SceneView& GetView() const { return view_; }
-
     // For passing to constant buffers/shaders
     const float3& GetPosition() const { return position_; }
-    float GetMoveSpeedMult() const { return moveSpeedMultiplier_; }
 
     uint32_t GetRenderLayerMask() const { return renderLayerMask_; }
-    void SetRenderLayerMask(uint32_t mask)
-    {
-        renderLayerMask_ = mask;
-        view_.renderLayerMask = mask;
-    }
-    void EnableRenderLayer(RenderLayer layer)
-    {
-        EnableLayer(renderLayerMask_, layer);
-        view_.renderLayerMask = renderLayerMask_;
-    }
-    void DisableRenderLayer(RenderLayer layer)
-    {
-        DisableLayer(renderLayerMask_, layer);
-        view_.renderLayerMask = renderLayerMask_;
-    }
-
-    // Mouse input (screen-space delta -> yaw/pitch)
-    void OnMouseMove(float dx, float dy, float sensitivity = 0.01f) {
-        AddYaw(dx * sensitivity);
-        AddPitch(dy * sensitivity);
-    }
+    void SetRenderLayerMask(uint32_t mask) { renderLayerMask_ = mask; }
+    void EnableRenderLayer(RenderLayer layer) { EnableLayer(renderLayerMask_, layer); }
+    void DisableRenderLayer(RenderLayer layer) { DisableLayer(renderLayerMask_, layer); }
 
 private:
-    SceneView view_{};
+    mat4 view_ = mat4::Identity();
+    mat4 proj_ = mat4::Identity();
+    mat4 invView_ = mat4::Identity();
+    mat4 invProj_ = mat4::Identity();
     mat4 prevView_ = mat4::Identity();
     mat4 prevProj_ = mat4::Identity();
     mat4 viewProj_ = mat4::Identity();
@@ -169,18 +133,16 @@ private:
     float yaw_;   // Left/right, can wrap freely
     float roll_ = 0.0f; // Bank about the view axis; wraps freely, never clamped
     mat4 rotation_ = mat4::Identity(); // cache of RotationRollPitchYaw(pitch_, yaw_, roll_)
-    float moveSpeed_ = 3.0f;
-    float sprintMultiplier_ = 2.5f;
-    float moveSpeedMultiplier_ = 1.0f;
-    // The look input not applied yet under mouse smoothing (radians; UpdateFromInput).
-    float lookOwedYaw_ = 0.0f;
-    float lookOwedPitch_ = 0.0f;
+    float hfov_ = 0.0f;  // the level's (SetHFov)
+    float zNear_ = 0.0f;
+    float zFar_ = 0.0f;
     uint32_t renderLayerMask_ = kRenderLayerAll;
     float playerFovDeg_ = 0.0f;  // SetPlayerFovDeg
     float effectiveHfov_ = 0.0f; // CalcMatrices: what the projection took (0 before the first)
     bool hasPrevViewProj_ = false;
     uint64_t historyRevision_ = 0u;
     uint64_t takenRevision_ = 0u; // TakePose: the game camera's revision last taken
+    uint64_t lookResets_ = 0u;    // GetLookResets
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

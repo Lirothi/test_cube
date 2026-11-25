@@ -25,6 +25,16 @@ namespace game
         Math::float3 scale = Math::float3(1.0f, 1.0f, 1.0f);
         float speed = 0.0f;   // m/s along the hull
     };
+    // Where a script holds the boat's camera (--set player.testOrbit / testOrbitPitch / testFreeCamera; architecture plan
+    // R12.3 moved them here from physics::PlayerSettings: a camera's numbers, not the player's or the keys'). The game
+    // half's: written by --set / MCP set_settings, read by PlaySession and Scene::Tick.
+    struct ScriptCameraHold
+    {
+        float orbit = 0.0f;      // radians about the boat: a script's shot from the side, held while it is not 0
+        float orbitPitch = 0.0f; // radians the chase camera looks further down: a shot from above (the wake's pattern)
+        bool free = false;       // the boat's camera stands down: the frame's camera is whatever set_camera says (a film)
+    };
+    ScriptCameraHold& ScriptCamera();
     VesselPose PoseOf(const physics::HelmState& helm);
     VesselPose PoseOf(const physics::VesselHull& hull);
 

@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "app/Systems.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/settings/Scalability.h"
 #include "app/scene/Scene.h"
 #include "ocean/OceanRenderConfigJson.h"
@@ -32,7 +32,7 @@
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/lighting/SpotLight.h"
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 
 namespace
 {

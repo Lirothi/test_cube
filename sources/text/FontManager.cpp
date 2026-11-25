@@ -2,34 +2,12 @@
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "rendering/core/Renderer.h"
-#include "text/FontGenerator.h"
-#include "input/InputManager.h"
-#include "app/Systems.h"
 #include <algorithm>
 
 using Microsoft::WRL::ComPtr;
 
 static bool FileExistsW_(const std::wstring& path) {
     return vfs::IsFile(path);
-}
-
-namespace {
-std::wstring JoinPath(const std::wstring& base, const std::wstring& leaf)
-{
-    if (leaf.empty()) {
-        return base;
-    }
-
-    std::wstring result = base;
-    if (!result.empty()) {
-        const wchar_t back = result.back();
-        if (back != L'\\' && back != L'/') {
-            result += L'\\';
-        }
-    }
-    result += leaf;
-    return result;
-}
 }
 
 void FontManager::LoadFromFolder(Renderer* r,
@@ -116,39 +94,4 @@ void FontManager::Clear()
     defaultName_.clear();
     fontsFolder_.clear();
     renderer_ = nullptr;
-}
-
-void FontManager::Tick()
-{
-    if (fontsFolder_.empty()) {
-        return;
-    }
-
-    return; // turn on only if needed
-
-    auto& input = Systems::GetInput();
-
-    if (!input.WasActionPressed("GenerateFont")) {
-        return;
-    }
-
-    const bool generateSdf = input.IsKeyDown(VK_SHIFT);
-    const FontGenerator::OutputType type = generateSdf ? FontGenerator::OutputType::Sdf : FontGenerator::OutputType::Coverage;
-
-    FontGenerator generator;
-    FontGenerator::Params params;
-    params.fontFile = JoinPath(fontsFolder_, L"Consolas.ttf");
-    params.pixelHeight = 32;
-    params.type = type;
-    params.fontsFolder = fontsFolder_;
-    if (generateSdf) {
-        params.spread = std::max(8, params.pixelHeight / 2 + 2);
-    }
-    else {
-        params.spread = 6;
-    }
-
-    if (!generator.Generate(params)) {
-        LOG_ERROR(logging::LogCategory::Asset, "font atlas generation failed");
-    }
 }

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "core/math/AABB.h"
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h"

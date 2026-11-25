@@ -16,7 +16,7 @@
 
 #include "rendering/core/RenderConstants.h"
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
@@ -35,7 +35,7 @@
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 #include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
-#include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
+#include "rendering/wind/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "rendering/streaming/TextureStreaming.h" // A3: manager tick
 #include "text/TextManager.h"

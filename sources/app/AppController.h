@@ -4,7 +4,7 @@
 #include "app/ui/DeveloperWindow.h"
 #include "app/ui/GameSettingsMenu.h"
 #include "app/game/PlaySession.h"
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
 #if WITH_EDITOR
 #include "editor/EditorController.h"

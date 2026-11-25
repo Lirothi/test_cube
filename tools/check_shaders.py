@@ -8,17 +8,28 @@ error. This does.
     python tools/check_shaders.py                 # every entry point listed below
     python tools/check_shaders.py exposure        # only shaders whose path contains "exposure"
 
+Architecture plan R5.2: besides the lists below, every permutation the cook's record names
+(tools/dist/shader_list.txt -- file|entry|stage|defines, what a shipped build compiles) is compiled at the cook's
+shader model. The two are a UNION: the record lacks shaders no recorded run asked for (vis_test_cs.hlsl,
+hzb_cull_selftest_cs.hlsl), and the lists below lack most of the record's graphics permutations.
+
 Exit code is non-zero if anything failed, so it can gate a change set.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SHADERS = PROJECT_ROOT / "shaders"
+SHADER_LIST = PROJECT_ROOT / "tools" / "dist" / "shader_list.txt"
+# The cook compiles the record at the profile's shader model (tools/dist/test.json "shaderModel": 6.6; the package's
+# shaders/dxil/cooked.txt says target=6_6).
+RECORD_MODEL = "6_6"
 
 # (file, entry point). Compute shaders, which need no permutation to build.
 COMPUTE_ENTRIES = [
@@ -377,7 +388,46 @@ def main() -> int:
             for line in (result.stderr or result.stdout).splitlines()[:12]:
                 print(f"      {line}")
 
-    print(f"\n{checked - failures}/{checked} compiled")
+    # R5.2: the cook's record -- every permutation a shipped build compiles -- minus what the lists above already did.
+    done = {(name, entry, ()) for name, entry in COMPUTE_ENTRIES + COMPUTE_ENTRIES_SM66}
+    done |= {(name, entry, tuple(sorted(defines))) for name, _t, entry, defines, _l in GRAPHICS_ENTRIES}
+    record = []
+    for line in SHADER_LIST.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("shaders/"):
+            continue
+        path, entry, stage, defs = (line.split("|") + ["", "", ""])[:4]
+        name = path[len("shaders/"):]
+        defines = tuple(sorted(d for d in defs.split(";") if d))
+        if (name, entry, defines) in done or (needle and needle not in name.lower()):
+            continue
+        done.add((name, entry, defines))
+        record.append((name, entry, stage, defines))
+
+    def compile_record(item):
+        name, entry, stage, defines = item
+        cmd = [str(dxc), "-T", f"{stage}_{RECORD_MODEL}", "-E", entry, *edefs]
+        for d in defines:
+            cmd += ["-D", d]
+        cmd += [str(SHADERS / name), "-Fo", "NUL"]
+        return item, subprocess.run(cmd, capture_output=True, text=True, cwd=SHADERS)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, (os.cpu_count() or 4) - 2)) as pool:
+        results = list(pool.map(compile_record, record))
+    for (name, entry, stage, defines), result in results:
+        checked += 1
+        tag = f"{name}:{entry}[{stage}{' ' + ';'.join(defines) if defines else ''}] (record)"
+        if not (SHADERS / name).exists():
+            failures += 1
+            print(f"FAIL  {tag} -- the record names a file that is not there")
+        elif result.returncode == 0:
+            print(f"ok    {tag}")
+        else:
+            failures += 1
+            print(f"FAIL  {tag}")
+            for line in (result.stderr or result.stdout).splitlines()[:12]:
+                print(f"      {line}")
+
+    print(f"\n{checked - failures}/{checked} compiled ({len(record)} from the cook's record)")
     return 1 if failures else 0
 
 

@@ -1,0 +1,57 @@
+# Architecture plan R0.2: today's include violations of the layer table in tools/check_layers.py.
+# One `source -> target` per line (paths relative to sources/). The list only shrinks:
+# `python tools/check_layers.py --update` removes lines whose include is gone and never adds one.
+# A step that removes an edge says so in its "Сделано" (docs/architecture_review_plan.md section 11).
+app/App.cpp -> editor/EditorController.h
+app/App.cpp -> editor/intent/EditorMcpServer.h
+app/AppController.h -> editor/EditorController.h
+app/levels/JsonLevel.cpp -> app/Systems.h
+app/levels/JsonLevel.cpp -> app/game/PlayerStartJson.h
+app/levels/JsonLevel.cpp -> app/game/RaceCourseJson.h
+app/main.cpp -> editor/assets/MaterialFileGen.h
+app/scene/Scene.cpp -> app/Systems.h
+app/scene/Scene.h -> app/game/PlayerStart.h
+app/scene/Scene.h -> app/game/Race.h
+app/scene/Scene.h -> app/game/VesselCamera.h
+app/scene/SceneObjectRegistry.cpp -> app/Systems.h
+app/scene/SceneRenderer.cpp -> app/Systems.h
+app/scene/SceneRenderer_Geometry.cpp -> app/Systems.h
+app/scene/SceneRenderer_Graph.cpp -> app/Systems.h
+app/scene/SceneRenderer_Lighting.cpp -> app/Systems.h
+app/scene/SceneRenderer_Post.cpp -> app/Systems.h
+app/scene/SceneRenderer_Reflections.cpp -> app/Systems.h
+app/scene/SceneRenderer_Shadows.cpp -> app/Systems.h
+app/ui/DeveloperWindow.cpp -> editor/EditorController.h
+materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
+ocean/OceanRenderable.cpp -> app/scene/Scene.h
+ocean/OceanSimulation.h -> app/scene/SceneView.h
+ocean/WaterMask.cpp -> physics/PhysicsWorld.h
+physics/PhysicsWorld.cpp -> ocean/OceanReadback.h
+physics/PhysicsWorld.cpp -> ocean/OceanRenderable.h
+rendering/core/RenderTargetManager.cpp -> rendering/shadows/ShadowSettings.h
+rendering/core/RenderTargetManager.h -> rendering/lighting/LightManager.h
+rendering/core/Renderer.cpp -> rendering/lighting/VolumetricCloudSettings.h
+rendering/core/Renderer.cpp -> rendering/shadows/ShadowSettings.h
+rendering/core/Renderer.h -> rendering/lighting/LightManager.h
+rendering/debug/DebugGrid.cpp -> rendering/renderables/RenderableObject.h
+rendering/debug/DebugGrid.h -> rendering/renderables/RenderableObjectBase.h
+rendering/debug/LodDebugView.cpp -> rendering/renderables/RenderableObject.h
+rendering/meshes/GpuInstancedModels.cpp -> rendering/renderables/InstanceTypes.h
+rendering/meshes/GpuInstancedModels.h -> rendering/renderables/GBufferRenderable.h
+rendering/meshes/MeshManager.cpp -> rendering/shadows/TessySettings.h
+rendering/meshes/StaticMesh.h -> rendering/renderables/GBufferRenderable.h
+rendering/post/BloomRenderer.h -> app/scene/SceneResourceBootstrapper.h
+rendering/renderables/RenderableObject.cpp -> ocean/OceanBuoyancy.h
+rendering/renderables/RenderableObject.cpp -> ocean/WaterMask.h
+rendering/renderables/RenderableObject.cpp -> physics/PhysicsWorld.h
+rendering/renderables/RenderableObject.h -> ocean/BuoyancyLayout.h
+rendering/renderables/RenderableObject.h -> physics/PhysicsTypes.h
+rendering/renderables/TransparentStaticMesh.cpp -> app/scene/Scene.h
+rendering/streaming/StreamingBounds.cpp -> rendering/renderables/GBufferRenderable.h
+rendering/streaming/StreamingBounds.cpp -> rendering/renderables/RenderableObject.h
+rendering/streaming/StreamingBounds.cpp -> rendering/scene/SceneFrameData.h
+rendering/streaming/TextureStreamingManager.cpp -> rendering/scene/SceneFrameData.h
+vfx/ParticleEmitterObject.cpp -> ocean/WaterMask.h
+vfx/VesselSpray.cpp -> app/scene/Scene.h
+vfx/VesselSpray.cpp -> ocean/BuoyancyLayout.h
+vfx/VesselSpray.cpp -> physics/PhysicsWorld.h

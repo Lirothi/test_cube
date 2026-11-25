@@ -24,7 +24,7 @@ struct LevelLoadOptions
     bool preserveCameraTransform = false;
     std::optional<LevelCameraOverride> cameraOverride;
 #if WITH_EDITOR
-    EditorSceneDocument* editorDocument = nullptr;
+    LevelDocumentSink* editorDocument = nullptr;
 #endif
 };
 

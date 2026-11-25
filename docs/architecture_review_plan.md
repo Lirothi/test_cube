@@ -3275,6 +3275,42 @@ R3 и R5 — M, с низким риском, друг от друга не за
 - **R0.4.** Строка в `AGENTS.md` рядом с `check_logging.py`: `check_layers.py` — перед коммитом, как остальные
   `check_*.py`; `arch_metrics.py` и `frame_diff.py` — инструменты, с одной строкой о том, что они меряют.
 
+**Сделано (2026-11-25).**
+- R0.1: `tools/arch_metrics.py` — одна команда, 1.3 с на HEAD. Разделы: карта (§1), слои (компоненты связности,
+  рёбра таблицы F1, сводка `check_layers`), охват заголовков (F5), большие файлы, функции и поверхность классов (F2,
+  F12), счётчики §11 с именем шага, который их двигает; `--mechanic <коммит>...` (бывший `mechanic_cost.py`, §9.4),
+  `--root <дерево>`. Воспроизводимость: на дереве 11-17 (`git archive 1600b693`) карта даёт числа §1 — 226 401
+  строка (§1 считал НЕПУСТЫЕ строки; подпись инструмента теперь это говорит), rendering 179 / 63.1 тыс., editor 141 /
+  59.5, app 106 / 51.6, core 59 / 16.2, ocean 31 / 15.5, physics 10 / 6.5, прочие 39 / 13.9; 250 `.cpp`; связная
+  компонента — 38 папок; `WinMain` — 1602 строки; ключей в `main.cpp` — 179; средний `.cpp` — 59 заголовков,
+  13.9 тыс. строк; `Renderer.h` пересобирает 138 из 250, `Camera.h` тянет 68, `App.h` — 179; поверхность классов
+  совпала с F2. Расхождения больше 5 %: `value(` — 681 в 53 файлах против 770 (план считал шире: `\bvalue\(` с
+  комментариями даёт 764). Меньше 5 %: файлов 567 против 569 (по одному в `app/` и `core/`; в архиве коммита их
+  нет — видимо, лежали в рабочем дереве), ключей всего 216 против 218, функций длиннее 750 строк 13 против 12 и
+  длиннее 300 — 44 против 45 (эвристика «скобка в колонке 0»). На HEAD: 577 файлов, 230 128 строк, core +7 % (волна
+  1), компонента — 39 папок (новая `editor/dist`). Счётчики §11 на HEAD: `Systems::Get` вне `app/` и `editor/` —
+  4 (+2 закомментированных), `extern` в `App.h` — 50, сравнений в `ApplySweepValue` — 616 (`App.cpp:465-2113`), в
+  `ReadSweepValue` — 70 (функция кончается на 2205; 71-е в диапазоне R2.0 — `r.name == "GPU.Frame"` другой
+  функции), `static_assert(sizeof` — 67 в 31 файле, вызовов `As*()` — 80 в 25, строковых действий — 49 в 6, `test*`
+  — 65 в 6, `#if WITH_EDITOR` — 303 (в `rendering/` 44), `WaitForPreviousFrame(` — 37 (74 до волны 1).
+  `tools/arch/` удалена.
+- R0.2: `tools/check_layers.py`. Таблица слоёв §4 по папкам: core < platform (`input`, `assets`) < render-core
+  (`rendering/core`, `descriptors`, `meshes`, `streaming`, `debug`; `materials`, `text`, `ui` — соседи, include между
+  ними разрешён) < render-feat (остальной `rendering/`) < world-side (`physics`, `ocean`, `vfx` — без соседства:
+  «сбоку, зовут только вниз») < world (`app/scene`, `app/camera`, `app/levels`) < game (`app/game`) < app < editor.
+  У rhi папки пока нет (R4.5). Нарушение — include вверх или вбок между строками слоя без соседства. Допуск
+  `tools/arch_layers_allow.txt` — 91 include «файл → файл»; `--update` только убирает исчезнувшие; строка допуска,
+  чьего include больше нет, — тоже находка (храповик не ослабевает молча); `--summary`, `--selftest` (13 случаев,
+  PASS). Числа плана сошлись: core → выше — 6 в 3 файлах, rendering → `app/` — 23 в 17. Контроль: временный
+  `#include "app/App.h"` в `core/StringMatch.h` — код 1 и строка `sources/core/StringMatch.h:70: includes
+  app/App.h -- up: core (core) -> app (app)`; после возврата — 0.
+- R0.3: `tools/frame_diff.py a.png b.png` (`--threshold`, `--mask`, `--rect`, `--out`, `--max` — код 1 выше
+  порога). Один кадр дважды — 0.0000 %. Пол (Release на `be9c4487`, рецепт 11.3, два запуска): лагуна 0.52 %,
+  ванная 0.11 %, море 0.22 % — лагуна чуть выше 0.4 % из 11.3. Эти снимки — «до» для R1.
+- R0.4: абзац в `AGENTS.md` («Build and gates»).
+- Не покрыто: разрешение include повторяет MSVC не целиком (папки родительских включающих не смотрятся — в дереве
+  таких include нет: неразрешённые — только сторонние); include внутри `#if 0` считаются.
+
 #### R1. Дешёвые разрезы циклов (M, риск низкий)
 
 Только переносы и include. Гейт типа A; для R1.4 и R1.5 — ещё картинка (B). После каждого подшага допуск R0.2
@@ -3310,6 +3346,70 @@ R3 и R5 — M, с низким риском, друг от друга не за
 - **R1.7. `JsonLevel.cpp:85`** включает `editor/scene/EditorSceneDocument.h`: загрузчик отдаёт разобранные
   объекты через интерфейс-приёмник, объявленный в `app/levels/`.
 
+**Сделано (2026-11-25).** Допуск R0.2: 91 → 53 include (R1.1 −2, R1.2 −4, R1.3 −5, R1.4 −18, R1.5 −5 и +2 замены,
+R1.6 −5, R1.7 −1). `core` не включает ничего выше себя и вышла из большой компоненты (39 → 36 папок, при том что
+новых папок три: `rendering/view`, `rendering/scene`, `rendering/wind`). Из 23 include `app/` в `rendering/` остались
+два — `BloomRenderer.h` → `SceneResourceBootstrapper.h` и `TransparentStaticMesh.cpp` → `Scene.h` (R6, R6.3).
+- R1.1: примитивы → `rendering/meshes/MeshPrimitives.h` (перенос); затем отдельным диффом удалены ложка и шахматная
+  текстура — вызывающих нет (жив только `BuildCubeCW`, его зовёт `Skybox.cpp`). В `Helpers.h` остались `ThrowIfFailed`,
+  `GetTimeSeconds` и `<Windows.h>` (у Release нет PCH). `Material.cpp` получил прямой `Renderer.h` (шёл через
+  `Helpers.h`).
+- R1.2: `Profiler::EmitOverlay` и `Profiler::Tick` (HUD и клавиша захвата трассы) → `app/ui/ProfilerHud.cpp`;
+  GPU-половина (блок `#if PROF_GPU_ENABLED`: кучи запросов, считывание, калибровка, `kGpuFrameKey`) →
+  `rendering/core/GpuProfiler.cpp`; общие для обеих `ToMicroseconds` и индексы GPU-дорожек →
+  `core/profiling/ProfilerDetail.h`. Класс и интерфейс областей (`ScopedGpu`) — в `core`. Вызов `Systems::GetInput` в
+  `Profiler::Tick` (пункт R1.3) ушёл с ним в `app/`. `profiler_regression` берёт `GpuProfiler.cpp` и проходит (PASS,
+  с проверкой отладочного слоя и GBV).
+- R1.3: `OceanControlsWindow::Draw(renderer, ocean)` — симуляцию даёт `DeveloperWindow`; `physics::World::SetDebugDraw`
+  — систему линий даёт `Scene::TickPhysics` рядом с `SetCamera` (без неё линии не строятся: мир без сцены, гейты, — а
+  раньше там был бы assert `Systems`). `FontManager::Tick` удалён целиком, а не получил параметр: после
+  `return; // turn on only if needed` он не исполнялся, а `Consolas.ttf`, из которого он строил атлас, удалён 11-13;
+  вместе с ним — `JoinPath` и три include. Закомментированные вызовы в `RenderableObject.cpp` и неиспользуемый
+  include `Systems.h` в `Renderer.cpp` удалены. `grep -rn "Systems::Get" sources` вне `app/` и `editor/` пуст; ни одно
+  из пяти рёбер `Systems.h` не держится на другом include. `--physics-gate` — 16 гейтов, 0 упало; `physics.debug:1`
+  рисует линии формы лодки. Попутно: `FontGenerator` больше никто не зовёт, привязка `GenerateFont` в
+  `input/bindings.json` мертва (это R12.1).
+- R1.4: `Camera` → `rendering/view/Camera.{h,cpp}`: поза, углы, линза, слои, матрицы, джиттер, история — без ввода и без
+  `SceneView`. Ввод, сглаживание мыши, множитель скорости колеса и глобалы `g_camera*` →
+  `app/camera/CameraController.{h,cpp}`; контроллер один, у игровой камеры (`Scene::CameraControllerRef`). Долг
+  сглаживания раньше обнуляли `SetYawPitch*` и `ResetHistory` самой камеры; теперь камера считает эти события
+  (`GetLookResets`), а контроллер сбрасывает долг при следующем обращении — долг читает только он, итог тот же.
+  `SceneView` главного вида стал членом `Scene` (`cameraView_`): `Scene::SyncCameraView` сразу после
+  `renderCamera_.CalcMatrices` копирует в него матрицы, линзу и слои (раньше их писал `CalcMatrices` в член камеры;
+  между ними вид никто не читает). `OnMouseMove` (без вызывающих) не перенесён. `Renderer.cpp` получил прямой
+  `RenderGraph.h` (шёл через старый `Camera.h`). `Camera.h` тянул 68 проектных заголовков, теперь 2.
+- R1.5: `SceneFrameData.h` разобран по структурам, чистым переносом (сверено построчно: из старого файла пропали
+  только два include): SSR → `rendering/lighting/SsrSettings.h`; `HeightFogSettings`, её кнобы и упаковка →
+  `rendering/lighting/HeightFogSettings.h`; `GtaoSettings` → `rendering/lighting/GtaoSettings.h`; `BloomSettings` →
+  `rendering/post/BloomSettings.h`; остальное (`ReflectionSource`, транспортные глобалы, `SceneRenderSettings`,
+  `SceneFrameData`) → `rendering/scene/SceneFrameData.h`, а `SceneView` там — предварительным объявлением (виды
+  достаются по указателям); `SceneRenderConfig.{h,cpp}` → `rendering/scene/`. `SceneFrameData.h` тянул 76 заголовков,
+  теперь 34. Два ребра не исчезли, а сменили цель: `rendering/streaming/StreamingBounds.cpp` и
+  `TextureStreamingManager.cpp` → `rendering/scene/SceneFrameData.h` — render-core → render-feat, по-прежнему вверх на
+  слой (стриминг читает кадр). `--update` не добавляет строк, поэтому эти две внесены в допуск руками как замена
+  прежних двух; снимает их R4 / R6.
+- R1.6: `vfx/WindState.h` → `rendering/wind/WindState.h` (render-core; `namespace vfx` оставлен — это перенос).
+- R1.7: `app/levels/LevelDocumentSink.h` — приёмник (`BeginLevel`, `LevelObjectId`, `AddLevelObject`, `EndLevel`);
+  `EditorSceneDocument` реализует его четырьмя обёртками своих методов; `LevelLoadContext` и параметры `LevelManager`
+  держат `LevelDocumentSink*`; `JsonLevel` не включает `editor/`, ид объектов в нём — `Scene::SceneObjectId`.
+- Таблица слоёв: `rendering/view`, `rendering/wind` — render-core; `rendering/scene` — render-feat; `materials` —
+  render-core с R0.2.
+- Проверки. После каждого подшага — три конфигурации без предупреждений, `check_*.py` и `check_layers.py` — 0.
+  `intent_regression` — PASS после R1.1, R1.2, R1.4 (с R1.3), R1.5, R1.7 (с R1.6). Картинка (R1.1-R1.3, R1.4, R1.5):
+  эталон — Release ревизии `be9c4487`, собранный во временном worktree, против текущей сборки, попеременно, три вида
+  11.3. Между плечами не больше, чем внутри плеча: после R1.4 — лагуна 0.000-0.019 % (внутри 0.012), ванная 0.027-
+  0.088 (0.061-0.080), море 0.000-0.065 (0.000-0.066); после R1.5 — ванная 0.056-0.113 % на трёх парах (внутри
+  0.059-0.131). R1.7 — живым прогоном: свой редактор (Release_Editor, `--mcp-port=8143`) эталона и текущей сборки,
+  `query sceneSummary` на wind_test дважды на каждой — 1650 объектов, те же ассеты, группы, зоны и рамка; центр рамки
+  по x дрожит −48.8 / −48.9 в обоих бинарях (округление на −48.85).
+- Найдено по пути: снимки «до» 15:34 расходились с тем же кодом через 20 минут на 0.63-0.69 % (море: листва, блики,
+  кромка лодки) — дрейф между сессиями, а не правка; поэтому «до» снимается эталонным бинарём попеременно с «после», в
+  одном окне времени (§11.3 так и велит). Один кадр ванной из одиннадцати текущей сборки вышел вдвое темнее (средняя
+  яркость 48 против 87; 2026-11-25 16:15:31, кадр 1154; лог сохранён в рабочей папке сессии); шесть повторов в обоих
+  плечах не воспроизвели — похоже на переходный режим автоэкспозиции, вне R1.
+- Не покрыто: ввод мыши в Play (сглаживание взгляда) живым прогоном — headless не двигает мышь; кадр Play сравнивать
+  бессмысленно (игрок идёт, пройденное к снимку зависит от темпа), он просмотрен глазами.
+
 #### R3. Командная строка и харнессы (M, риск низкий)
 
 - **R3.1. `BootOptions`.** 50 `extern` в `app/App.h` → одна структура, заполняемая в `main.cpp`. Перенос по
@@ -3317,12 +3417,119 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `extern` (число `extern` упало на размер группы — записать в «Сделано»); ключи группы работают как раньше — для
   кадра и снимка тот же PNG на полу шума, для харнессов та же строка вердикта и код выхода; гейт A, а для
   дистрибуции — B (Shipping, Development, Cook).
+
+  **Сделано (2026-11-25).** `app/BootOptions.h`: `struct BootOptions { Frame frame; Harness harness; Editor editor;
+  Dist dist; }` и `BootOptions& Boot()` (статический объект функции в `App.cpp`, где жили глобалы); `main.cpp`
+  заполняет, остальные читают и, как раньше, гасят то, что взяли один раз (окно при загрузке, снимок). Комментарии
+  к ключам переехали к полям (из `App.h` и `App.cpp`, без потерь). Замена имён — скриптом по таблице
+  «глобал → поле», с проверкой границ слова; локальный `extern int g_bootMcpPort` в `CommandBarPanel.cpp` заменён
+  include `app/BootOptions.h`. Число `extern` в `App.h`: 50 → 27 (кадр и снимок, 23) → 17 (харнессы, 10) → 6
+  (редактор, 11) → 3 (дистрибуция, 3). Остались `g_timeScale` (кноб `frame.timeScale`, ключа нет), `g_modelBusy` и
+  `g_modelBusyBackground` (состояние модели между редактором и циклом) — это не командная строка. Проверки, эталон
+  `be9c4487` против текущей сборки:
+  - кадр и снимок: три вида 11.3 попеременно — между плечами 0.000-0.207 %, внутри 0.000-0.209 %; `--sweep` с
+    `--profdump`, `--window=1280x720`, `--dlss=dlaa`, `--scalability=high` — оба PNG 1280x720, 0.006-0.007 %, три
+    файла профайлера, те же строки лога; `--shot-count=2 --shot-step=0.5` — 0.049-0.081 %; `--trace=20` — трасса
+    записана в обоих (7536 и 7541 событий);
+  - харнессы: `--scalability-check` — `scalability check: PASS -- 326 reads, 0 failed`, код 0 в обоих;
+    `--scene-stress=3` и `=6` со `--stress-level` — `scene-stress verdict: CLEAN`, код 0 в обоих. `--intent` и
+    `--chat` живьём не запускались: им нужна локальная модель (~38 ГБ);
+  - редактор: `--inspect=timeOfDay#fog`, `--dev-tab=gi`, `--log-window`, `--edit-mesh`, `--show-import` (Release_Editor)
+    и `--settings-menu=graphics` (Release) — тот же кадр (0.001-0.29 %; 0.29 — время в строках журнала), ни одного
+    предупреждения; `--mcp-port` — им пользовалась проверка R1.7;
+  - дистрибуция: `--build-dist=test` — окно открыто на профиле, проверка кука идёт в обоих (0.97 % — её строки
+    журнала в окне); `playByLevelRule` ставит только Shipping по `boot.json` — проверено сборкой;
+  - шесть конфигураций (Debug, Release_Editor, Release, Shipping, Development, Cook) — без предупреждений;
+    `check_*.py` и `check_layers.py` — 0; `intent_regression` — PASS после группы «кадр и снимок» и после всех.
+  Попутно: Debug-линковка один раз упала на `LNK1163 invalid selection for COMDAT` в `main.obj` — удалён объектник,
+  пересобрано (известная ловушка).
 - **R3.2. Таблица ключей.** Имя, справка, разбор, разрешён ли в Shipping; `--help` и список Shipping строятся
   из неё (`main.cpp` — 1917 строк). Готово: `--help` печатает все ключи из `AGENTS.md`; Shipping отвергает то же,
   что раньше (сравнить строки `ignored` в логе до и после на пяти ключах).
+
+  Шаг больше одной сессии (правило 6) — разбит: **R3.2a** — таблица имён, синтаксиса значения, справки и флага
+  Shipping; `--help` и фильтр Shipping из неё; проверка, что таблица и код говорят об одном. **R3.2b** — разбор
+  переезжает в строку таблицы (функция на ключ вместо ветки `WinMain`), по группам, как R3.1.
+
+  **Сделано R3.2a (2026-11-25).** `app/BootSwitches.{h,cpp}`: `boot::Switch { name, value, help, shipping }`, 218
+  строк — каждый ключ, который читает код (опись — скриптом по литералам `"--…"` в коде без комментариев: 215, плюс
+  `--help` и `--scene-stress`, `--scene-stress-gbv`, которые `main.cpp` ищет без дефисов), справка — одной строкой
+  по комментарию у места разбора, сверена с кодом там, где его не было. `--help` (Release, Release_Editor, Debug)
+  печатает таблицу в консоль, из которой запущен (`AttachConsole`), и в сессионный лог (`WriteRawLines`), код 0;
+  все ключи из `AGENTS.md` в ней есть, кроме чужих: `--dump` (`intent_regression`), `--load-mode` и `--mlock`
+  (llama-server), `--mask`, `--max`, `--rect` (`frame_diff.py`), `--out` (`build_dist.py`), `--update`
+  (`check_layers.py`). Фильтр Shipping (`shipping::FilterCommandLine`) спрашивает строку таблицы вместо своего списка
+  `kAllowed` (14 ключей, флаг `shipping` стоит ровно у них). Shipping эталона `be9c4487` и текущий с одним набором
+  (`--level --editor --set --no-hud --gbv --shot-count --help --window --user-dir`, на отдельном рабочем столе:
+  без пакетов оба показывают окно «content is missing») отбросили одни и те же шесть ключей (`a shipped build
+  ignores --editor | --set=cloud.enabled:0 | --no-hud | --gbv | --shot-count=2 | --help`) и оставили одни и те же три.
+  `tools/check_switches.py` (перед коммитом; строка в `AGENTS.md`): ключ, который читает код, есть в таблице; строку,
+  которую никто не читает, — находка; дубль — находка; код выхода = находки; `--selftest` PASS (4 случая).
+  Контроль на дереве: строка `--then` заменена строкой, которую никто не читает, — две находки с именами, код 2;
+  после возврата — 0. Семь сборок (шесть конфигураций и эталонный Shipping) без предупреждений.
+  Не покрыто: разбор остаётся в `WinMain` и у своих хозяев — это R3.2b.
 - **R3.3. Харнесс — объект** `OnBoot / OnFrame / Verdict` в `app/harness/`. По одному на шаг, в порядке:
   shot / sweep / profdump / trace → mem-readout → scalability-check → rt-audit → scene-stress → intent / chat.
   Готово для каждого: прежний ключ, прежняя строка вердикта в сессионном логе, прежний код выхода.
+
+  **Сделано (2026-11-25), кроме scene-stress и редакторской половины intent / chat.** `app/harness/Harness.h`:
+  `harness::Harness { Name, Wanted, OnBoot, OnFrame, Verdict }` и `FrameContext { renderer, scene, levelManager,
+  settings, running }`. Харнессы живут локальными объектами `App::Run` и зовутся из `afterFrame` на прежних местах, в
+  прежнем порядке; тела перенесены как были, статики функций стали полями (инициализация при первом `OnFrame`, как у
+  статика при первом проходе), `isRunning_` — `ctx.running`.
+  - R3.3a: `CaptureHarnesses.{h,cpp}` — `ShotHarness` (`--shot`, `--shot-count`, `--sweep`; применение значения —
+    через переданный `ApplySweepValue`), `ProfDumpHarness`, `TraceHarness`. Эталон против текущей: `--sweep` с
+    `--profdump` — те же строки в том же порядке (дамп `_00`, снимок `_00`, дамп `_01`, снимок `_01`, итоговый дамп),
+    PNG 0.013-0.014 %; серия — 0.002-0.012 %; `--trace=20` — `trace saved` в обоих; коды 0.
+  - R3.3b: `GateHarnesses` — `MemGateHarness` (`memgate::OnFrameEnd`, `Verdict` = `memgate::ExitCode`). Контроль
+    `--mem-selftest=leak@mesh`: `mem readout: FAIL (2 of 50 series …)`, код 2 в обоих; `--mem-readout=30` —
+    `PASS`, код 0 в обоих. Попутно: эталон один раз из двух дал `FAIL private 1.71 MB/s` (код 1) — серия `private`
+    ходит около порога 1 MB/s на этом виде (во втором прогоне эталона она же 1.82 и PASS — значит, не судится всегда
+    одинаково); с переносом не связано, находка для M-шага памяти. И первый мой контроль `leak@Mesh` не сработал ни у
+    кого: тег пишется как в `MemTags.h` (`mesh`), ошибка в логе есть, а код выхода 0 и вердикт PASS — контроль с
+    опечаткой ничего не доказывал и выглядел зелёным. Исправлено отдельным диффом: нечитаемый `--mem-selftest` или
+    `--mem-readout` — код 2 (`memgate::ExitCode`, `MemGates.cpp`). Контроль: `leak@Mesh` до правки — код 0, после —
+    код 2; `--mem-readout=5` без самопроверки — код 0.
+  - R3.3c: `ScalabilityCheckHarness` — `ScalabilityCheck`, `ScalabilityCheckCell`, `StepScalabilityCheck` перенесены
+    из `App.cpp` как были (195 строк; читатель кнобов — переданный `ReadSweepValue` под прежним именем), счётчик
+    `g_levelLoadsCompleted` переехал с ними (`harness::`). `scalability check: PASS -- 326 reads, 0 failed`, код 0 в
+    обоих.
+  - R3.3d: `RtAuditHarness` — проверка вердикта `rtaudit::Finished` переехала из цикла в конец `afterFrame` (сразу
+    после него она и стояла; аудит включён только в потоковой ветке, так что в однопоточной ничего не меняется); зонды
+    аудита остались в цикле. `--rt-audit=8` — `rt audit: PASS`, `--rt-audit-selftest` — ожидаемый `FAIL … object #0
+    model matrix`, коды 0 в обоих.
+  - R3.3f, сторона `App`: `IntentHarness` — конец прогона `--intent` (вердикт или тайм-аут). Фраза точной формы идёт
+    без модели, по грамматике: `--intent="spawn 3 coconut_palm"` — `intent harness pass 1/1 … action=spawn`, выход на
+    29-м кадре, код 0 в обоих (это и проверка R3.1: `--intent` ходит, хотя там записано, что не запускался).
+  Три конфигурации без предупреждений после каждой группы; `check_*.py` — 0.
+
+  Осталось, больше одной сессии (правило 6) — **вопрос владельцу**:
+  - **R3.3e. scene-stress.** `SceneStressDriver::Run` (`app/diagnostics/SceneStress.cpp`, ~1300 строк) крутит свой
+    цикл (`RenderFrames_`, операции между кадрами, опрос InfoQueue, DRED). Харнесс в общем цикле — это переписать его
+    управление в машину состояний по кадрам. Гейт GBV держится на нём.
+  - **R3.3f, сторона редактора.** Состояние `headlessIntent*` / `headlessChat*` (`EditorController.h:153-180`) и его
+    ход в `EditorController::Draw` — в харнесс, который зовёт редактор через узкий интерфейс.
+  - **R3.4** зависит от обоих.
+
+  **Ответ владельца (2026-11-25): «Дальше R5, R2, R12».** R3.3e, редакторская половина R3.3f, R3.4 и R3.2b остаются
+  подшагами R3 и делаются после R12.
+
+  **Сделано R3.3f, сторона редактора (2026-11-25).** Состояние харнесса — `headlessIntent*`, `headlessChat*`,
+  `harnessRunsCommands_` (десять полей `EditorController.h`) — ушло в `app/harness/IntentHarness.cpp`
+  (`EditorScriptState`, статик функции); два блока `EditorController::Draw` перенесены как были в
+  `harness::EditorIntentFrame` и `harness::EditorChatFrame`. Редактор зовёт их на прежних местах (команда исполняется
+  там, где живёт `actionCtx` кадра; порядок с `g_modelBusy` между ними тот же) и отдаёт себя узким интерфейсом
+  `harness::EditorScriptHost` (`IntentHarness.h`): модель тёплая / занята, начать и опросить проход, открыть строку
+  команд, отправить фразу, ждёт ли превью Run, нажать Run, путь уровня — локальный класс в `Draw` над `commandBar_`,
+  `commandStack_`, `buryDepthPercent_`. Слой: editor включает app (вниз), app/harness редактора не знает.
+  `grep headless sources/editor/EditorController.h` — пуст. `EditorController.h` был целиком LF — нормализован в CRLF.
+  Проверено (Release_Editor, `--editor --mcp-port=8143`, эталон `be9c4487` и текущая, b c b c): `--intent="spawn 3
+  coconut_palm"` — `intent harness: … (1 pass(es))` на кадре 28, `pass 1/1 … action=spawn` на 29, код 0 у всех
+  четырёх; `--intent-repeat=2` — проходы на кадрах 29 и 31; `--editor --shot` — b-c 0.022 / 0.051 % при полу 0.023 /
+  0.052 %, кадр просмотрен (панели, уровень); `mcp_summary.py` — расходится только `sceneSummary/centre` на 0.1 м, и
+  так же расходится текущая сама с собой (поплавки качаются: прогон без `--wind-freeze`); `inspector_regression`,
+  `intent_regression` — PASS; три конфигурации без предупреждений; `check_*.py` — 0. Не покрыто: `--chat` / `--then`
+  (нужна локальная модель, 38 ГБ — переносом тела строка в строку, без прогона).
 - **R3.4.** `App::Run` — один цикл, который крутит список харнессов; состояние `headless*` уходит из
   `EditorController`. Готово: `grep headless sources/editor/EditorController.h` пуст; все харнессы R3.3 — прежние
   вердикты и коды; `--editor --shot` и `--play` как раньше (гейт D).
@@ -3344,10 +3551,51 @@ R3 и R5 — M, с низким риском, друг от друга не за
   Готово: объединение собирается, код 0; намеренная ошибка в шейдере, который есть только в офлайн-списке
   (`vis_test_cs.hlsl`), и в шейдере, который есть только в записи кука, — оба раза код 1 с именем файла
   (контроль); строка в `AGENTS.md` «перед коммитом» рядом с остальными `check_*.py`.
+
+  **Сделано R5.1-R5.2 (2026-11-25).**
+  - R5.1: `shaders/shared/shader_types.h` — имена типов HLSL (`float2..float4x4`, `uint`) для C++ из `core/math` в
+    `namespace shader_shared` (HLSL берёт свои), макросы `TC_SHARED_BEGIN/END`, и пробная `SharedLayoutProbe` —
+    раскладка `WaterCompositeCB`. C++: `SceneRenderer_Reflections.cpp` включает `"shaders/shared/shader_types.h"` и
+    проверяет `static_assert(sizeof(SharedLayoutProbe) == sizeof(WaterCompositeConstants))` (112). HLSL:
+    `water_composite_cs.hlsl` включает `"shared/shader_types.h"`; обработчик include движка резолвит его от
+    `shaders/` через VFS (вложенный путь работает: шейдер собран в рантайме, 8 КБ DXIL, кадр моря против эталона —
+    0.03 %). `Material::CookShaders` при `shaderSources: true` пакует ещё `shaders/shared/*.h`. Из корня:
+    `x64/Cook/test_cube.exe --cook=tools/dist/test.json --cook-out=<папка сессии>` — код 0, `shaders.tcpak` — 468
+    файлов; `--pak-list=…/shaders.tcpak` — код 0, в списке `shaders/shared/shader_types.h 1789 bytes`. Контроль:
+    Cook эталона `be9c4487` (собран в worktree) на том же дереве — 467 файлов, общего заголовка нет. Кук пишет только
+    в `--cook-out` (`cook_report.json`, `base.tcpak`, `shaders.tcpak`) — проверено по `Cook.cpp` до запуска.
+    Шейдер был в рабочей копии LF при `eol=crlf` — нормализован.
+  - R5.2: `check_shaders.py` после своих списков компилирует каждую перестановку записи кука на 6_6 (параллельно),
+    без повторов того, что уже собрано: 330/330 (176 — из записи), код 0, 18 с. Контроль: синтаксическая ошибка в
+    `vis_test_cs.hlsl` (только офлайн-список) — `FAIL vis_test_cs.hlsl:CSMain`, код 1; в `water_mask_lid.hlsl`
+    (только запись кука — прежняя проверка его не видела вовсе) — `FAIL water_mask_lid.hlsl:PSMain[ps] (record)` и
+    `:VSMain[vs]`, код 1; после возврата — 330/330. Строка в `AGENTS.md` «перед коммитом».
 - **R5.3-...** По одному пассу на шаг: cbuffer и **именованные** номера регистров в общий заголовок;
   `static_assert(sizeof ...)` остаются (на 11-24 их 67 в 31 файле — это и есть опись). Порядок: lighting,
   compose, glass, поверхность океана, затем остальные. Гейт: суженный GBV на пасс с самопроверкой Skybox,
   картинка. **Перед правкой регистров убить свой редактор** (горячая перезагрузка шейдера со старой привязкой).
+
+  **Сделано R5.3a — lighting (2026-11-25).**
+  - `shaders/shared/shader_types.h` + `TC_REGISTER(kind, slot)` (склейка `register(t##N)` через макрос с раскрытием
+    имени). `shaders/shared/lighting_slots.h`: `LIGHTING_B_PER_FRAME`, 24 `LIGHTING_T_*` по порядку таблицы,
+    `LIGHTING_U_LIGHT_TARGET`, 4 `LIGHTING_S_*`, счётчики `LIGHTING_SRV_COUNT` / `LIGHTING_SAMPLER_COUNT`.
+    `lighting_cs.hlsl` и `lighting_cb.hlsli` (его `PerFrame` берёт и `fog_scatter_cs.hlsl`) объявляют регистры по
+    именам; рядом с `LIGHTING_RS` — `#error`, если размеры таблиц корневой подписи разошлись со счётчиками.
+    `SceneRenderer_Lighting.cpp` собирает `std::array<…, LIGHTING_SRV_COUNT>` и `std::array<…,
+    LIGHTING_SAMPLER_COUNT>` по именам (`srv[LIGHTING_T_GTAO] = …`) и проверяет, что ни один слот не пуст;
+    `RecordComputeDispatch` получил перегрузку от `std::array` (тело — в `compute_dispatch_detail::Record`).
+  - cbuffer `PerFrame` в общий заголовок НЕ перенесён: C++ пишет его по отражённым именам (`SceneLightingCBHandles`),
+    зеркальной структуры нет — переносить нечего, `static_assert` тут не о чем ставить.
+  - Проверено: листинг DXIL `lighting_cs.hlsl` до и после — тождествен (19208 строк, оба — в файл, не в консоль);
+    `check_shaders.py` — `lighting_cs`, `fog_scatter_cs` ok, полный — 330/330; кадры wind_test / bath против эталона
+    — в шуме (дно моря в двух состояниях 0.00 / 0.20 % у обеих сборок). Суженный GBV
+    `--gbv-passes=Lighting,Skybox --gbv-selftest=1@Skybox`: первый кадр за 264 с, в логе только `id=935` от
+    инъекции в `Skybox`, `live objects at exit: none`, `session end: clean shutdown`. Сборки Debug, Release_Editor,
+    Release — без предупреждений.
+  - Контроль: `LIGHTING_SRV_COUNT 25` — `check_shaders.py lighting_cs` даёт `FAIL lighting_cs.hlsl:CSMain` с текстом
+    `#error`, код 1; после возврата — 1/1.
+  - Не покрыто: C++-проверка пустого слота (`assert`) не прогонялась с намеренной дырой. Остаются R5.3b-…: compose,
+    glass, поверхность океана, затем остальные пассы — по одному на шаг.
 
 #### R2. Один реестр настроек (L, риск средний)
 
@@ -3370,16 +3618,85 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `--set=bloom.ghostIntensity:0.03` на wind_test меняется ровно строка `bloom.ghostIntensity` (у ключа уже есть
   запись и чтение в `App.cpp`); временно удалённая из цепочки ветка — скрипт (а)
   называет пропавшее имя (контроль).
+
+  **Сделано R2.0 (2026-11-25).**
+  - `tools/settings_names.py` собирает имена из исходника, комментарии вырезаны: цепочку записи `ApplySweepValue`
+    (литералы, блоки префиксов `key == / group ==`, таблицы `RaceKeys`, `BotKeys`, `PlayerKeys`, `VesselKeys`,
+    `WakeKnobs`, группы `sg.*` из ключей `data/config/scalability.json`, цвета океана `ocean.<имя>R|G|B` и
+    `absorption<0-3><R|G|B>`, `exposure.curveEv/curveComp 0..11`), цепочку чтения `ReadSweepValue` и строки реестра
+    `TC_SETTING("имя", тип, флаги, apply, read)` (читаемо, если `read` не `nullptr`). `--write` пишет
+    `tools/settings_names.txt` (839 имён, читаемых 70 — у 769 читателя нет; оценка «~540» в тексте выше занижена),
+    `--list` печатает, без ключа — сравнивает: пропавшее имя, новое имя, потерянное чтение — по строке, код =
+    число расхождений.
+  - `--settings-dump=<файл>` (`app/harness/SettingsDumpHarness`, строка в `BootSwitches.cpp`, не в Shipping): после
+    `--shot-delay` пишет `имя значение` (`%.9g`) для каждого имени списка, которое читается (`ReadSweepValue`, затем
+    реестр), строку `settings dump: N values (M names without a reader)` в лог и завершает прогон; код 2, если список
+    не прочитан или файл не открыт.
+  - Проверено (Release, wind_test, `--shot-delay=3 --wind-freeze=10`, прогоны по одному): два прогона — 70 / 70
+    строк, 0 различий; с `--set=bloom.ghostIntensity:0.03` — ровно одна строка: `bloom.ghostIntensity: 0.00200000009
+    -> 0.0299999993`. Каждый прогон — код 0, `session end: clean shutdown`.
+  - Контроль (а): ветка `bloom.ghostThreshold` убрана из цепочки записи — `bloom.ghostThreshold is gone`, код 1;
+    ветка чтения `bloom.ghostIntensity` убрана — `bloom.ghostIntensity can no longer be read back`, код 1; `App.cpp`
+    возвращён байт в байт — 0 расхождений.
 - **R2.1. `core/settings/SettingsRegistry`.** Дескриптор: имя, тип, адрес (для кноба — пара game / render;
   `KNOB`, `core/threading/Knob.h:76`, регистрирует сам), диапазон, умолчание, флаги (сохраняется / принадлежит
   уровню / временная / управляется scalability с классом цены), вкладка, подпись, подсказка, `onChange`.
   `ApplySweepValue` сначала спрашивает реестр, потом старую цепочку. Поведение не меняется.
+
+  **Сделано R2.1 (2026-11-25).**
+  - `core/settings/SettingsRegistry.{h,cpp}`: `SettingDesc` — имя, тип (`Float / Bool / Int`), флаги
+    (`Persistent`, `LevelOwned`, `Transient`, `Scalable`, `Action`), `apply(ctx, value)`, `read(ctx, out)` (может
+    быть `nullptr`), вкладка, подпись, подсказка; `Registry()` — статик функции, строки приходят при статической
+    инициализации `TC_SETTINGS(таблица)` из строк `TC_SETTING(...)`. Повтор имени или строка без `apply` отвергаются
+    (первая остаётся), а `ReportRefused()` пишет каждую отвергнутую строку Error, когда лог уже поднят (`main.cpp`,
+    сразу после открытия сессии). Слой core знает только `struct SettingContext;` — определяет его app
+    (`app/settings/SettingContext.h`: `Scene&`, `SceneRenderSettings&`, то, что получали цепочки).
+  - `ApplySweepValue` и `ReadSweepValue` спрашивают реестр первыми; имя, нашедшееся в реестре, живёт только там.
+  - Отличие от описания выше: адреса, диапазона, умолчания и `onChange` в дескрипторе нет — их несут функции строки
+    (зажим каждой ветки цепочки свой: `max`, `clamp`, без зажима; перенос должен дать тот же дамп). Поля данных
+    добавит тот потребитель, который их читает (R2.n: виджет Developer Controls, сброс), — до него они были бы
+    инертны. Строку реестра для `KNOB` (пара game / render) — в шаге первого префикса из кнобов.
+  - Проверено: реестр пуст — поведение то же: дамп R2.0 снят уже с этим кодом; `settings_names.py` — 0 расхождений;
+    сборки Debug, Release_Editor, Release, Shipping, Development, Cook — без предупреждений; `check_*.py` — 0 (вкл.
+    `check_layers.py`: `core/settings` ничего не включает выше core).
+  - Не покрыто: отказ повторной строки виден только с первой таблицей — проверяется в R2.2 (контроль: одно имя
+    дважды → Error при старте).
 - **R2.2-... Перенос по префиксу**, шаг на префикс, начиная с простых «имя — глобал»: `bloom`, `vsm`, `tessy`,
   `skyVis`, `gi`, `lod`, `streaming`, `ssr`, `reflections`; затем с побочным действием (`shadow.mode`,
   `dlss.mode`, `display.*`); затем поля уровневых структур. Готово для каждого: множество имён R2.0 (а) то же; дамп
   (б) до и после совпал — и в покое, и после `--set` каждого имени порции значением за диапазоном (зажим тот же;
   имена с побочным действием — `display.*`, `race.start`, `sg.*` и подобные — только в покое, их действие
   проверяется своим гейтом); старая ветка удалена.
+
+  **Сделано R2.2a — `bloom` (2026-11-25).**
+  - «До»: `ReadSweepValue` получил читателей 54 имён `bloom.*`, у которых их не было (выведены скриптом из веток
+    записи: `value != 0` — 0 / 1, `static_cast<uint32_t>` — целое, текстура короны — «путь не пуст»); список имён
+    переписан (`--write`): 839 имён, читаемых 124. Дампы «до» на wind_test: в покое, ниже диапазона (каждое имя с
+    зажимом — под нижней границей, `-5`), выше диапазона (над верхней, `2·max + 1`; у имени без зажима — безвредное
+    значение в обоих плечах: зажима нет, дамп видит только хранение; `bloom.convPercent` — 25 / 40, чтобы сетка FFT
+    не схлопнулась).
+  - Перенос: 57 строк `TC_SETTING` в `sources/app/settings/BloomSettingRows.cpp` (по ветке цепочки каждая, зажим
+    тот же; флаги — `LevelOwned`, у двух кнобов FFT — `Transient`, у трёх имён таблицы scalability — `| Scalable`);
+    из `App.cpp` ушли 57 веток записи, 57 читателей, осиротевшие комментарии (стоят теперь над своими строками) и
+    включение `BloomRenderer.h` — минус 116 строк.
+  - Проверено: дампы «после» — побайтно те же, что «до», во всех трёх плечах (124 строки; плечи упёрлись в зажимы:
+    `sunRaysCount` 16 / 2000, `sunRaysBundles` 1 / 128, `convTemporalWeight` 0.01 / 1, `sunSplitRadiusDeg` 0.1 / 45);
+    имена вне `bloom.*` между плечами не менялись; `settings_names.py` — 0 расхождений; `--scalability-selftest` и
+    `--scalability-check` — PASS (326 чтений); `intent_regression` — PASS; сборки Debug, Release_Editor, Release,
+    Shipping, Development, Cook — без предупреждений; `check_*.py` — 0. Картинка (три вида 11.3, эталон `be9c4487`
+    и текущая, b1 c1 b2 c2): лагуна b-c 0.058 / 0.013 % при полу 0.012 / 0.120 %, ванная 0.014 / 0.006 % при
+    0.031 / 0.028 %, море 0.045 / 0.066 % при 0.047 / 0.065 % — в шуме; кадры просмотрены, полные.
+  - Контроль (одна временная сборка): нижний зажим `sunRaysCount` 16 → 17 и вторая строка `bloom.intensity` — дамп
+    ниже диапазона разошёлся ровно в `bloom.sunRaysCount: 16 -> 17`, при старте — `ERROR settings registry:
+    bloom.intensity was registered twice ... the first row stays` (значение первой строки осталось в дампе). Это же
+    закрывает «не покрыто» R2.1.
+  - Найдено по дороге и исправлено: `check_render_knobs.py` проверял фиксированный список файлов, перенесённые
+    строки из него выпали; теперь он берёт и все `app/settings/*SettingRows.cpp` (контроль: запись в
+    `bloom::g_fftFused` вместо `_game` в строке — находка, код 1). `settings_names.py` теперь ловит и вторую строку
+    `TC_SETTING` того же имени, и имя, живущее и в реестре, и в цепочке (контроль каждого — код 1).
+  - Дальше по тому же образцу (скрипты `r22_*.py` из рабочей папки сессии описаны в заметках волны): `vsm`, `tessy`,
+    `skyVis`, `gi`, `lod`, `streaming`, `ssr`, `reflections`, затем имена с побочным действием и поля уровневых
+    структур.
 - **R2.n. Потребители.** Сохранение, загрузка и сброс (`GraphicsControl`, `GraphicsSettings.h:14`), таблица
   `kKnobs` (`settings/Scalability.cpp:23`), Developer Controls (обычный виджет по типу), `reset_settings`.
   Готово: `--scalability-selftest`, `--scalability-check`, круг «сохранить / загрузить / сбросить» (перед ним
@@ -3397,10 +3714,51 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `grep` пуст; имя, которого нет в `input/bindings.json`, ловится при загрузке привязок строкой Error (контроль:
   опечатка в константе); гейт A и `--physics-gate=player` (через `=`: с пробелом имя пустое и идёт весь набор,
   `main.cpp:557-566`).
+
+  **Сделано R12.1 (2026-11-25).**
+  - `sources/input/InputActions.h`: `namespace actions` — 39 констант `kИмя = "Имя"` (движение и взгляд, Play, клавиши
+    разработчика) и `kAll`. 48 строковых вызовов в 5 файлах (`AppController.cpp` — 26, `PlaySession.cpp` — 9,
+    `CameraController.cpp` — 7, `PlayerController.cpp` — 5, `ProfilerHud.cpp` — 1; `Camera.cpp` с 11-24 разделён в
+    R1.4) заменены скриптом на `actions::k…`. `grep -rnE 'WasActionPressed\("|IsActionDown\("|GetActionAxis\("'
+    sources` — пуст.
+  - `ToggleBindings` — мёртвый вызов: `0af68c8d` привязал F1 к «показать привязки», `9e063b46` отдал F1
+    `ToggleDeveloperPanel` и убрал имя из `bindings.json`, а чтение осталось. Удалено (F1 по-прежнему открывает
+    панель: `ToggleDeveloperPanel` и `ImGuiKey_F1`). `GenerateFont` (Ctrl+F8) — обратный случай: в файле есть,
+    читатель (`FontManager::Tick`) удалён в R1.3 — строка убрана из `input/bindings.json` (оверлей управления
+    показывал клавишу, которая ничего не делает).
+  - `InputManager::LoadActions` сверяет файл с `actions::kAll` (`ActionMap::Has`, `ActionMap::Names`): имя, которое
+    код читает, а файл не привязывает, — Error; имя, которое файл привязывает, а код не читает, — Warning.
+  - Проверено: сборки Debug, Release_Editor, Release, Shipping, Development, Cook — без предупреждений; `check_*.py` — 0;
+    `intent_regression` — PASS; `--physics-gate=player` — PASS (1 ran, 0 failed); старт wind_test — ни одной строки
+    `input bindings`.
+  - Контроль: до правки `bindings.json` — `WARN input bindings: input/bindings.json binds action 'GenerateFont' but
+    no code reads it`; опечатка `kJump = "Jmup"` — `ERROR input bindings: the code reads action 'Jmup' but
+    input/bindings.json does not bind it` (и Warning про непрочитанный `Jump`); константа возвращена.
 - **R12.2.** Стек контекстов (UI > штурвал > пешком > свободная камера): действие получает верхний слушатель.
   Готово: тест — одно нажатие E в кадре, где контекст сменился с «пешком» на «штурвал», берёт штурвал и НЕ
   выбрасывает за борт (баг 2026-11-09, `AGENTS.md` «Boats»); клавиша, взятая открытой панелью, не доходит до
   игрока; `--physics-gate` (`player`, `world`, `vessel`).
+
+  **Сделано R12.2 (2026-11-25).**
+  - Стек — это порядок кадра, и он уже был таким: UI (`App::WndProc` не отдаёт `InputManager` клавишу, взятую
+    ImGui) → клавиши сессии (`AppController::TickPlay`) → штурвал или пешком (`PlaySession::Tick`) → свободная
+    камера (ветка «не Play»). Не хватало одного: нажатие только ЧИТАЛОСЬ, и второй слушатель того же кадра видел его
+    снова. `InputManager::TakeActionPress(имя)` — нажатие получает первый спросивший, до `NewFrame` оно ничьё больше
+    (`takenThisFrame_`). Взятием читают: Play / StopPlay / PossessEject / FreeMouse / KeepSimulation (сессия), Interact,
+    ToggleView, Autopilot, Anchor, WatchNext (штурвал, пешком, зритель), Jump (игрок). Клавиши разработчика — по-прежнему
+    `WasActionPressed`: их не делит ни один слушатель. Заплатка `pressTaken` (параметр `TickHelm`) удалена: E, взявшее
+    штурвал, взято слушателем «пешком», и `TickHelm` того же кадра его не видит.
+  - Тест — `tools/helm_keys.py` (записан заново по `AGENTS.md`: отдельный рабочий стол `CreateDesktopW`, `PostMessage`
+    `WM_KEYDOWN` / `WM_KEYUP` окну `D3D12WindowClass`, конец — `WM_CLOSE`, вердикт по строкам `play:` лога;
+    `--play` на палубе small_yacht 001, Shift+F1 отдаёт игре клавиши, которые скриптовый `--play` оставляет свободными):
+    `--expect helm` (Shift+F1, E) — `at the helm` на кадре 419, ухода нет, PASS; «E, E» — `at the helm` 409, `left the
+    helm` 683, `--expect foot` PASS; «Escape, E» (меню игры открыто) — ни одной строки штурвала, `--expect none` PASS.
+  - Контроль: `WasActionPressed` вместо `TakeActionPress` в `TickHelm` — `at the helm` и `left the helm` на одном
+    кадре 444, `--expect helm` FAIL, код 1 (это и есть баг 2026-11-09); возвращено.
+  - Проверено: `--physics-gate=player`, `=world`, `=vessel` — 1 ran, 0 failed каждый; сборки шести конфигураций —
+    без предупреждений; `check_*.py` — 0; `intent_regression` — PASS. `docs/agents/boats_and_water.md` переписан: там
+    стояло «нажатие читается, не забирается».
+  - Не покрыто: панель редактора с фокусом клавиатуры в Play (только меню игры в Release); мышь руками.
 - **R12.3.** Скрипты, MCP и гейты вбрасывают действия в тот же канал: поля `test*` (65 упоминаний в 6 файлах,
   `physics/PhysicsWorld.h` — 15) и ветки `script || ...` удаляются. Семантику скриптов сохранить:
   `player.testMoveX/Z` — движение в МИРОВЫХ осях (`PhysicsWorld.cpp:1285` прибавляет их к уже повёрнутому
@@ -3412,6 +3770,36 @@ R3 и R5 — M, с низким риском, друг от друга не за
   `--play` берёт штурвал. `helm_keys.py` в дереве нет и в рабочих папках сессий не нашёлся (2026-11-24): написать
   заново по `AGENTS.md` («Boats», «Play Mode»: `PostMessage` `WM_KEYDOWN` окну `D3D12WindowClass`, на отдельном
   рабочем столе) и положить в `tools/`.
+
+  **Сделано R12.3 (2026-11-25).**
+  - Канал: `InputManager::InjectPress / InjectHeld / InjectAxis` — нажатие скрипта становится нажатием следующего
+    кадра (его читают `WasActionPressed` / `TakeActionPress`, однократно), удержание держит `IsActionDown`, ось
+    прибавляется к `GetActionAxis` до нуля. `InputManager::KeysScope(input, keysCount)` — у слушателя, чьи клавиши
+    в этом кадре не его (мышь свободна, панель, зритель): клавиши читаются как ноль, вброшенное считается. Это главная
+    ловушка шага: скриптовый `--play` оставляет мышь, а с ней и клавиши, свободными (`controls` ложно), а поля `test*`
+    работали мимо `controls` — без этого правила скрипты перестали бы водить игрока.
+  - `--set` / MCP `player.test*` (имена те же: 839, `settings_names.py` — 0) пишут в канал: `testMoveX / Z` — оси МИРА
+    (`actions::kMoveWorldX / Z`, вне `kAll`: их не привязывает клавиша; `PlayerController` прибавляет их после
+    нормализации, как физика прибавляла поля), `testThrottle / testRudder` — `MoveZ / MoveX` (то, что говорят W S /
+    A D у штурвала; пешком скрипт с ними теперь идёт, как клавиша), `testCrouch / testSprint` — удержание,
+    `testJump / Interact / View / Anchor / Autopilot` — нажатия. `testOrbit / testOrbitPitch / testFreeCamera` — не
+    ввод, а камера скрипта: из `physics::PlayerSettings` в `game::ScriptCamera()` (`VesselCamera.h`). Из физики ушли
+    14 полей и их чтение (`PhysicsWorld.cpp:1284-1288`), из `PlaySession` — все ветки `script || …` и
+    `std::exchange(tuning.test…)`; `grep` полей вне имён `--set` и описания MCP — пуст.
+  - `tools/helm_keys.py` расширен: шаги `hold:<клавиша>:<с>`, `set:<имя>:<v>` и `read:player` (MCP, сборка с
+    редактором, `--editor --mcp-port=<свой>`: задачи MCP обслуживает кадр редактора), `--cam-pos/--cam-rot`; каждый
+    прогон возвращает `imgui.ini` и `editor_state.json` как были.
+  - Проверено: штурвал настоящей E (Release — кадр 428; Release_Editor — 460) и действием `set:player.testInteract:1`
+    (Release_Editor — 142): везде `at the helm` без ухода, PASS — один результат; headless `--play` берёт штурвал.
+    Yaw 90° на лагуне (`--cam-rot=0,0.7071068,0,0.7071068`): `testMoveX:1` ~1.3 с — ноги −11.600 → −6.581 по X, Z
+    тот же (ось мира +X); D 1 с — Z 73.600 → 69.798, X тот же (вправо от взгляда: при yaw 90° это −Z). «E, E» —
+    взять и уйти, PASS. `--physics-gate=player`, `=world`, `=vessel` — 0 failed; шесть конфигураций без
+    предупреждений; `check_*.py` — 0; `intent_regression` — PASS.
+  - Контроль: `testMoveX` в ось взгляда `kMoveX` вместо `kMoveWorldX` — тот же прогон уводит по −Z (73.600 →
+    68.585), X не меняется; возвращено.
+  - Не покрыто: скрипт, водящий игрока при выброшенной камере (F8): раньше поле `testMove` двигало и тело без
+    владельца, теперь ввод идёт через `PlayerController`, которого без тела нет; Alt+P при фокусе панели.
+    `docs/agents/play_and_physics.md` дополнен (канал, `helm_keys.py`).
 
 #### Волна 3: большие разрезы
 

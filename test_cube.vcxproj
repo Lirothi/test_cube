@@ -364,7 +364,13 @@
     </ClCompile>
     <ClCompile Include="sources/app/GpuRequirements.cpp" />
     <ClCompile Include="sources/app/Shipping.cpp" />
+    <ClCompile Include="sources/app/BootSwitches.cpp" />
+    <ClCompile Include="sources/app/harness/CaptureHarnesses.cpp" />
+    <ClCompile Include="sources/app/harness/GateHarnesses.cpp" />
+    <ClCompile Include="sources/app/harness/IntentHarness.cpp" />
+    <ClCompile Include="sources/app/harness/SettingsDumpHarness.cpp" />
     <ClCompile Include="sources/app/settings/Scalability.cpp" />
+    <ClCompile Include="sources/app/settings/BloomSettingRows.cpp" />
     <ClCompile Include="sources/app/settings/UserSettings.cpp" />
     <ClCompile Include="sources/app/settings/DisplayMode.cpp" />
     <ClCompile Include="sources/app/ui/GameSettingsMenu.cpp" />
@@ -436,6 +442,7 @@
     <ClCompile Include="sources/app/GraphicsSettings.cpp" />
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/ui/LogWindow.cpp" />
+    <ClCompile Include="sources/app/ui/ProfilerHud.cpp" />
     <ClCompile Include="sources/app/ui/MemoryTab.cpp" />
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/game/PlayerStart.cpp" />
@@ -449,7 +456,8 @@
     <ClCompile Include="sources/app/game/RaceTrack.cpp" />
     <ClCompile Include="sources/app/game/VesselStats.cpp" />
     <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp" />
-    <ClCompile Include="sources/app/camera/Camera.cpp" />
+    <ClCompile Include="sources/app/camera/CameraController.cpp" />
+    <ClCompile Include="sources/rendering/view/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Astronomy.cpp" />
     <ClCompile Include="sources/rendering/lighting/NightLamps.cpp" />
@@ -460,7 +468,7 @@
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
-    <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp" />
+    <ClCompile Include="sources/rendering/scene/SceneRenderConfig.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Geometry.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Shadows.cpp" />
@@ -486,6 +494,7 @@
       <AdditionalIncludeDirectories Condition="'$(TcGeneratedRoot)' != ''">$(TcGeneratedRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="sources/core/vfs/Vfs.cpp" />
+    <ClCompile Include="sources/core/settings/SettingsRegistry.cpp" />
     <ClCompile Include="sources/core/vfs/VfsTools.cpp" />
     <ClCompile Include="sources/core/logging/Log.cpp" />
     <ClCompile Include="sources/core/logging/LogQueue.cpp" />
@@ -557,6 +566,7 @@
     <ClCompile Include="sources/rendering/visibility/HzbOcclusionTester.cpp" />
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp" />
     <ClCompile Include="sources/rendering/core/GpuAlloc.cpp" />
+    <ClCompile Include="sources/rendering/core/GpuProfiler.cpp" />
     <ClCompile Include="sources/rendering/core/DeviceRemovalWatch.cpp" />
     <ClCompile Include="sources/rendering/core/MemGates.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
@@ -649,6 +659,13 @@
   <ItemGroup>
     <ClInclude Include="sources/pch.h" />
     <ClInclude Include="sources/app/App.h" />
+    <ClInclude Include="sources/app/BootOptions.h" />
+    <ClInclude Include="sources/app/BootSwitches.h" />
+    <ClInclude Include="sources/app/harness/Harness.h" />
+    <ClInclude Include="sources/app/harness/CaptureHarnesses.h" />
+    <ClInclude Include="sources/app/harness/GateHarnesses.h" />
+    <ClInclude Include="sources/app/harness/IntentHarness.h" />
+    <ClInclude Include="sources/app/harness/SettingsDumpHarness.h" />
     <ClInclude Include="sources/assets/AssetImporter.h" />
     <ClInclude Include="sources/assets/AssetInvalidation.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
@@ -659,6 +676,7 @@
     <ClInclude Include="sources/app/GpuRequirements.h" />
     <ClInclude Include="sources/app/Shipping.h" />
     <ClInclude Include="sources/app/settings/Scalability.h" />
+    <ClInclude Include="sources/app/settings/SettingContext.h" />
     <ClInclude Include="sources/app/settings/UserSettings.h" />
     <ClInclude Include="sources/app/settings/DisplayMode.h" />
     <ClInclude Include="sources/app/ui/GameMenuStrings.h" />
@@ -758,21 +776,24 @@
     <ClInclude Include="sources/app/game/VesselStats.h" />
     <ClInclude Include="sources/editor/scene/EditorPlayerStart.h" />
     <ClInclude Include="sources/app/game/PlayerStartJson.h" />
-    <ClInclude Include="sources/app/camera/Camera.h" />
+    <ClInclude Include="sources/app/camera/CameraController.h" />
+    <ClInclude Include="sources/rendering/view/Camera.h" />
     <ClInclude Include="sources/app/game/VesselCamera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/rendering/lighting/Astronomy.h" />
     <ClInclude Include="sources/app/levels/JsonLevel.h" />
     <ClInclude Include="sources/app/levels/Level.h" />
+    <ClInclude Include="sources/app/levels/LevelDocumentSink.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h" />
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h" />
-    <ClInclude Include="sources/app/scene/SceneFrameData.h" />
+    <ClInclude Include="sources/rendering/scene/SceneFrameData.h" />
     <ClInclude Include="sources/app/scene/GtaoSettingsJson.h" />
-    <ClInclude Include="sources/app/scene/SceneRenderConfig.h" />
+    <ClInclude Include="sources/rendering/scene/SceneRenderConfig.h" />
     <ClInclude Include="sources/app/scene/SceneRenderInternal.h" />
     <ClInclude Include="sources/rendering/post/BloomRenderer.h" />
+    <ClInclude Include="sources/rendering/post/BloomSettings.h" />
     <ClInclude Include="sources/app/scene/SceneRenderer.h" />
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
@@ -785,6 +806,7 @@
     <ClInclude Include="sources/core/math/Frustum.h" />
     <ClInclude Include="sources/core/math/Math.h" />
     <ClInclude Include="sources/core/profiling/Profiler.h" />
+    <ClInclude Include="sources/core/profiling/ProfilerDetail.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h" />
     <ClInclude Include="sources/core/diagnostics/CrashHandler.h" />
@@ -795,6 +817,7 @@
     <ClInclude Include="sources/core/vfs/Pak.h" />
     <ClInclude Include="sources/core/vfs/PakCrypto.h" />
     <ClInclude Include="sources/core/vfs/Vfs.h" />
+    <ClInclude Include="sources/core/settings/SettingsRegistry.h" />
     <ClInclude Include="sources/core/vfs/VfsMounts.h" />
     <ClInclude Include="sources/core/logging/Log.h" />
     <ClInclude Include="sources/core/logging/LogCategory.h" />
@@ -818,6 +841,7 @@
     <ClInclude Include="sources/core/task/TaskSystemTBB.h" />
     <ClInclude Include="sources/input/ActionMap.h" />
     <ClInclude Include="sources/input/InputManager.h" />
+    <ClInclude Include="sources/input/InputActions.h" />
     <ClInclude Include="sources/materials/Material.h" />
     <ClInclude Include="sources/materials/MaterialData.h" />
     <ClInclude Include="sources/materials/MaterialDataManager.h" />
@@ -846,7 +870,7 @@
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
     <ClInclude Include="sources/vfx/VesselSpray.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />
-    <ClInclude Include="sources/vfx/WindState.h" />
+    <ClInclude Include="sources/rendering/wind/WindState.h" />
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />
     <ClInclude Include="sources/ocean/OceanSimulationSettings.h" />
     <ClInclude Include="sources/ocean/OceanSpectrum.h" />
@@ -921,6 +945,9 @@
     <ClInclude Include="sources/rendering/lighting/Skybox.h" />
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphere.h" />
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/GtaoSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/HeightFogSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/SsrSettings.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h" />
     <ClInclude Include="sources/rendering/lighting/DdgiVolume.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h" />
@@ -937,6 +964,7 @@
     <ClInclude Include="sources/rendering/meshes/LodSelect.h" />
     <ClInclude Include="sources/rendering/meshes/LodSwitchReport.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />
+    <ClInclude Include="sources/rendering/meshes/MeshPrimitives.h" />
     <ClInclude Include="sources/rendering/meshes/TessyDag.h" />
     <ClInclude Include="sources/rendering/meshes/MeshManager.h" />
     <ClInclude Include="sources/rendering/meshes/StaticMesh.h" />
@@ -990,6 +1018,8 @@
     <None Include="shaders\gbuffer.hlsl" />
     <None Include="shaders\gbuffer_common.hlsli" />
     <None Include="shaders\water_composite_cs.hlsl" />
+    <None Include="shaders\shared\shader_types.h" />
+    <None Include="shaders\shared\lighting_slots.h" />
     <None Include="shaders\wind.hlsli" />
     <None Include="shaders\gbuffer_csm.hlsl" />
     <None Include="shaders\gbuffer_inst.hlsl" />

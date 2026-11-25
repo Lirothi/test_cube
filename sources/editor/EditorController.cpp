@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/App.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
@@ -72,6 +72,7 @@
 #include "rendering/lighting/Skybox.h"
 #include "ocean/OceanSimulation.h"
 #include "app/Systems.h"
+#include "app/harness/IntentHarness.h" // R3.3f: --intent / --chat / --then
 
 namespace
 {
@@ -3130,11 +3131,11 @@ void EditorController::Draw(
             // silently overwrite that explicit headless-test camera during the editor's first
             // initialization. Mark it as observed either way so the temporary CLI pose is not
             // autosaved back into editor_state.json.
-            if (!g_camOverride && RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
+            if (!Boot().frame.camOverride && RestoreLevelCameraState(renderer, scene, document_.LevelPath()))
             {
                 markCameraStateSaved(document_.LevelPath(), CaptureLevelCameraState(scene.CameraRef()));
             }
-            else if (g_camOverride)
+            else if (Boot().frame.camOverride)
             {
                 markCameraStateSaved(document_.LevelPath(), CaptureLevelCameraState(scene.CameraRef()));
             }
@@ -3216,71 +3217,71 @@ void EditorController::Draw(
         showMeshEditor_ = true;
     };
     // "--edit-mesh=<path>": once, on the first frame that has a context to open it with.
-    if (!g_bootEditMesh.empty())
+    if (!Boot().editor.editMesh.empty())
     {
-        ctx.openMeshEditor(g_bootEditMesh);
-        LOG_INFO(logging::LogCategory::Editor, "--edit-mesh: opened {}", g_bootEditMesh);
-        g_bootEditMesh.clear();
+        ctx.openMeshEditor(Boot().editor.editMesh);
+        LOG_INFO(logging::LogCategory::Editor, "--edit-mesh: opened {}", Boot().editor.editMesh);
+        Boot().editor.editMesh.clear();
     }
     // "--build-dist": once, the Build Distribution window open (a headless capture of it).
-    if (g_bootBuildDist)
+    if (Boot().dist.buildDist)
     {
         showBuildDistPanel_ = true;
-        g_bootBuildDist = false;
-        if (!g_bootBuildDistProfile.empty()) { buildDistPanel_.OpenOn(g_bootBuildDistProfile); }
+        Boot().dist.buildDist = false;
+        if (!Boot().dist.buildDistProfile.empty()) { buildDistPanel_.OpenOn(Boot().dist.buildDistProfile); }
         LOG_INFO(logging::LogCategory::Editor, "--build-dist: opened Build Distribution");
     }
     // "--show-import[=<name>]": once, the Import Assets window open with <name> selected.
-    if (g_bootShowImport)
+    if (Boot().editor.showImport)
     {
         showImportPanel_ = true;
-        if (g_bootImportItem.empty() || importPanel_.Reveal(g_bootImportItem))
+        if (Boot().editor.importItem.empty() || importPanel_.Reveal(Boot().editor.importItem))
         {
             LOG_INFO(logging::LogCategory::Editor, "--show-import: opened{}{}",
-                g_bootImportItem.empty() ? "" : " on ", g_bootImportItem);
+                Boot().editor.importItem.empty() ? "" : " on ", Boot().editor.importItem);
         }
         else
         {
             LOG_WARNING(logging::LogCategory::Editor, "--show-import: import_staging has no '{}'",
-                g_bootImportItem);
+                Boot().editor.importItem);
         }
-        g_bootShowImport = false;
+        Boot().editor.showImport = false;
     }
     // "--inspect=<type>[#<group>]": once the level's environment holds that type, select it and scroll the Inspector to
     // the group. Waits for the document (a few frames at boot); gives up with a warning after 600.
-    if (!g_bootInspect.empty())
+    if (!Boot().editor.inspect.empty())
     {
         static int waited = 0;
-        const size_t anchor = g_bootInspect.find('#');
-        const std::string type = g_bootInspect.substr(0, anchor);
+        const size_t anchor = Boot().editor.inspect.find('#');
+        const std::string type = Boot().editor.inspect.substr(0, anchor);
         for (const EditorObject& env : document_.Environment())
         {
             if (env.type != type) { continue; }
             selection_.Replace(env.id);
             showInspector_ = true;
-            if (anchor != std::string::npos) { inspector_.ScrollToGroup(g_bootInspect.substr(anchor + 1)); }
+            if (anchor != std::string::npos) { inspector_.ScrollToGroup(Boot().editor.inspect.substr(anchor + 1)); }
             LOG_INFO(logging::LogCategory::Editor, "--inspect: selected '{}'{}{}", env.name,
-                anchor != std::string::npos ? ", group " : "", anchor != std::string::npos ? g_bootInspect.substr(anchor + 1) : "");
-            g_bootInspect.clear();
+                anchor != std::string::npos ? ", group " : "", anchor != std::string::npos ? Boot().editor.inspect.substr(anchor + 1) : "");
+            Boot().editor.inspect.clear();
             break;
         }
         // Not an environment type: a level object of that name (the Inspector then scrolls to its end for any group).
         for (const EditorObject& obj : document_.Objects())
         {
-            if (g_bootInspect.empty()) { break; }
+            if (Boot().editor.inspect.empty()) { break; }
             if (obj.name != type) { continue; }
             selection_.Replace(obj.id);
             showInspector_ = true;
-            if (anchor != std::string::npos) { inspector_.ScrollToGroup(g_bootInspect.substr(anchor + 1)); }
+            if (anchor != std::string::npos) { inspector_.ScrollToGroup(Boot().editor.inspect.substr(anchor + 1)); }
             LOG_INFO(logging::LogCategory::Editor, "--inspect: selected object '{}'{}", obj.name,
                 anchor != std::string::npos ? ", scrolled to the end" : "");
-            g_bootInspect.clear();
+            Boot().editor.inspect.clear();
             break;
         }
-        if (!g_bootInspect.empty() && ++waited > 600)
+        if (!Boot().editor.inspect.empty() && ++waited > 600)
         {
             LOG_WARNING(logging::LogCategory::Editor, "--inspect: the level has no environment object of type, nor an object named, '{}'", type);
-            g_bootInspect.clear();
+            Boot().editor.inspect.clear();
         }
     }
     ctx.openMaterialEditor = [this](const std::string& materialName, const std::string& materialPath)
@@ -4574,75 +4575,38 @@ void EditorController::Draw(
             EditorIntentWorld{ document_, assetRegistry_ });
     }
 
-    // "--intent=<phrase>": the headless harness. Submitted once the editor has its level and
-    // its asset registry, then polled every frame -- the model answers on its own thread and
-    // this must not block one. App quits as soon as the verdict is logged.
-    // headlessIntentRunning_ is what keeps a multi-pass run alive. The two obvious flags do
-    // not: g_intentPhrase is cleared when a pass is SUBMITTED and headlessIntentPending_
-    // drops when it COMPLETES, so with both as the gate the block stopped executing after
-    // pass 1, g_intentFinished never got set, and the process sat out its whole timeout
-    // while the idle timer reaped the server underneath it.
-    if (!g_intentPhrase.empty() || headlessIntentPending_ || headlessIntentRunning_)
+    // "--intent=<phrase>", "--chat=", "--then=": the harness's steps (app/harness/IntentHarness, architecture plan R3.3f)
+    // run here, where a command may run, and reach this editor through EditorScriptHost -- its model and its command box
+    // over this frame's action context. The harness's state is its own, not the editor's.
+    struct ScriptHost final : harness::EditorScriptHost
     {
-        ++headlessIntentWarmupFrames_;
-        // 30 frames of warmup: the level's runtime objects, the shadow resources and the
-        // acceleration structures all finish arriving over the first few frames, and a
-        // command executed before then takes the process down with it.
-        constexpr int kHeadlessIntentWarmupFrames = 30;
-        if (headlessIntentWarmupFrames_ < kHeadlessIntentWarmupFrames)
+        EditorController& editor;
+        const EditorActionContext& actionCtx;
+        ScriptHost(EditorController& e, const EditorActionContext& a) : editor(e), actionCtx(a) {}
+        bool ModelWarmed() const override { return editor.modelWarmed_; }
+        bool ModelBusy() const override
         {
-            // fall through to the rest of Draw; try again next frame
+            return editor.commandBar_.Model().Busy() || editor.commandBar_.Model().BusyInBackground();
         }
-        else if (headlessIntentPending_)
+        void BeginIntent(const std::string& phrase) override
         {
-            // Polling belongs to a pass that is actually in flight. Ordering this AFTER the
-            // submit branch, as it was, meant that any frame where the submit conditions
-            // were not met fell through to here and polled nothing -- which logged a verdict
-            // of "pass 0/2" every frame, several hundred times, the moment a gate was added.
-            std::string verdict;
-            const CommandBarPanel::HeadlessState state =
-                commandBar_.PollHeadless(actionCtx, commandStack_, g_intentRun, verdict);
-            if (state != CommandBarPanel::HeadlessState::Pending)
-            {
-                headlessIntentPending_ = false;
-                const double elapsed = ImGui::GetTime() - headlessIntentStartedSec_;
-                LOG_INFO(logging::LogCategory::Editor,
-                    "intent harness pass {}/{} in {:.1f}s: {}",
-                    headlessIntentPass_, g_intentRepeat, elapsed, verdict);
-                if (headlessIntentPass_ >= g_intentRepeat)
-                {
-                    headlessIntentRunning_ = false;
-                    g_intentFinished = true;
-                }
-            }
+            editor.commandBar_.BeginHeadless(actionCtx, phrase, editor.buryDepthPercent_);
         }
-        else if (modelWarmed_ && !commandBar_.Model().Busy() &&
-            !commandBar_.Model().BusyInBackground())
+        bool PollIntent(bool run, std::string& verdict) override
         {
-            // Not until the warmup has been SENT and has COME BACK. Both halves are needed.
-            // llama-server answers one request at a time, so a phrase submitted during the
-            // warmup queues behind it and the harness reports that wait as the phrase's own
-            // cost. Waiting on Busy() alone is not enough either: for the first thirty frames
-            // the server is still starting, nothing is in flight, and a phrase submitted then
-            // is simply PARKED -- to be sent the instant the server answers, in a dead heat
-            // with the warmup. That is how the first two attempts at measuring this came out
-            // slower than no warmup at all.
-            if (!g_intentPhrase.empty())
-            {
-                headlessIntentPhrase_ = g_intentPhrase;
-                g_intentPhrase.clear();
-                LOG_INFO(logging::LogCategory::Editor, "intent harness: \"{}\" on level {} "
-                    "({} pass(es))",
-                    headlessIntentPhrase_, NormalizeLevelPath(document_.LevelPath()),
-                    g_intentRepeat);
-            }
-            headlessIntentPending_ = true;
-            headlessIntentRunning_ = true;
-            ++headlessIntentPass_;
-            headlessIntentStartedSec_ = ImGui::GetTime();
-            commandBar_.BeginHeadless(actionCtx, headlessIntentPhrase_, buryDepthPercent_);
+            return editor.commandBar_.PollHeadless(actionCtx, editor.commandStack_, run, verdict) !=
+                CommandBarPanel::HeadlessState::Pending;
         }
-    }
+        void ShowCommandBar() override { editor.showCommandBar_ = true; }
+        void SubmitPhrase(const std::string& phrase) override
+        {
+            editor.commandBar_.SubmitPhrase(actionCtx, phrase, editor.buryDepthPercent_);
+        }
+        bool PreviewAwaitsRun() const override { return editor.commandBar_.PreviewAwaitsRun(); }
+        void RunPendingPreview() override { editor.commandBar_.RunPendingPreview(actionCtx, editor.commandStack_); }
+        std::string LevelPath() const override { return NormalizeLevelPath(editor.document_.LevelPath()); }
+    } scriptHost(*this, actionCtx);
+    harness::EditorIntentFrame(scriptHost);
 
     // The frame loop reads this to stop rendering flat out while the model works. Set every
     // frame rather than on transitions, so a request that ends in any of its several ways
@@ -4651,57 +4615,7 @@ void EditorController::Draw(
     g_modelBusyBackground.store(commandBar_.Model().BusyInBackground(),
         std::memory_order_relaxed);
 
-    // "--chat=<phrase>": press Send once the editor is warm, then leave it alone -- the
-    // panel polls its own stream. Retried every frame until it goes out, because the first
-    // press only gets as far as "the server is still loading a 38 GB file".
-    harnessRunsCommands_ = harnessRunsCommands_ || !g_chatThenPhrase.empty();
-    if (!g_chatPhrase.empty())
-    {
-        if (++headlessChatWarmupFrames_ >= 30 && modelWarmed_ &&
-            !commandBar_.Model().Busy() && !commandBar_.Model().BusyInBackground())
-        {
-            // Through the same box everything else goes through. `--chat=` stays as a flag
-            // because a conversational answer is the one thing no gate can look at -- it
-            // exists only while it is streaming -- but there is no second panel behind it.
-            showCommandBar_ = true;
-            commandBar_.SubmitPhrase(actionCtx, g_chatPhrase, buryDepthPercent_);
-            LOG_INFO(logging::LogCategory::Editor, "chat harness: sent \"{}\"", g_chatPhrase);
-            g_chatPhrase.clear();
-        }
-    }
-    // "--then=<phrase>": a SECOND phrase in the SAME editor session, once the first has
-    // finished. It exists because what the model remembers can only be tested inside one
-    // session -- a second process starts with an empty one by construction -- and the case
-    // it was written for is "сгруппируй пальмы" followed by "и что ты сделал?".
-    //
-    // The first phrase's preview is RUN here: a command that only ever got previewed did
-    // not happen, and a question about what happened would be answered correctly by saying
-    // nothing did.
-    // PRESSES RUN FOR EVERY COMMAND, not only the first. Once a `--then` phrase is on the
-    // table this session is a sequence of edits with nobody at the keyboard, and a second
-    // command that only ever reaches its preview has not happened -- which makes the whole
-    // point of a two-step run ("scatter the palms, THEN the rocks so they miss the palms")
-    // impossible to check. `harnessRunsCommands_` is latched at startup so this stays a
-    // harness behaviour and never becomes a thing the editor does to somebody.
-    else if (harnessRunsCommands_ && commandBar_.PreviewAwaitsRun())
-    {
-        commandBar_.RunPendingPreview(actionCtx, commandStack_);
-        LOG_INFO(logging::LogCategory::Editor, "chat harness: pressed Run");
-    }
-    else if (!g_chatThenPhrase.empty())
-    {
-        if (commandBar_.Model().Busy() || commandBar_.Model().BusyInBackground())
-        {
-            headlessChatSawBusy_ = true;
-        }
-        else if (headlessChatSawBusy_ && ++headlessChatSettleFrames_ >= 30)
-        {
-            commandBar_.SubmitPhrase(actionCtx, g_chatThenPhrase, buryDepthPercent_);
-            LOG_INFO(logging::LogCategory::Editor, "chat harness: then sent \"{}\"",
-                g_chatThenPhrase);
-            g_chatThenPhrase.clear();
-        }
-    }
+    harness::EditorChatFrame(scriptHost);
 
     const auto drawPanel = [this, &ctx](const char* panelId)
     {

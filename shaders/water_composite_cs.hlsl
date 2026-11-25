@@ -34,6 +34,7 @@
 
 #pragma pack_matrix(row_major) // invViewProj arrives from a row-major C++ mat4 (mul(v, M))
 #include "utils.hlsli"
+#include "shared/shader_types.h" // architecture plan R5.1: the C++ / HLSL shared layout (its probe, for now)
 
 Texture2D GBAux : register(t0);
 Texture2D GB1 : register(t1);

@@ -11,7 +11,7 @@
 #include "rendering/renderables/IInstanceable.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
 #include "rendering/core/GBufferBindingGuard.h"

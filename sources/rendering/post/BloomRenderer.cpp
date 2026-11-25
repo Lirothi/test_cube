@@ -33,7 +33,7 @@
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
 #include "rendering/core/RenderConstants.h"
-#include "app/camera/Camera.h"                  // stage 9: the sun glare's view
+#include "rendering/view/Camera.h"                  // stage 9: the sun glare's view
 #include "rendering/lighting/DirectionalLight.h" // stage 9: the sun's direction and disc
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily

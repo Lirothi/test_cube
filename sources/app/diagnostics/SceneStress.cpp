@@ -11,7 +11,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "rendering/lighting/DirectionalLight.h"
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 #include <cmath>
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GpuAlloc.h"
@@ -1440,7 +1440,7 @@ private:
                 for (std::size_t i = 0; i < packaged.size() && i < 3; ++i) { levels_.push_back(packaged[i]); }
                 LOG_INFO(logging::LogCategory::App, "scene-stress: the demo levels are not here -- the packages' {} level(s)", levels_.size());
             }
-            if (!g_sceneStressExtraLevel.empty()) { levels_.push_back(g_sceneStressExtraLevel); }
+            if (!Boot().harness.sceneStressExtraLevel.empty()) { levels_.push_back(Boot().harness.sceneStressExtraLevel); }
             if (levels_.empty()) { levels_.push_back(kLevels_[0]); } // nothing found: the load says why
         }
         return levels_;
@@ -1465,7 +1465,7 @@ private:
     char faultDetail_[320] = {};
     threading::RenderThread renderThread_; // G8: Scene::Render's thread under frame.renderThread 1
 
-    int nextLevelIndex_ = g_sceneStressExtraLevel.empty() ? 0 : 3; // --stress-level boots into the extra level
+    int nextLevelIndex_ = Boot().harness.sceneStressExtraLevel.empty() ? 0 : 3; // --stress-level boots into the extra level
     int resizeIndex_ = 0;
     int dlssModeIndex_ = 0;
     int renderScaleIndex_ = 0;

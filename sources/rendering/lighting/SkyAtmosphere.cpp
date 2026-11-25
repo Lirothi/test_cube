@@ -1,6 +1,6 @@
 #include "rendering/lighting/SkyAtmosphere.h"
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "rendering/lighting/Skybox.h"
 #include <algorithm>
 #include <iterator>

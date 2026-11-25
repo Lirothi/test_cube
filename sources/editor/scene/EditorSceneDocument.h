@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/math/Math.h"
+#include "app/levels/LevelDocumentSink.h"
 
 // nlohmann/json — single header. EditorObject keeps object-specific fields as raw
 // JSON so data the editor does not model round-trips verbatim.
@@ -40,7 +41,7 @@ struct EditorObject
 // Editor-side, serializable mirror of a level's objects with stable IDs. Step 4
 // only loads object metadata from a level file; it never touches the runtime
 // scene.
-class EditorSceneDocument
+class EditorSceneDocument final : public LevelDocumentSink
 {
 public:
     EditorObjectId AllocateId();
@@ -102,6 +103,13 @@ public:
     // current RootJson() top-level sections. Call AFTER objects are loaded so the
     // freshly allocated environment ids never collide with object ids.
     void RebuildEnvironmentEntities();
+
+    // LevelDocumentSink (architecture plan R1.7): what the level loader hands the document as it parses -- the four
+    // calls above, by the loader's own types.
+    void BeginLevel(const std::string& path, const nlohmann::json& levelJson) override { ResetFromLevelJson(path, levelJson); }
+    std::uint64_t LevelObjectId(const nlohmann::json& objectJson) override { return ReadOrAllocateObjectId(objectJson).value; }
+    void AddLevelObject(std::uint64_t id, const nlohmann::json& objectJson) override { AddObjectFromJson(EditorObjectId{ id }, objectJson); }
+    void EndLevel() override { RebuildEnvironmentEntities(); }
 
     // Build an EditorObject from a level/editor object JSON entry: lifts the
     // common fields (name/type/enabled/position/rotationDeg/scale) and keeps the

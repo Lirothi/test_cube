@@ -23,7 +23,7 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/meshes/LodSelect.h" // S3.6: render::EffectiveDrawLod (receiver LOD for casters)
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
@@ -43,7 +43,7 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/SdsmShadows.h" // S15: the partition buffer + the analyze record
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
-#include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
+#include "rendering/wind/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"

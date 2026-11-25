@@ -34,7 +34,7 @@
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
 #include "app/Systems.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanRenderable.h" // ocean::g_shoreRunup_game gates the Shore and surf section
 #include "ocean/OceanSimulation.h"

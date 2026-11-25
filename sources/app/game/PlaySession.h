@@ -54,8 +54,9 @@ private:
     // A boat (docs/play_mode_plan.md): E within reach of its hull takes the helm, E leaves it over the side.
     void TakeHelm(Scene& scene, RenderableObject* vessel);
     void LeaveHelm(Scene& scene, bool overTheSide);
-    // `pressTaken`: this frame's E already took the helm. A press is read, not consumed, so the same frame's TickHelm saw it again and left over the side.
-    void TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime, bool pressTaken = false);
+    // Its keys are taken (InputManager::TakeActionPress): the E that took the helm this frame is the on-foot listener's,
+    // and TickHelm right after TakeHelm does not see it again as leave (R12.2; until 2026-11-09 it left over the side).
+    void TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime);
 
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;

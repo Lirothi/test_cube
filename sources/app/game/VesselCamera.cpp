@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 
 namespace game
 {
@@ -106,6 +106,12 @@ namespace game
         orbitYaw_ = 0.0f;
         orbitPitch_ = 0.0f;
         cinemaFresh_ = true;
+    }
+
+    ScriptCameraHold& ScriptCamera()
+    {
+        static ScriptCameraHold hold;
+        return hold;
     }
 
     void VesselCamera::Tick(float lookYaw, float lookPitch, float speed, float scriptOrbit, float scriptOrbitPitch, float deltaTime)

@@ -8,7 +8,7 @@
 
 #include "core/math/Math.h"
 
-#include "app/scene/SceneRenderConfig.h"
+#include "rendering/scene/SceneRenderConfig.h"
 #include "rendering/core/PhotographicSettings.h" // P3: ColorPipelineSettings in the tonemap CB writer
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (lighting CB mirror)
 #include "materials/Material.h"

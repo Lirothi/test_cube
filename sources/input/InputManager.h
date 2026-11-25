@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "input/ActionMap.h"
 
@@ -23,6 +24,34 @@ public:
     bool  WasActionPressed(std::string_view name) const;
     bool  WasActionReleased(std::string_view name) const;
     float GetActionAxis(std::string_view name) const;
+    // Architecture plan R12.2: a press goes to ONE listener. The frame's listeners ask top first -- the UI (App::WndProc
+    // keeps a key ImGui took), the session's keys (AppController::TickPlay), then the helm or the player on foot
+    // (PlaySession), the free camera last -- and the first to take a press has it: a press another listener took this
+    // frame is not seen again (the E that takes the helm is not also the E that leaves it over the side, 2026-11-09).
+    // WasActionPressed reads without taking: the developer keys, which no other listener shares.
+    bool  TakeActionPress(std::string_view name);
+
+    // Architecture plan R12.3: what a script says in place of the keys (--set / MCP set_settings player.test*, a gate)
+    // enters HERE, the keys' own channel, and the same queries read it: an injected press is the next frame's press
+    // (WasActionPressed / TakeActionPress, once), a held action holds IsActionDown until let go, an axis adds to
+    // GetActionAxis until set to 0. An action no key binds is a script's alone (actions::kMoveWorldX / Z).
+    void InjectPress(std::string_view name);
+    void InjectHeld(std::string_view name, bool held);
+    void InjectAxis(std::string_view name, float value);
+
+    // A listener whose keys are not its own this frame (PlaySession: the mouse free, a panel up, a bot watched): while
+    // the scope lives the keys' actions read as not pressed / 0, and the injected ones still count -- a scripted
+    // --play leaves the mouse, and with it the keys, free, and the script drives on.
+    class KeysScope {
+    public:
+        KeysScope(InputManager& input, bool keysCount) : input_(input), before_(input.keysCount_) { input_.keysCount_ = keysCount; }
+        ~KeysScope() { input_.keysCount_ = before_; }
+        KeysScope(const KeysScope&) = delete;
+        KeysScope& operator=(const KeysScope&) = delete;
+    private:
+        InputManager& input_;
+        bool before_;
+    };
 
     // Bindings in file order, for the on-screen controls overlay.
     const std::vector<ActionMap::BindingDesc>& GetBindingDescs() const { return actions_.GetBindingDescs(); }
@@ -59,6 +88,13 @@ private:
     HWND hwnd_ = nullptr;
 
     ActionMap actions_;
+    std::vector<std::string> takenThisFrame_; // R12.2: the presses a listener took this frame (NewFrame forgets them)
+    // R12.3: a script's input. A press waits for the next NewFrame and lives that frame; held actions and axes stay.
+    std::vector<std::string> pendingInjectedPresses_;
+    std::vector<std::string> injectedPresses_;
+    std::vector<std::string> injectedHeld_;
+    std::vector<std::pair<std::string, float>> injectedAxes_;
+    bool keysCount_ = true; // KeysScope
 
     std::array<uint8_t, 256> keyDown_{};     // Current state
     std::array<uint8_t, 256> keyPressed_{};  // Triggered during this frame

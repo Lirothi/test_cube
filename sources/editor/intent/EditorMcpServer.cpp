@@ -27,7 +27,7 @@
 #include <future>
 #include <iterator>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "editor/dist/DistBuildJob.h"
 #include "editor/ui/BuildDistributionPanel.h"
 #include "app/game/Race.h"

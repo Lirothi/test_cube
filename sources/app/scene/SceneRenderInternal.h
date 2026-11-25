@@ -14,8 +14,9 @@
 #include <cstring>
 #include <d3d12.h>
 
-#include "app/camera/Camera.h"
-#include "app/scene/SceneFrameData.h"
+#include "rendering/view/Camera.h"
+#include "rendering/scene/SceneFrameData.h"
+#include "app/scene/SceneView.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
@@ -24,7 +25,7 @@
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 
 namespace scene_internal
 {

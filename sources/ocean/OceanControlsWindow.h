@@ -17,7 +17,7 @@ public:
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
 
-    void Draw(Renderer& renderer);
+    void Draw(Renderer& renderer, OceanSimulation* ocean); // the scene's simulation, or null
 
 private:
     void RefreshConfigFiles(const OceanSimulation& ocean);

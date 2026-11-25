@@ -20,7 +20,7 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "materials/MaterialData.h"
 #include "core/math/Math.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include <cstdio>
 #include <cstring>
 

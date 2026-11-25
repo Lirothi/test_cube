@@ -13,7 +13,7 @@
 
 #include <DirectXMath.h>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/game/RaceCourseJson.h"
 #include "app/game/RaceTrack.h"
 #include "app/scene/Scene.h"

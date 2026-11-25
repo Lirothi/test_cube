@@ -27,7 +27,16 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   (`TC_THREAD_CHECKS=1`; `--thread-check-selftest` proves them on); switching it rebuilds the configuration whole.
 - Before a commit: `python tools/check_logging.py`, `check_render_knobs.py`, `check_gpu_alloc.py`, `check_file_io.py`,
   `check_threads.py` (a `.detach()` says where its exceptions are caught: `// detached-ok: <where>`; a
-  `CreateThread`/`_beginthreadex` start: `// thread-ok: <where>`) (exit code = findings).
+  `CreateThread`/`_beginthreadex` start: `// thread-ok: <where>`), `check_layers.py` (an include goes only down the
+  layers of `docs/architecture_review_plan.md` section 4; today's exceptions are `tools/arch_layers_allow.txt`, which
+  only shrinks: `--update` drops an include that is gone), `check_switches.py` (every switch the code reads is a row of
+  `sources/app/BootSwitches.cpp` -- name, value, help, kept by Shipping -- and every row is read; `test_cube.exe
+  --help` prints the table), `check_shaders.py` (its own entry lists AND every permutation of the cook's record
+  `tools/dist/shader_list.txt` at 6_6: a shader that no longer compiles is a FAIL naming it) (exit code = findings).
+  A layout C++ and HLSL share lives in `shaders/shared/*.h` (`shader_types.h`: HLSL's type names for C++; HLSL
+  includes `"shared/x.h"`, C++ `"shaders/shared/x.h"`; the cook packs them). Tools: `arch_metrics.py` (the plan's
+  numbers: map, include graph, header reach, the counters its steps move), `frame_diff.py a.png b.png` (the share of
+  pixels more than 8 levels apart; `--mask`, `--rect`, `--max`).
 - Editor gate: `tools/intent_regression.vcxproj` (Debug; links the Debug game's objects by its tlog, so build that
   first) -> `x64\Debug\intent_regression.exe`, last line `PASS`; `inspector_regression` likewise. After changing
   `sources/editor/intent/`, rebuild `tools/model_reaper.vcxproj` (close its tray icon: the running exe is locked).

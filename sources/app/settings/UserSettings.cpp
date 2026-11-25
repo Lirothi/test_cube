@@ -4,7 +4,7 @@
 #include <cmath>
 #include <fstream>
 
-#include "app/camera/Camera.h"
+#include "app/camera/CameraController.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "rendering/core/PhotographicSettings.h"

@@ -21,7 +21,7 @@
 #include "rendering/shadows/TessySettings.h" // Tessy N3: tessy::g_vsm
 #include "core/diagnostics/ArtifactWriter.h" // logs/vsm_pages.log (g_logPageStats file mirror)
 #include <chrono>
-#include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
+#include "rendering/wind/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
 {

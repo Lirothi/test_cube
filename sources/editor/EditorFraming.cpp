@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstddef>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/RenderableObjectBase.h"

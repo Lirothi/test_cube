@@ -1,5 +1,7 @@
 #include "app/Shipping.h"
 
+#include "app/BootSwitches.h"
+
 #include "core/JsonField.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
@@ -17,15 +19,6 @@
 
 namespace shipping
 {
-namespace
-{
-    constexpr const char* kAllowed[] = {
-        "--window", "--level", "--log-level", "--user-dir",
-        "--shot", "--shot-delay", "--cam-pos", "--cam-rot", "--wind-freeze", "--time", "--play", "--crash-selftest",
-        "--scalability", // the graphics preset (docs/scalability_plan.md §4.5): low, medium, high, ultra, off
-        "--settings-menu", // the settings screen open at boot, for the gates' --shot (§8.5)
-    };
-}
 
 std::string FilterCommandLine(const wchar_t* fullCommandLine, std::vector<std::string>& dropped)
 {
@@ -45,8 +38,9 @@ std::string FilterCommandLine(const wchar_t* fullCommandLine, std::vector<std::s
             arg += "=" + vfs::Narrow(argv[++i]);
             eq = name.size();
         }
-        bool allowed = false;
-        for (const char* a : kAllowed) { allowed = allowed || name == a; }
+        // The switch table's row says whether a Shipping build keeps it (architecture plan R3.2); an unknown switch goes.
+        const boot::Switch* row = boot::FindSwitch(name);
+        const bool allowed = row && row->shipping;
         if (!allowed)
         {
             dropped.push_back(arg);

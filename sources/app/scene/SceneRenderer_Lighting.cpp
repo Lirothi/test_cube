@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include "app/scene/SceneRenderer.h"
+#include "shaders/shared/lighting_slots.h" // the lighting pass's registers by name (architecture plan R5.3)
 
 #include <algorithm>
 #include <array>
@@ -23,7 +24,7 @@
 
 #include "rendering/core/RenderConstants.h"
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
@@ -41,7 +42,7 @@
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 #include "rendering/shadows/ShadowSettings.h"
 #include "ocean/OceanRenderable.h" // caustics: flipbook SRV + water level + shared clock
-#include "vfx/WindState.h" // W3: fold WindState into the gbuffer per-view CB
+#include "rendering/wind/WindState.h" // W3: fold WindState into the gbuffer per-view CB
 #include "core/task/TaskSystem.h"
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
@@ -813,67 +814,74 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
         bool vsmDir = false;
         FillLightingConstants(renderer, camera, constants, causticsSrv, vsmDir);
 
-        const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
-                                              *SamplerManager::ComparisonLinearClamp(),
-                                              *SamplerManager::LinearWrap(),
-                                              // s3: the BRDF LUT and the sky cubes, read exactly
-                                              // as compose reads them -- clamped, not wrapped.
-                                              *SamplerManager::LinearClamp() };
+        // The pass's tables by the slot names the shader uses (shaders/shared/lighting_slots.h, architecture plan R5.3):
+        // lighting_cs.hlsl's TC_REGISTER(t, LIGHTING_T_...) and the index here are one name.
+        std::array<D3D12_SAMPLER_DESC, LIGHTING_SAMPLER_COUNT> samplerDescs{};
+        samplerDescs[LIGHTING_S_POINT_CLAMP] = *SamplerManager::PointClamp();
+        samplerDescs[LIGHTING_S_COMPARISON_LINEAR] = *SamplerManager::ComparisonLinearClamp();
+        samplerDescs[LIGHTING_S_LINEAR_WRAP] = *SamplerManager::LinearWrap();
+        // s3: the BRDF LUT and the sky cubes, read exactly as compose reads them -- clamped, not wrapped.
+        samplerDescs[LIGHTING_S_LINEAR_CLAMP] = *SamplerManager::LinearClamp();
+
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LIGHTING_SRV_COUNT> srv{};
+        srv[LIGHTING_T_GB0] = D.gbSRV[0];
+        srv[LIGHTING_T_GB1] = D.gbSRV[1];
+        srv[LIGHTING_T_GB2] = D.gbSRV[2];
+        srv[LIGHTING_T_GB_VELOCITY] = D.gbSRV[3];
+        srv[LIGHTING_T_DEPTH] = D.depthSRV;
+        // S16 -- the SAME SLOT holds MOMENTS when EVSM is on. Swapping the resource rather than adding a binding is what
+        // keeps this root signature, the fog's and glass's unchanged; csm_sample decides how to read it from the exponents
+        // in the partition, and both switches come from decisions_.sdsmEvsm.
+        srv[LIGHTING_T_SHADOW_ATLAS] = (decisions_.sdsmEvsm && frame_->sdsm) ? frame_->sdsm->MomentsSrv() : D.shadowSRV;
+        srv[LIGHTING_T_VSM_PAGE_TABLE] = vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(); // inert in Legacy
+        srv[LIGHTING_T_VSM_POOL] = vsmDir ? frame_->vsm->PagePoolSrv() : renderer->VsmDummyTexSrv();            // inert in Legacy
+        srv[LIGHTING_T_GB_AUX] = D.gbAuxSRV;
+        srv[LIGHTING_T_CAUSTICS] = causticsSrv.ptr != 0 ? causticsSrv : renderer->VsmDummyTexSrv(); // inert without water
+        // F8 sky irradiance. The dummy keeps the VOLATILE table fully populated on a level whose sky has no derivatives;
+        // `skyIrradianceEnabled` is 0 there, so it is never sampled.
+        srv[LIGHTING_T_SKY_IRRADIANCE] = (frame_->skybox && frame_->skybox->HasIbl())
+            ? frame_->skybox->IrradianceSrv()
+            : renderer->VsmDummyTexSrv();
+        // P6B dynamic AO at render resolution. Bound unconditionally to keep the VOLATILE range fully populated;
+        // `gtaoEnabled` is 0 when the pass did not run, and the shader does not sample it then -- which matters, because
+        // the target holds whatever was last left in it rather than 1.
+        srv[LIGHTING_T_GTAO] = D.gtaoUpsampledSRV;
+        // The sky specular set, mirroring compose. All three are bound unconditionally to keep the VOLATILE range
+        // populated; `enableSkySpecular` and `skySpecMipCount` decide whether any of them is sampled, exactly as in compose.
+        srv[LIGHTING_T_SKY_SPECULAR] = (frame_->skybox && frame_->skybox->HasIbl())
+            ? frame_->skybox->SpecularSrv()
+            : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_BRDF_LUT] = (frame_->skybox && frame_->skybox->HasIbl())
+            ? frame_->skybox->GetBrdfLut()->GetSRVCPU()
+            : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_SKYBOX] = frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv();
+        // Plan C3 cloud shadow map, gated by `cloudShadowParams.x`; the dummy keeps the VOLATILE range populated on frames
+        // without one.
+        srv[LIGHTING_T_CLOUD_SHADOW] = volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv();
+        // S15, this frame's SDSM partitions. Gated by the cbuffer's csmSdsmPartitions; the dummy BUFFER srv (not the
+        // texture one) keeps the VOLATILE range populated in Legacy and VSM, where the shader never reads it.
+        srv[LIGHTING_T_SDSM_PARTITIONS] = (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
+            ? frame_->sdsm->PartitionSrv()
+            : renderer->VsmDummyBufferSrv();
+        // Plan S, the RT sky visibility. Always the real target (it exists on every frame and is declared at its rest);
+        // read only when skyVisParams.x says it was written.
+        srv[LIGHTING_T_SKY_VIS] = D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv();
+        // Plan D, the near GI cascade (irradiance, depth moments, probe state), declared at rest whenever it exists; read
+        // only when ddgiParams.x says a generation is applied.
+        srv[LIGHTING_T_DDGI_IRRADIANCE] = ddgi_[0].Ready() ? ddgi_[0].IrradianceSrv() : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_DDGI_DEPTH] = ddgi_[0].Ready() ? ddgi_[0].DepthSrv() : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_DDGI_PROBE_STATE] = ddgi_[0].Ready() ? ddgi_[0].StateSrv() : renderer->VsmDummyBufferSrv();
+        // The far cascade, the same three; read only when ddgiFarParams.x says so.
+        srv[LIGHTING_T_DDGI_FAR_IRRADIANCE] = ddgi_[1].Ready() ? ddgi_[1].IrradianceSrv() : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_DDGI_FAR_DEPTH] = ddgi_[1].Ready() ? ddgi_[1].DepthSrv() : renderer->VsmDummyTexSrv();
+        srv[LIGHTING_T_DDGI_FAR_PROBE_STATE] = ddgi_[1].Ready() ? ddgi_[1].StateSrv() : renderer->VsmDummyBufferSrv();
+        // Every slot has its line above: an empty handle here is a slot the table forgot.
+        assert(std::all_of(srv.begin(), srv.end(), [](const D3D12_CPU_DESCRIPTOR_HANDLE& h) { return h.ptr != 0; }));
+
         RecordComputeDispatch(renderer, t.cl, lighting.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteLightingConstants(constants, dest); },
-            { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV,
-              // t5: S16 -- the SAME SLOT holds MOMENTS when EVSM is on. Swapping the resource
-              // rather than adding a binding is what keeps this root signature, the fog's and
-              // glass's unchanged; csm_sample decides how to read it from the exponents in the
-              // partition, and both switches come from decisions_.sdsmEvsm.
-              (decisions_.sdsmEvsm && frame_->sdsm) ? frame_->sdsm->MomentsSrv() : D.shadowSRV,
-              vsmDir ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t6 (inert in Legacy)
-              vsmDir ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t7 (inert in Legacy)
-              D.gbAuxSRV,                                                             // t8
-              causticsSrv.ptr != 0 ? causticsSrv : renderer->VsmDummyTexSrv(),        // t9 (inert without water)
-              // t10: F8 sky irradiance. The dummy keeps the VOLATILE table fully populated on a
-              // level whose sky has no derivatives; `skyIrradianceEnabled` is 0 there, so it is
-              // never sampled.
-              (frame_->skybox && frame_->skybox->HasIbl())
-                  ? frame_->skybox->IrradianceSrv()
-                  : renderer->VsmDummyTexSrv(),
-              // t11: P6B dynamic AO at render resolution. Bound unconditionally to keep the
-              // VOLATILE range fully populated; `gtaoEnabled` is 0 when the pass did not run, and
-              // the shader does not sample it then -- which matters, because the target holds
-              // whatever was last left in it rather than 1.
-              D.gtaoUpsampledSRV,
-              // t12/t13/t14: the sky specular set, mirroring compose. All three are bound
-              // unconditionally to keep the VOLATILE range populated; `enableSkySpecular` and
-              // `skySpecMipCount` decide whether any of them is sampled, exactly as in compose.
-              (frame_->skybox && frame_->skybox->HasIbl())
-                  ? frame_->skybox->SpecularSrv()
-                  : renderer->VsmDummyTexSrv(),
-              (frame_->skybox && frame_->skybox->HasIbl())
-                  ? frame_->skybox->GetBrdfLut()->GetSRVCPU()
-                  : renderer->VsmDummyTexSrv(),
-              frame_->skybox ? frame_->skybox->EnvironmentSrv() : renderer->VsmDummyTexSrv(),
-              // t15: plan C3 cloud shadow map, gated by `cloudShadowParams.x`; the dummy keeps the
-              // VOLATILE range populated on frames without one.
-              volumetricCloud_.ShadowBuilt() ? volumetricCloud_.ShadowSrv() : renderer->VsmDummyTexSrv(),
-              // t16: S15, this frame's SDSM partitions. Gated by the cbuffer's csmSdsmPartitions;
-              // the dummy BUFFER srv (not the texture one) keeps the VOLATILE range populated
-              // in Legacy and VSM, where the shader never reads it.
-              (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
-                  ? frame_->sdsm->PartitionSrv()
-                  : renderer->VsmDummyBufferSrv(),
-              // t17: plan S, the RT sky visibility. Always the real target (it exists on every frame
-              // and is declared at its rest); read only when skyVisParams.x says it was written.
-              D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv(),
-              // t18-t20: plan D, the near GI cascade (irradiance, depth moments, probe state), declared
-              // at rest whenever it exists; read only when ddgiParams.x says a generation is applied.
-              ddgi_[0].Ready() ? ddgi_[0].IrradianceSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_[0].Ready() ? ddgi_[0].DepthSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_[0].Ready() ? ddgi_[0].StateSrv() : renderer->VsmDummyBufferSrv(),
-              // t21-t23: the far cascade, the same three; read only when ddgiFarParams.x says so.
-              ddgi_[1].Ready() ? ddgi_[1].IrradianceSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_[1].Ready() ? ddgi_[1].DepthSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_[1].Ready() ? ddgi_[1].StateSrv() : renderer->VsmDummyBufferSrv() },
-            { D.lightUAV },
+            srv,
+            { D.lightUAV }, // u: LIGHTING_U_LIGHT_TARGET, the only one
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
             D.light.Get());

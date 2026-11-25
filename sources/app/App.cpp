@@ -41,22 +41,9 @@
 #include <timeapi.h> // timeBeginPeriod: the frame cap's sleep granularity (see App::Run)
 #include <wrl/client.h>
 #include <dxgi1_4.h> // the auto-detect's GPU identity (EnumAdapterByLuid)
-#include "vfx/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
+#include "rendering/wind/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
 #include "vfx/ParticleTypes.h" // --set=particles.airFromFog
 
-// Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
-std::string g_bootLevelPath;
-std::string g_sceneStressExtraLevel;
-bool  g_camOverride = false;
-float g_camPos[3] = { 0.0f, 0.0f, 0.0f };
-float g_camFly[2] = { 0.0f, 0.0f }; // "--cam-fly=x,z": constant camera drift in m/s (world XZ)
-// "--cam-fly-delay=<sec>": hold the camera STILL for this long, then start the drift. Captures
-// the motion-ONSET transient (converged temporal histories -> first frames of motion), which a
-// from-boot drift can never show.
-float g_camFlyDelay = 0.0f;
-// "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift -- the headless stand-in for
-// mouse look. A turning camera is what moves the cascade boxes between frames (S14 cross-check).
-float g_camFlyYaw = 0.0f;
 // "--set=camera.fly:<m/s>" / MCP set_settings: fly along the camera's own view, negative = backwards, 0 stops --
 // a person flying through a tunnel in a running editor (the camera's heading is its own; --cam-fly's is the world's).
 float g_camFlyForward = 0.0f;
@@ -72,69 +59,20 @@ float g_recordDt = 0.0f;
 // at (frame rate / scale) frames a second -- at 240 fps and 4 the physics steps once a frame and the water's heights
 // land 30 times a second of the world, as at 60 fps; past frame rate / 15 the physics drops steps (physics.maxSteps).
 float g_timeScale = 1.0f;
-// "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
-// straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
-// RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
-float g_camOrbit[3] = { 0.0f, 0.0f, 0.0f };
-float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-// One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
-std::string g_shotPath;
-double g_shotDelaySec = 7.0;
-// Phase series (see App.h): "--shot-count=<n> --shot-step=<sec> [--shot-interval=<sec>]".
-int    g_shotCount = 1;
-double g_shotStepSec = 0.0;
-double g_shotIntervalSec = 1.0;
-// Temporary VSM perf harness; see App.h.
-std::string g_profDumpPath;
-uint32_t g_traceFrames = 0;
-// Boot upscaler mode; see App.h. Set by main.cpp from "--dlss=<mode>". -1 = compiled default.
-int g_bootDlssMode = -1;
 // "--set=dlss.mode:<sl::DLSSMode>" / MCP set_settings: switch the upscaler in a RUNNING process, at the frame's safe
 // point (the dev window's combo path). 0 = off (native), 2 = Balanced, 6 = DLAA. -1 = nothing asked.
 int g_requestDlssMode = -1;
 // "--set=aa.renderScale:<0.25..1>": the render scale without DLSS (the resolution group's native road), at the same safe
 // point as dlss.mode. < 0 = nothing asked.
 float g_requestRenderScale = -1.0f;
-// "--scalability=low|medium|high|ultra|off" (main.cpp): the preset at boot over what the player saved. -2 = not given,
-// -1 = off (no group managed).
-int g_bootScalability = -2;
-// "--scalability-check": the gate of docs/scalability_plan.md §8.1 in a running process -- every level of every group
-// applied and every knob read back, the ceilings over the level's own values, Ultra against the boot's values.
-bool g_scalabilityCheck = false;
-int g_scalabilityCheckExit = 0; // its failed reads: main's exit code
-std::string g_bootSettingsMenu;
-// Borderless client size; see App.h. Set by main.cpp from "--window=<w>x<h>". 0 = default window.
-int g_windowSize[2] = { 0, 0 };
-// Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
-bool g_hudHidden = false;
-bool g_bootLogWindow = false;
-bool g_bootMemoryWindow = false;
-std::string g_bootDevTab;
-int g_bootMcpPort = 0;
-bool g_bootEditor = false;
-bool g_bootPlay = false;
-bool g_playByLevelRule = false;
-std::string g_bootEditMesh;
-bool g_bootShowImport = false;
-bool g_bootBuildDist = false;
-std::string g_bootBuildDistProfile;
-std::string g_bootImportItem;
-std::string g_bootInspect;
-std::string g_intentPhrase;
-bool   g_intentRun = false;
-bool   g_intentFinished = false;
-double g_intentTimeoutSec = 180.0;
-int    g_intentRepeat = 1;
-std::string g_chatPhrase;
-std::string g_chatThenPhrase;
 std::atomic<bool> g_modelBusy{ false };
 std::atomic<bool> g_modelBusyBackground{ false };
-// Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
-std::string g_sweepSetting;
-std::vector<float> g_sweepValues;
-std::vector<std::pair<std::string, std::vector<float>>> g_sweepExtra;
-// Fixed settings for the whole run; see App.h. Set by main.cpp from "--set=<name>:<value>;...".
-std::vector<std::pair<std::string, float>> g_fixedSettings;
+
+BootOptions& Boot()
+{
+    static BootOptions options;
+    return options;
+}
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
@@ -144,11 +82,15 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanWakeKnobs.h" // --set=ocean.wake*
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
-#include "rendering/post/BloomRenderer.h" // --set=bloom.convFftFused
 #include "rendering/streaming/StreamingSettings.h" // --set=streaming.* (texture streaming A2)
 #include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
 #include "rendering/debug/LodDebugView.h" // --set=lod.debug (LOD selection debug view)
 #include "rendering/core/Screenshot.h"
+#include "app/harness/CaptureHarnesses.h" // R3.3: --shot, --sweep, --profdump, --trace
+#include "app/harness/GateHarnesses.h" // R3.3: --mem-readout, --scalability-check, --rt-audit
+#include "app/harness/IntentHarness.h" // R3.3: --intent's end
+#include "app/harness/SettingsDumpHarness.h" // R2.0: --settings-dump
+#include "input/InputActions.h"   // R12.3: player.test* go into the keys' channel
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
 #include "core/threading/ThreadRole.h" // game thread plan: the frame's phases and their roles
@@ -159,6 +101,8 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include "app/scene/SkyOcclusionMap.h"      // skyVis.fallbackResolution / fallbackTexel: the map's own ranges
 #include "app/settings/Scalability.h"       // sg.* (docs/scalability_plan.md)
+#include "app/settings/SettingContext.h"    // R2.1: what a settings registry row reaches
+#include "core/settings/SettingsRegistry.h" // R2.1: the names --set takes, one row each
 #include "app/settings/DisplayMode.h"       // the window's mode, monitor and size (S6), display.* below
 #include "app/settings/UserSettings.h"      // image.* / controls.* (S7)
 #include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
@@ -463,6 +407,12 @@ namespace
     bool ApplySweepValue(Scene& scene, SceneRenderSettings& renderSettings,
                          const std::string& setting, float value)
     {
+        // The settings registry first (architecture plan R2.1): a name that moved there lives there alone.
+        if (const settings::SettingDesc* row = settings::Registry().Find(setting))
+        {
+            settings::SettingContext ctx{ scene, renderSettings };
+            return row->apply(ctx, value);
+        }
         // Occlusion plan S0: recorded, applied after the --set loop (needs the renderer + level path).
         if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
@@ -519,7 +469,7 @@ namespace
             return true;
         }
         // --no-hud for a running process: 0 hides the HUD's text (a film's frames), 1 shows it.
-        if (setting == "debug.hud") { g_hudHidden = value == 0.0f; return true; }
+        if (setting == "debug.hud") { Boot().frame.hudHidden = value == 0.0f; return true; }
         // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
         if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
         // UE's r.OneFrameThreadLag: 0 = the game half waits for each frame right after handing it over.
@@ -580,20 +530,25 @@ namespace
                 player.*(entry->member) = std::clamp(value, entry->lo, entry->hi);
                 return true;
             }
-            if (key == "testMoveX") { player.testMoveX = std::clamp(value, -1.0f, 1.0f); return true; }
-            if (key == "testMoveZ") { player.testMoveZ = std::clamp(value, -1.0f, 1.0f); return true; }
-            if (key == "testJump") { player.testJump = value != 0.0f; return true; }
-            if (key == "testCrouch") { player.testCrouch = value != 0.0f; return true; }
-            if (key == "testSprint") { player.testSprint = value != 0.0f; return true; }
-            if (key == "testInteract") { player.testInteract = value != 0.0f; return true; }
-            if (key == "testView") { player.testView = value != 0.0f; return true; }
-            if (key == "testAnchor") { player.testAnchor = value != 0.0f; return true; }
-            if (key == "testAutopilot") { player.testAutopilot = value != 0.0f; return true; }
-            if (key == "testThrottle") { player.testThrottle = std::clamp(value, -1.0f, 1.0f); return true; }
-            if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
-            if (key == "testOrbit") { player.testOrbit = value; return true; }
-            if (key == "testOrbitPitch") { player.testOrbitPitch = value; return true; }
-            if (key == "testFreeCamera") { player.testFreeCamera = value != 0.0f; return true; }
+            // What a script says in place of the keys goes into the keys' own channel (architecture plan R12.3): a
+            // press is the next frame's press, held / axis values stay until 0. testMoveX / Z are the WORLD's axes
+            // (actions::kMoveWorldX / Z); testThrottle / testRudder are what W S / A D say (MoveZ / MoveX).
+            InputManager& input = Systems::GetInput();
+            if (key == "testMoveX") { input.InjectAxis(actions::kMoveWorldX, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testMoveZ") { input.InjectAxis(actions::kMoveWorldZ, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testThrottle") { input.InjectAxis(actions::kMoveZ, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testRudder") { input.InjectAxis(actions::kMoveX, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testCrouch") { input.InjectHeld(actions::kCrouch, value != 0.0f); return true; }
+            if (key == "testSprint") { input.InjectHeld(actions::kSprint, value != 0.0f); return true; }
+            if (key == "testJump") { if (value != 0.0f) { input.InjectPress(actions::kJump); } return true; }
+            if (key == "testInteract") { if (value != 0.0f) { input.InjectPress(actions::kInteract); } return true; }
+            if (key == "testView") { if (value != 0.0f) { input.InjectPress(actions::kToggleView); } return true; }
+            if (key == "testAnchor") { if (value != 0.0f) { input.InjectPress(actions::kAnchor); } return true; }
+            if (key == "testAutopilot") { if (value != 0.0f) { input.InjectPress(actions::kAutopilot); } return true; }
+            // Not keys: where a script holds the boat's camera (game::ScriptCamera).
+            if (key == "testOrbit") { game::ScriptCamera().orbit = value; return true; }
+            if (key == "testOrbitPitch") { game::ScriptCamera().orbitPitch = value; return true; }
+            if (key == "testFreeCamera") { game::ScriptCamera().free = value != 0.0f; return true; }
         }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
@@ -606,7 +561,7 @@ namespace
         // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running
         // editor, the other motion a temporal history has to survive.
         if (setting == "camera.mouseSmoothing") { g_cameraMouseSmoothingMs = std::clamp(value, 0.0f, kCameraMouseSmoothingMaxMs); return true; }
-        if (setting == "camera.spin") { g_camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
+        if (setting == "camera.spin") { Boot().frame.camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
         // A boat's camera, at the helm and on a bot's boat (race.watch): 0 behind, 1 the cockpit, 2 cinema (V in Play).
         if (setting == "camera.boatView")
         {
@@ -1536,118 +1491,6 @@ namespace
         if (setting == "fog.localLightScatter") { scene.HeightFogRef().localLightScatter = std::max(value, 0.0f); return true; }
         if (setting == "fog.localSoftFading") { scene.HeightFogRef().localSoftFading = std::max(value, 0.0f); return true; }
         if (setting == "fog.localDistanceBias") { scene.HeightFogRef().localDistanceBias = std::max(value, 0.0f); return true; }
-        // P8 bloom. `bloom.enabled` is the gate; the rest are the extraction and the pyramid, so
-        // a sweep can find defaults without a rebuild.
-        if (setting == "bloom.enabled")
-        {
-            scene.BloomRef().enabled = value != 0.0f;
-            return true;
-        }
-        if (setting == "bloom.intensity") { scene.BloomRef().intensity = value; return true; }
-        if (setting == "bloom.threshold") { scene.BloomRef().threshold = value; return true; }
-        if (setting == "bloom.softKnee") { scene.BloomRef().softKnee = value; return true; }
-        if (setting == "bloom.radius") { scene.BloomRef().radius = value; return true; }
-        // P8C: 0 = the pyramid, 1 = FFT convolution.
-        if (setting == "bloom.method")
-        {
-            scene.BloomRef().method = static_cast<uint32_t>(std::max(0.0f, value));
-            return true;
-        }
-        if (setting == "bloom.blades")
-        {
-            scene.BloomRef().convBlades = static_cast<uint32_t>(std::max(0.0f, value));
-            return true;
-        }
-        // P8C-2: the aperture-kernel keys (bloom.kernelRadius, spokes*, chroma, the anamorphic
-        // squeeze, ghostSpacing) are GONE with the mechanism -- deleted, not aliased.
-        // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult.
-        if (setting == "bloom.preFilterMin") { scene.BloomRef().convPreFilterMin = value; return true; }
-        if (setting == "bloom.preFilterMax") { scene.BloomRef().convPreFilterMax = value; return true; }
-        if (setting == "bloom.preFilterMult") { scene.BloomRef().convPreFilterMult = value; return true; }
-        // P8C-6: the kernel tint, one channel per key -- `--set` carries floats only.
-        if (setting == "bloom.kernelTintR") { scene.BloomRef().convKernelTint[0] = value; return true; }
-        if (setting == "bloom.kernelTintG") { scene.BloomRef().convKernelTint[1] = value; return true; }
-        if (setting == "bloom.kernelTintB") { scene.BloomRef().convKernelTint[2] = value; return true; }
-        if (setting == "bloom.convSize") { scene.BloomRef().convSize = value; return true; }
-        if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
-        if (setting == "bloom.convFftFused") { bloom::g_fftFused_game = value != 0.0f; return true; } // the FFT's fused frame order
-        if (setting == "bloom.ghostMeshShader") { bloom::g_ghostMeshShader_game = value != 0.0f; return true; } // the ghosts' MS scatter
-        if (setting == "bloom.convBeforeUpscale") { scene.BloomRef().convBeforeUpscale = value != 0.0f; return true; }
-        if (setting == "bloom.convTemporalWeight") { scene.BloomRef().convTemporalWeight = std::clamp(value, 0.01f, 1.0f); return true; }
-        if (setting == "bloom.convTemporalSunReject") { scene.BloomRef().convTemporalSunReject = value != 0.0f; return true; }
-        // The art split: the sun disc's own share of the kernel and of the ghosts (1 = like any source).
-        if (setting == "bloom.sunKernelScale") { scene.BloomRef().convSunKernelScale = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "bloom.sunGhostScale") { scene.BloomRef().convSunGhostScale = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "bloom.sunSplitRadiusDeg") { scene.BloomRef().convSunSplitRadiusDeg = std::clamp(value, 0.1f, 45.0f); return true; }
-        if (setting == "bloom.anamorphicIntensity")
-        {
-            scene.BloomRef().convAnamorphicIntensity = value;
-            return true;
-        }
-        if (setting == "bloom.anamorphicLength")
-        {
-            scene.BloomRef().convAnamorphicLength = value;
-            return true;
-        }
-        if (setting == "bloom.anamorphicWidth")
-        {
-            scene.BloomRef().convAnamorphicWidth = value;
-            return true;
-        }
-        if (setting == "bloom.anamorphicThreshold")
-        {
-            scene.BloomRef().convAnamorphicThreshold = value;
-            return true;
-        }
-        if (setting == "bloom.anamorphicChroma")
-        {
-            scene.BloomRef().convAnamorphicChroma = value;
-            return true;
-        }
-        if (setting == "bloom.ghosts")
-        {
-            scene.BloomRef().convGhosts = static_cast<uint32_t>(std::max(0.0f, value));
-            return true;
-        }
-        if (setting == "bloom.ghostBokeh") { scene.BloomRef().convGhostBokeh = value; return true; }
-        // The fake sun glare (BloomSettings::sunGlare*).
-        if (setting == "bloom.sunGlare") { scene.BloomRef().sunGlareIntensity = std::max(0.0f, value); return true; }
-        if (setting == "bloom.sunGlareRadius") { scene.BloomRef().sunGlareRadiusDeg = std::max(0.05f, value); return true; }
-        if (setting == "bloom.sunGlareVeil") { scene.BloomRef().sunGlareVeil = std::max(0.0f, value); return true; }
-        if (setting == "bloom.sunGlareLowSun") { scene.BloomRef().sunGlareLowSunDeg = std::clamp(value, 0.0f, 90.0f); return true; }
-        if (setting == "bloom.sunGlareLowSunFloor") { scene.BloomRef().sunGlareLowSunFloor = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "bloom.sunGlareSmoothing") { scene.BloomRef().sunGlareSmoothingSec = std::clamp(value, 0.0f, 2.0f); return true; }
-        if (setting == "bloom.sunGlareVeilRadius") { scene.BloomRef().sunGlareVeilRadiusDeg = std::max(0.1f, value); return true; }
-        // The sun's corona (BloomSettings::sunRays*).
-        if (setting == "bloom.sunRays") { scene.BloomRef().sunRaysIntensity = std::max(0.0f, value); return true; }
-        if (setting == "bloom.sunRaysCount") { scene.BloomRef().sunRaysCount = static_cast<uint32_t>(std::clamp(value, 16.0f, 2000.0f)); return true; }
-        if (setting == "bloom.sunRaysBundles") { scene.BloomRef().sunRaysBundles = static_cast<uint32_t>(std::clamp(value, 1.0f, 128.0f)); return true; }
-        if (setting == "bloom.sunRaysBundleStrength") { scene.BloomRef().sunRaysBundleStrength = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "bloom.sunRaysBundleWidth") { scene.BloomRef().sunRaysBundleWidthDeg = std::clamp(value, 0.1f, 360.0f); return true; }
-        if (setting == "bloom.sunRaysWidth") { scene.BloomRef().sunRaysWidthDeg = std::clamp(value, 0.005f, 2.0f); return true; }
-        if (setting == "bloom.sunRaysSpikeLength") { scene.BloomRef().sunRaysSpikeLengthDeg = std::clamp(value, 0.1f, 60.0f); return true; }
-        if (setting == "bloom.sunRaysSpikeWidth") { scene.BloomRef().sunRaysSpikeWidthDeg = std::clamp(value, 0.005f, 2.0f); return true; }
-        if (setting == "bloom.sunRaysHalo") { scene.BloomRef().sunRaysHalo = std::max(0.0f, value); return true; }
-        if (setting == "bloom.sunRaysHaloRadius") { scene.BloomRef().sunRaysHaloRadiusDeg = std::max(0.1f, value); return true; }
-        // 0 = the procedural corona, 1 = astra6's image (the only way to A/B the two from a command line).
-        if (setting == "bloom.sunRaysTexture") { scene.BloomRef().sunRaysTexture = value != 0.0f ? "textures/sun_corona_v2.png" : ""; return true; }
-        if (setting == "bloom.sunRaysTextureSize") { scene.BloomRef().sunRaysTextureSizeDeg = std::max(0.5f, value); return true; }
-        if (setting == "bloom.sunRaysLength") { scene.BloomRef().sunRaysLengthDeg = std::max(0.1f, value); return true; }
-        if (setting == "bloom.sunRaysSpikes") { scene.BloomRef().sunRaysSpikes = std::max(0.0f, value); return true; }
-        if (setting == "bloom.sunRaysSpikeCount") { scene.BloomRef().sunRaysSpikeCount = static_cast<uint32_t>(std::clamp(value, 2.0f, 32.0f)); return true; }
-        if (setting == "bloom.sunRaysRotation") { scene.BloomRef().sunRaysRotationDeg = value; return true; }
-        if (setting == "bloom.sunRaysVisibleExponent") { scene.BloomRef().sunRaysVisibleExponent = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "bloom.ghostThreshold") { scene.BloomRef().convGhostThreshold = value; return true; }
-        if (setting == "bloom.ghostIntensity")
-        {
-            scene.BloomRef().convGhostIntensity = value;
-            return true;
-        }
-        if (setting == "bloom.firefly")
-        {
-            scene.BloomRef().fireflyClamp = value != 0.0f;
-            return true;
-        }
         if (setting == "ssr.technique")
         {
             const uint32_t t = (uint32_t)std::max(0.0f, value);
@@ -2117,6 +1960,12 @@ namespace
     // frame's safe point (dlss.mode, aa.renderScale) reads as asked until then.
     bool ReadSweepValue(Scene& scene, const SceneRenderSettings& rs, const std::string& name, float& out)
     {
+        // The settings registry first (R2.1). Its rows only read: the const is the chain's promise, kept by the rows.
+        if (const settings::SettingDesc* row = settings::Registry().Find(name))
+        {
+            settings::SettingContext ctx{ scene, const_cast<SceneRenderSettings&>(rs) };
+            return row->read && row->read(ctx, out);
+        }
         const auto b = [&](bool v) { out = v ? 1.0f : 0.0f; return true; };
         const auto f = [&](float v) { out = v; return true; };
         const auto u = [&](std::uint64_t v) { out = static_cast<float>(v); return true; };
@@ -2164,9 +2013,6 @@ namespace
         if (name == "cloud.shadowMapSampleCount") { return u(scene.VolumetricCloudRef().shadowMapSampleCount); }
         if (name == "cloud.msOctaves") { return u(scene.VolumetricCloudRef().msOctaves); }
         if (name == "cloud.captureTexels") { return f(render::g_cloudCaptureTexels_game); }
-        if (name == "bloom.method") { return u(scene.BloomRef().method); }
-        if (name == "bloom.convPercent") { return f(scene.BloomRef().convPercent); }
-        if (name == "bloom.ghostIntensity") { return f(scene.BloomRef().convGhostIntensity); }
         if (name == "lightShafts.enabled") { return b(scene.SunLightRef().GetLightShaftsEnabled()); }
         if (name == "gtao.enabled") { return b(scene.GtaoRef().enabled); }
         if (name == "gtao.numSteps") { return u(scene.GtaoRef().numSteps); }
@@ -2203,9 +2049,6 @@ namespace
         if (name == "controls.invertY") { return b(settings::CurrentControlsSettings().invertY); }
         return false;
     }
-
-    // Levels the loop has finished loading (loadPendingLevel), so the scalability check knows when a reload is in.
-    int g_levelLoadsCompleted = 0;
 
     // The adapter as the auto-detect remembers it: its name and the user-mode driver's version (only the name is compared:
     // a new GPU measures again, a driver update keeps the player's levels), and its own memory.
@@ -2407,201 +2250,6 @@ namespace
         }
     }
 
-    // "--scalability-check" (docs/scalability_plan.md §8.1, §8.2): in the running game, from an unmanaged start with the
-    // level's own values, every level (Low .. Ultra, the render resolution with it) is applied and every knob of every
-    // group read back against what the table asks -- a ceiling against the level's own value; then the level is loaded
-    // again at Low and the ceilings must hold over the reloaded values; then the start is restored. One line per
-    // mismatch and the verdict `scalability check: PASS|FAIL` in the session log. Returns true when it is done.
-    struct ScalabilityCheck
-    {
-        int frame = 0;
-        int phase = 0;
-        int waitUntil = 0;
-        int loadsAtReload = 0;
-        int waitedForLoad = 0;
-        int failed = 0;
-        int checked = 0;
-        std::vector<int> savedGroups;
-        int savedResolution = -1;
-        std::map<std::string, float> own; // the level's own value of every content knob, and every knob's start value
-    };
-
-    void ScalabilityCheckCell(ScalabilityCheck& c, Scene& scene, const SceneRenderSettings& rs, const settings::ScalabilityCell& cell,
-                              const std::string& where)
-    {
-        const settings::Scalability& s = settings::TheScalability();
-        for (const auto& [name, op] : cell)
-        {
-            if (s.Pins().count(name)) { continue; }
-            float expected = op.value;
-            const auto own = c.own.find(name);
-            const float base = own != c.own.end() ? own->second : 0.0f;
-            switch (op.kind)
-            {
-            case settings::ScalabilityOp::Kind::Level: expected = base; break;
-            case settings::ScalabilityOp::Kind::Max: expected = std::min(base, op.value); break;
-            case settings::ScalabilityOp::Kind::Min: expected = std::max(base, op.value); break;
-            default: break;
-            }
-            float actual = 0.0f;
-            ++c.checked;
-            if (!ReadSweepValue(scene, rs, name, actual))
-            {
-                ++c.failed;
-                LOG_ERROR(logging::LogCategory::App, "scalability check: {} {}: cannot be read", where, name);
-            }
-            else if (std::abs(actual - expected) > 1e-3f * std::max(1.0f, std::abs(expected)))
-            {
-                ++c.failed;
-                LOG_ERROR(logging::LogCategory::App, "scalability check: {} {}: reads {} where the table asks {}{}", where, name,
-                          actual, expected, op.kind == settings::ScalabilityOp::Kind::Set ? "" : " (over the level's own value)");
-            }
-        }
-    }
-
-    bool StepScalabilityCheck(ScalabilityCheck& c, Scene& scene, SceneRenderSettings& rs, Renderer& renderer, LevelManager& levels)
-    {
-        settings::Scalability& s = settings::TheScalability();
-        ++c.frame;
-        if (c.frame < c.waitUntil) { return false; }
-        const auto verify = [&](int level, const std::string& where)
-        {
-            for (const settings::ScalabilityGroup& g : s.Table().groups)
-            {
-                ScalabilityCheckCell(c, scene, rs, g.levels[static_cast<std::size_t>(level)], where + " sg." + g.key);
-            }
-            const auto& resolution = renderer.IsDlssAvailable() ? s.Table().resolutionDlss : s.Table().resolutionNative;
-            ScalabilityCheckCell(c, scene, rs, resolution[static_cast<std::size_t>(level)], where + " sg.resolution");
-        };
-        const auto applyLevel = [&](int level, const std::string& reason)
-        {
-            s.SetPreset(level);
-            s.SetResolutionLevel(level);
-            s.Apply(reason);
-            c.waitUntil = c.frame + 8; // dlss.mode and aa.renderScale land at the next frame's safe point
-        };
-        if (c.phase == 0)
-        {
-            if (c.frame < 60) { return false; } // the level settles first
-            if (!s.Loaded())
-            {
-                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the table did not load");
-                g_scalabilityCheckExit = 1;
-                return true;
-            }
-            for (std::size_t g = 0; g < s.Table().groups.size(); ++g) { c.savedGroups.push_back(s.GroupLevel(static_cast<int>(g))); }
-            c.savedResolution = s.ResolutionLevel();
-            // An unmanaged start: what the level asks for, before any ceiling. A boot that applied the player's saved
-            // choice capped the level's values; loading the level again gives them back.
-            s.SetPreset(-1);
-            s.SetResolutionLevel(-1);
-            c.loadsAtReload = g_levelLoadsCompleted;
-            levels.RequestLevelPathChange(std::string(levels.GetActiveLevelSourcePath()));
-            c.phase = 1;
-            return false;
-        }
-        if (c.phase == 1)
-        {
-            if (g_levelLoadsCompleted == c.loadsAtReload)
-            {
-                if (++c.waitedForLoad < 3000) { return false; } // a failed or refused reload: a FAIL, not a run that never ends
-                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the level reload did not finish in 3000 frames");
-                g_scalabilityCheckExit = std::max(c.failed, 1);
-                return true;
-            }
-            c.waitedForLoad = 0;
-            if (c.waitUntil == 0) { c.waitUntil = c.frame + 30; return false; }
-            int differ = 0;
-            for (const settings::ScalabilityKnob& k : settings::ScalabilityKnobs())
-            {
-                float v = 0.0f;
-                if (ReadSweepValue(scene, rs, k.name, v)) { c.own[k.name] = v; }
-            }
-            // Ultra = today (§1 item 2): the Ultra column against the values the build starts with.
-            for (const settings::ScalabilityGroup& g : s.Table().groups)
-            {
-                for (const auto& [name, op] : g.levels[settings::kScalabilityLevels - 1])
-                {
-                    if (op.kind != settings::ScalabilityOp::Kind::Set) { continue; }
-                    const float today = c.own[name];
-                    if (std::abs(today - op.value) > 1e-3f * std::max(1.0f, std::abs(op.value)))
-                    {
-                        ++differ;
-                        LOG_INFO(logging::LogCategory::App, "scalability check: Ultra differs from today: sg.{} {} today {} Ultra {}",
-                                 g.key, name, today, op.value);
-                    }
-                }
-            }
-            LOG_INFO(logging::LogCategory::App, "scalability check: Ultra against today's values: {} knob(s) differ", differ);
-            applyLevel(0, "check Low");
-            c.phase = 2;
-            return false;
-        }
-        if (c.phase >= 2 && c.phase <= 5)
-        {
-            const int level = c.phase - 2;
-            verify(level, s.Table().levelNames[static_cast<std::size_t>(level)]);
-            if (level < settings::kScalabilityLevels - 1)
-            {
-                applyLevel(level + 1, "check " + s.Table().levelNames[static_cast<std::size_t>(level + 1)]);
-                ++c.phase;
-                return false;
-            }
-            // The level loaded again at Low: the ceilings must hold over its reloaded values.
-            applyLevel(0, "check Low before a reload");
-            c.loadsAtReload = g_levelLoadsCompleted;
-            c.phase = 6;
-            return false;
-        }
-        if (c.phase == 6)
-        {
-            c.loadsAtReload = g_levelLoadsCompleted;
-            levels.RequestLevelPathChange(std::string(levels.GetActiveLevelSourcePath()));
-            c.phase = 7;
-            return false;
-        }
-        if (c.phase == 7)
-        {
-            if (g_levelLoadsCompleted == c.loadsAtReload)
-            {
-                if (++c.waitedForLoad < 3000) { return false; } // a failed or refused reload: a FAIL, not a run that never ends
-                LOG_ERROR(logging::LogCategory::App, "scalability check: FAIL -- the level reload did not finish in 3000 frames");
-                g_scalabilityCheckExit = std::max(c.failed, 1);
-                return true;
-            }
-            c.waitedForLoad = 0;
-            c.waitUntil = c.frame + 30;
-            c.phase = 8;
-            return false;
-        }
-        if (c.phase == 8)
-        {
-            verify(0, "Low after a level reload");
-            // "Not managed" puts every knob back (the menu's Cancel, the tab's Not managed): to the start's values.
-            s.SetPreset(-1);
-            s.SetResolutionLevel(-1);
-            s.Apply("check: not managed again");
-            for (const auto& [name, start] : c.own)
-            {
-                float now = 0.0f;
-                ++c.checked;
-                if (!ReadSweepValue(scene, rs, name, now) || std::abs(now - start) > 1e-3f * std::max(1.0f, std::abs(start)))
-                {
-                    ++c.failed;
-                    LOG_ERROR(logging::LogCategory::App, "scalability check: not managed again: {} reads {} where it started at {}",
-                              name, now, start);
-                }
-            }
-            for (std::size_t g = 0; g < c.savedGroups.size(); ++g) { s.SetGroupLevel(static_cast<int>(g), c.savedGroups[g]); }
-            s.SetResolutionLevel(c.savedResolution);
-            s.Apply("check done: the start restored");
-            g_scalabilityCheckExit = c.failed;
-            LOG_INFO(logging::LogCategory::App, "scalability check: {} -- {} reads, {} failed", c.failed == 0 ? "PASS" : "FAIL",
-                     c.checked, c.failed);
-            return true;
-        }
-        return true;
-    }
 }
 
 LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -2738,7 +2386,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     display::SetBackgroundFps(savedDisplay.backgroundFps);
     // "--window=<w>x<h>": borderless, client = exactly w x h, at the primary monitor's origin (over
     // the taskbar -- which is the point: a 3840x2160 client on the 3840x2160 panel).
-    if (savedDisplay.saved && !(g_windowSize[0] > 0 && g_windowSize[1] > 0))
+    if (savedDisplay.saved && !(Boot().frame.windowSize[0] > 0 && Boot().frame.windowSize[1] > 0))
     {
         const std::vector<display::MonitorInfo> monitors = display::Monitors();
         const display::Placement placement = display::PlacementFor(savedDisplay, monitors);
@@ -2753,11 +2401,11 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
                  savedDisplay.mode == display::WindowMode::Borderless ? "borderless" : "windowed",
                  display::MonitorLabel(monitors, display::FindMonitor(monitors, savedDisplay.monitor)), defWidth, defHeight);
     }
-    if (g_windowSize[0] > 0 && g_windowSize[1] > 0)
+    if (Boot().frame.windowSize[0] > 0 && Boot().frame.windowSize[1] > 0)
     {
         windowStyle = WS_POPUP;
-        windowWidth = g_windowSize[0];
-        windowHeight = g_windowSize[1];
+        windowWidth = Boot().frame.windowSize[0];
+        windowHeight = Boot().frame.windowSize[1];
         posX = 0;
         posY = 0;
         // The renderer is initialised with defWidth x defHeight below, and the WM_SIZE of the
@@ -2874,7 +2522,7 @@ void App::InitScene()
 
     if (!levelManager.HasLevel(JsonLevel::kName))
     {
-        std::string bootLevel = g_bootLevelPath;
+        std::string bootLevel = Boot().frame.levelPath;
 #if WITH_EDITOR
         if (bootLevel.empty())
         {
@@ -2903,10 +2551,10 @@ void App::InitScene()
     assert(levelLoaded && "Failed to load initial level");
 
     // Applied after the level so it beats the level's own freeCameraStart.
-    if (g_camOverride)
+    if (Boot().frame.camOverride)
     {
         Camera& cam = scene.CameraRef();
-        cam.SetPosition(float3(g_camPos[0], g_camPos[1], g_camPos[2]));
+        cam.SetPosition(float3(Boot().frame.camPos[0], Boot().frame.camPos[1], Boot().frame.camPos[2]));
 
         // Quaternion -> the camera's yaw/pitch/roll. Recovered GEOMETRICALLY rather than by an
         // Euler-extraction formula: yaw/pitch come from where the quaternion points the forward
@@ -2915,7 +2563,7 @@ void App::InitScene()
         // ORDER the camera happens to use, so it cannot silently break if that order is ever
         // changed - and it degrades sanely at the poles instead of producing NaNs.
         const DirectX::XMVECTOR q = DirectX::XMQuaternionNormalize(
-            DirectX::XMVectorSet(g_camRot[0], g_camRot[1], g_camRot[2], g_camRot[3]));
+            DirectX::XMVectorSet(Boot().frame.camRot[0], Boot().frame.camRot[1], Boot().frame.camRot[2], Boot().frame.camRot[3]));
         const DirectX::XMVECTOR fwd = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 0, 1, 0), q);
         const DirectX::XMVECTOR upQ = DirectX::XMVector3Rotate(DirectX::XMVectorSet(0, 1, 0, 0), q);
         DirectX::XMFLOAT3 f{};
@@ -3329,7 +2977,7 @@ namespace
 
 void App::ApplyFixedSettings(Scene& scene)
 {
-    for (const auto& kv : g_fixedSettings)
+    for (const auto& kv : Boot().frame.fixedSettings)
     {
         const bool known = ApplySweepValue(scene, appController_.SettingsRef(), kv.first, kv.second);
         if (known)
@@ -3501,15 +3149,15 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // The boot's own switches are stronger than the levels, as --set is: a --shadow-mode=vsm GBV run must not
                 // be turned into SDSM by a saved Low, nor --dlss= undone by the first level load.
                 if (render::g_shadowModeFromCli_game) { scalability.Pin("shadow.mode"); }
-                if (g_bootDlssMode >= 0) { scalability.Pin("dlss.mode"); }
-                if (g_bootScalability >= -1)
+                if (Boot().frame.dlssMode >= 0) { scalability.Pin("dlss.mode"); }
+                if (Boot().frame.scalability >= -1)
                 {
-                    scalability.SetPreset(g_bootScalability);
-                    if (g_bootScalability == -1) { scalability.SetResolutionLevel(-1); } // off: nothing managed at all
-                    LOG_INFO(logging::LogCategory::App, "--scalability: {}", g_bootScalability >= 0
-                        ? scalability.Table().levelNames[static_cast<std::size_t>(g_bootScalability)] : std::string("off"));
+                    scalability.SetPreset(Boot().frame.scalability);
+                    if (Boot().frame.scalability == -1) { scalability.SetResolutionLevel(-1); } // off: nothing managed at all
+                    LOG_INFO(logging::LogCategory::App, "--scalability: {}", Boot().frame.scalability >= 0
+                        ? scalability.Table().levelNames[static_cast<std::size_t>(Boot().frame.scalability)] : std::string("off"));
                 }
-                else if (g_bootScalability == -3)
+                else if (Boot().frame.scalability == -3)
                 {
                     scalability.RequestAutodetect(build::Packaged()); // --scalability=auto: a dev build's file stays as it is
                 }
@@ -3566,9 +3214,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         // "--dlss=<mode>": apply the boot override once the device, the DLSS handler and the
         // deferred targets exist, so this takes exactly the same path as the dev-window combo
         // (resolution update + target recreation) rather than a second, untested init order.
-        if (g_bootDlssMode >= 0)
+        if (Boot().frame.dlssMode >= 0)
         {
-            renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_bootDlssMode));
+            renderer.SetDlssMode(static_cast<sl::DLSSMode>(Boot().frame.dlssMode));
         }
 
         // 1 ms scheduler granularity for the frame cap's Sleep (WaitOutFrameBudget). Since
@@ -3664,18 +3312,18 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
             // headless way to exercise motion-dependent paths — window relocations (wetness,
             // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
-            if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f || g_camFlyYaw != 0.0f)
+            if (Boot().frame.camFly[0] != 0.0f || Boot().frame.camFly[1] != 0.0f || Boot().frame.camFlyYaw != 0.0f)
             {
                 static const double flyStart = GetTimeSeconds();
-                if (now - flyStart >= (double)g_camFlyDelay)
+                if (now - flyStart >= (double)Boot().frame.camFlyDelay)
                 {
                     Camera& cam = scene.CameraRef();
                     const float3 p = cam.GetPosition();
-                    cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
-                                           p.z + g_camFly[1] * deltaTime));
-                    if (g_camFlyYaw != 0.0f)
+                    cam.SetPosition(float3(p.x + Boot().frame.camFly[0] * deltaTime, p.y,
+                                           p.z + Boot().frame.camFly[1] * deltaTime));
+                    if (Boot().frame.camFlyYaw != 0.0f)
                     {
-                        cam.AddYaw(DirectX::XMConvertToRadians(g_camFlyYaw) * deltaTime);
+                        cam.AddYaw(DirectX::XMConvertToRadians(Boot().frame.camFlyYaw) * deltaTime);
                     }
                 }
             }
@@ -3684,7 +3332,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 Camera& cam = scene.CameraRef();
                 cam.SetPosition(cam.GetPosition() + cam.GetDirection() * (g_camFlyForward * deltaTime));
             }
-            if (g_camOrbit[0] > 0.0f)
+            if (Boot().frame.camOrbit[0] > 0.0f)
             {
                 static const double orbitStart = GetTimeSeconds();
                 static float3 orbitCentre;
@@ -3692,13 +3340,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 static std::uint64_t orbitFrames = 0; // the fixed-step clock (third value)
                 Camera& cam = scene.CameraRef();
                 if (!orbitInit) { orbitCentre = cam.GetPosition(); orbitInit = true; }
-                const double t = g_camOrbit[2] > 0.0f
-                    ? static_cast<double>(orbitFrames++) * g_camOrbit[2] - (double)g_camFlyDelay
-                    : now - orbitStart - (double)g_camFlyDelay;
+                const double t = Boot().frame.camOrbit[2] > 0.0f
+                    ? static_cast<double>(orbitFrames++) * Boot().frame.camOrbit[2] - (double)Boot().frame.camFlyDelay
+                    : now - orbitStart - (double)Boot().frame.camFlyDelay;
                 if (t >= 0.0)
                 {
-                    const float ang = DirectX::XMConvertToRadians(g_camOrbit[1]) * static_cast<float>(t);
-                    const float r = g_camOrbit[0];
+                    const float ang = DirectX::XMConvertToRadians(Boot().frame.camOrbit[1]) * static_cast<float>(t);
+                    const float r = Boot().frame.camOrbit[0];
                     cam.SetPosition(float3(orbitCentre.x + r * std::cos(ang), orbitCentre.y,
                                            orbitCentre.z + r * std::sin(ang)));
                     // Tangent of the circle; yaw is measured from +Z toward +X.
@@ -3763,7 +3411,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         appController_.ApplySceneGraphicsSettings(scene);
                         // The level set its own clouds, fog, bloom, GTAO...: the graphics levels' ceilings again.
                         settings::TheScalability().OnContentReloaded("level load");
-                        ++g_levelLoadsCompleted;
+                        ++harness::g_levelLoadsCompleted;
                     }
                 }
 #if WITH_EDITOR
@@ -3794,12 +3442,24 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             scene.Render(&renderer);
         };
         // After Present: the harness, the screenshots, the profiler's frame end.
+        // The capture harnesses (architecture plan R3.3; app/harness/CaptureHarnesses.h), run by afterFrame.
+        harness::ShotHarness shotHarness([](Scene& s, SceneRenderSettings& rs, const std::string& name, float value)
+                                         { return ApplySweepValue(s, rs, name, value); });
+        harness::ProfDumpHarness profDumpHarness;
+        harness::TraceHarness traceHarness;
+        harness::ScalabilityCheckHarness scalabilityCheckHarness(
+            [](Scene& s, const SceneRenderSettings& rs, const std::string& name, float& out) { return ReadSweepValue(s, rs, name, out); });
+        harness::MemGateHarness memGateHarness;
+        harness::RtAuditHarness rtAuditHarness;
+        harness::IntentHarness intentHarness;
+        harness::SettingsDumpHarness settingsDumpHarness(
+            [](Scene& s, const SceneRenderSettings& rs, const std::string& name, float& out) { return ReadSweepValue(s, rs, name, out); });
         const auto afterFrame = [&]()
         {
             // "--set=<name>:<value>;...": pin settings for the run. Applied once, here, because the
             // scene has to exist first — several names in the table reach through it. Same
             // dispatcher as --sweep, so a name works in both or in neither.
-            if (!g_fixedSettings.empty())
+            if (!Boot().frame.fixedSettings.empty())
             {
                 static bool fixedApplied = false;
                 if (!fixedApplied)
@@ -3821,16 +3481,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 static ScalabilityAutodetect autodetect;
                 StepScalabilityAutodetect(autodetect, renderer, GetTimeSeconds());
             }
-            // "--scalability-check": one step a frame; its verdict ends the run.
-            if (g_scalabilityCheck)
-            {
-                static ScalabilityCheck check;
-                if (StepScalabilityCheck(check, scene, appController_.SettingsRef(), renderer, levelManager))
-                {
-                    g_scalabilityCheck = false;
-                    isRunning_ = false;
-                }
-            }
+            harness::FrameContext harnessFrame{ renderer, scene, levelManager, appController_.SettingsRef(), isRunning_ };
+            // "--scalability-check": one step a frame; its verdict ends the run (app/harness/GateHarnesses.h).
+            if (scalabilityCheckHarness.Wanted()) { scalabilityCheckHarness.OnFrame(harnessFrame); }
 
             // dlss.mode asked for by --set / set_settings: here, where the frame has been presented.
             if (g_requestDlssMode >= 0)
@@ -3864,199 +3517,20 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
 #endif
 
-            // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
-            // just-presented backbuffer to a PNG and quit. Reliable on the flip-model swapchain.
-            //
-            // "--shot-count=<n> --shot-step=<sec>" turns it into a PHASE SERIES from ONE process:
-            // requires --wind-freeze, whose frozen clock this advances by exactly --shot-step via
-            // vfx::g_windStep_game between frames (path gets an _NN suffix). One boot instead of N —
-            // the previous way to film the shore breathing was N full relaunches. The inter-shot
-            // pause (--shot-interval) exists for the temporal stack: DLSS needs a few frames after
-            // each time jump or every frame in the series carries the previous phase's ghost.
-            //
-            // "--sweep=<setting>:<v0>,..." reuses the same series machinery for SETTINGS instead of
-            // time: value[i] is applied before shot i and the exposure adaptation is reset so each
-            // shot settles on its own value. One boot for a whole slider sweep.
-            if (!g_shotPath.empty())
-            {
-                static double shotStart = GetTimeSeconds();
-                static int shotIndex = 0;
-                static int appliedSweepIndex = -1;
+            if (shotHarness.Wanted()) { shotHarness.OnFrame(harnessFrame); } // --shot, --shot-count, --sweep (app/harness)
 
-                // Apply before the settle delay is judged, so the value is in place for the whole
-                // interval rather than only for the frame the shot is taken on.
-                if (!g_sweepSetting.empty() && shotIndex < static_cast<int>(g_sweepValues.size()) &&
-                    appliedSweepIndex != shotIndex)
-                {
-                    const float value = g_sweepValues[static_cast<size_t>(shotIndex)];
-                    const bool known = ApplySweepValue(scene, appController_.SettingsRef(),
-                                                      g_sweepSetting, value);
-                    settings::TheScalability().Pin(g_sweepSetting);
-                    if (!known)
-                    {
-                        // Once per process: the sweep name never changes between shots.
-                        LOG_WARNING_ONCE(logging::LogCategory::App, "--sweep {}: unknown setting", g_sweepSetting);
-                    }
-                    for (const auto& [extraSetting, extraValues] : g_sweepExtra)
-                    {
-                        if (shotIndex >= static_cast<int>(extraValues.size())) { continue; }
-                        const float extraValue = extraValues[static_cast<size_t>(shotIndex)];
-                        settings::TheScalability().Pin(extraSetting);
-                        if (!ApplySweepValue(scene, appController_.SettingsRef(), extraSetting, extraValue))
-                        {
-                            LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::App, "--sweep {}: unknown setting", extraSetting);
-                        }
-                        LOG_INFO(logging::LogCategory::App, "--sweep shot {}: {} = {}", shotIndex, extraSetting, extraValue);
-                    }
-                    // The camera must not carry the previous value's adaptation into this shot.
-                    renderer.Exposure().RequestReset();
-                    appliedSweepIndex = shotIndex;
-                    LOG_INFO(logging::LogCategory::App, "--sweep shot {}: {} = {}", shotIndex,
-                             g_sweepSetting, value);
-                }
+            intentHarness.OnFrame(harnessFrame); // --intent's end: the verdict, or the timeout (app/harness)
 
-                const double delay = shotIndex == 0 ? g_shotDelaySec : g_shotIntervalSec;
-                if (GetTimeSeconds() - shotStart >= delay)
-                {
-                    std::string path = g_shotPath;
-                    if (g_shotCount > 1)
-                    {
-                        char suffix[8];
-                        std::snprintf(suffix, sizeof(suffix), "_%02d", shotIndex);
-                        const size_t dot = path.rfind('.');
-                        if (dot != std::string::npos) { path.insert(dot, suffix); }
-                        else { path += suffix; }
-                    }
-                    // A --sweep with a --profdump also writes the profiler rows AT each shot
-                    // (<dump>_NN), so every value's cost comes out of the same process as its picture;
-                    // the final dump below still covers the window after the last one.
-                    if (!g_profDumpPath.empty() && !g_sweepValues.empty())
-                    {
-                        std::string dumpPath = g_profDumpPath;
-                        char suffix[8];
-                        std::snprintf(suffix, sizeof(suffix), "_%02d", shotIndex);
-                        const size_t dot = dumpPath.rfind('.');
-                        if (dot != std::string::npos) { dumpPath.insert(dot, suffix); }
-                        else { dumpPath += suffix; }
-                        if (Profiler::Get().DumpOverlay(dumpPath))
-                        {
-                            LOG_INFO(logging::LogCategory::Profiling, "profiler overlay dump saved: {}", dumpPath);
-                        }
-                        else
-                        {
-                            LOG_ERROR(logging::LogCategory::Profiling, "profiler overlay dump FAILED: {}", dumpPath);
-                        }
-                    }
-                    bool ok = false;
-                    {
-                        threading::RoleScope renderRole(threading::ThreadRole::Render); // the presented backbuffer
-                        ok = Screenshot::SaveBackbufferPng(renderer, path);
-                    }
-                    if (ok)
-                    {
-                        LOG_INFO(logging::LogCategory::App, "screenshot saved: {} (frame {})", path,
-                                 renderer.GetTotalFrameNumber());
-                    }
-                    else
-                    {
-                        LOG_ERROR(logging::LogCategory::App, "screenshot FAILED: {}", path);
-                    }
-                    ++shotIndex;
-                    if (shotIndex >= g_shotCount)
-                    {
-                        g_shotPath.clear();
-                        isRunning_ = false;
-                    }
-                    else
-                    {
-                        vfx::g_windStep_game = static_cast<float>(g_shotStepSec);
-                        shotStart = GetTimeSeconds();
-                    }
-                }
-            }
+            if (profDumpHarness.Wanted()) { profDumpHarness.OnFrame(harnessFrame); } // --profdump
+            if (settingsDumpHarness.Wanted()) { settingsDumpHarness.OnFrame(harnessFrame); } // --settings-dump (R2.0)
 
-            // "--intent=<phrase>": quit as soon as the editor has logged its verdict, or
-            // when the model has had long enough. The wait is open-ended rather than a fixed
-            // delay because inference takes whatever it takes.
-            static const double intentStart = GetTimeSeconds();
-            if (g_intentFinished || (!g_intentPhrase.empty() &&
-                GetTimeSeconds() - intentStart >= g_intentTimeoutSec))
-            {
-                if (!g_intentFinished)
-                {
-                    LOG_ERROR(logging::LogCategory::Editor,
-                        "intent harness: no verdict after {:.0f}s", g_intentTimeoutSec);
-                }
-                // ...unless a --shot is still pending. What a command DID is the interesting
-                // part, and quitting on the verdict meant the only photograph that could ever
-                // be taken was of the moment before it happened.
-                //
-                // A pending --profdump holds it open for a different reason: the question
-                // that pairing answers is what the MODEL costs the frame while it is
-                // thinking, and quitting the moment the verdict lands threw the dump away
-                // unwritten. Size --intent-repeat so the passes outlast --shot-delay, or the
-                // dump measures an idle editor and says inference is free.
-                if (g_shotPath.empty() && g_profDumpPath.empty())
-                {
-                    isRunning_ = false;
-                }
-            }
-
-            // "--profdump=<path>": temporary VSM perf harness — after the same warmup delay, dump the
-            // profiler overlay to a file and quit. Independent of --shot so timings can be swept headlessly.
-            if (!g_profDumpPath.empty())
-            {
-                static double profStart = GetTimeSeconds();
-                // With a --sweep the dump waits for the LAST shot, so its window covers the swept
-                // values instead of the settle time before the first one.
-                const bool due = g_sweepValues.empty()
-                    ? (GetTimeSeconds() - profStart >= g_shotDelaySec)
-                    : (g_shotPath.empty() && !isRunning_);
-                if (due)
-                {
-                    const bool ok = Profiler::Get().DumpOverlay(g_profDumpPath);
-                    if (ok)
-                    {
-                        LOG_INFO(logging::LogCategory::Profiling, "profiler overlay dump saved: {}", g_profDumpPath);
-                    }
-                    else
-                    {
-                        LOG_ERROR(logging::LogCategory::Profiling, "profiler overlay dump FAILED: {}", g_profDumpPath);
-                    }
-                    g_profDumpPath.clear();
-                    isRunning_ = false;
-                }
-            }
-
-            // "--trace=<frames>": the same capture the CaptureTrace key requests, but headless.
-            // Without it a profiler change cannot be verified without driving the GUI — which is
-            // how an 82 us hole in the GPU timeline went unexplained for so long. Requests after
-            // the warmup delay, then keeps running until the capture has written itself out.
-            if (g_traceFrames != 0)
-            {
-                static double traceStart = GetTimeSeconds();
-                static uint32_t framesLeft = 0;
-                static bool requested = false;
-                if (!requested && GetTimeSeconds() - traceStart >= g_shotDelaySec)
-                {
-                    Profiler::Get().RequestTraceCapture(g_traceFrames);
-                    framesLeft = g_traceFrames + 30; // margin: the write happens on the last frame
-                    requested = true;
-                }
-                else if (requested && --framesLeft == 0)
-                {
-                    g_traceFrames = 0;
-                    isRunning_ = false;
-                }
-            }
+            if (traceHarness.Wanted()) { traceHarness.OnFrame(harnessFrame); } // --trace
 
 
             Profiler::Get().EndFrame();
             memtrace::OnFrameEnd(renderer.GetTotalFrameNumber()); // the frame marker; a delayed --memtrace start
-            if (memgate::OnFrameEnd(renderer.GetDevice(), GetTimeSeconds())) // --mem-selftest's leak, --mem-readout's samples
-            {
-                isRunning_ = false; // the readout's verdict is in; main returns its exit code
-            }
+            memGateHarness.OnFrame(harnessFrame); // --mem-selftest's leak, --mem-readout's samples and verdict
+            rtAuditHarness.OnFrame(harnessFrame); // --rt-audit's verdict (the audit's probes are in the loop)
         };
         const auto paceFrame = [&]()
         {
@@ -4129,7 +3603,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         }
         // --set's threading knobs take effect from the first frame (the rest of --set waits for the first frame, in
         // afterFrame): "--set=frame.renderThread:0" is one thread from the start, not after a threaded first frame.
-        for (const auto& kv : g_fixedSettings)
+        for (const auto& kv : Boot().frame.fixedSettings)
         {
             if (kv.first == "frame.renderThread" || kv.first == "frame.oneFrameThreadLag" || kv.first == "frame.rhiThread" ||
                 kv.first == "frame.gbvCreationExcludesSubmission")
@@ -4209,9 +3683,6 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 renderFramePending = false;
                 scene.Physics().KickStep(); // every core is idle from here to the hand-over: the wait for the GPU
                 afterFrame();
-                if (rtaudit::Finished(GetTimeSeconds())) {
-                    isRunning_ = false; // the audit's verdict is in; main returns its exit code
-                }
                 if (!isRunning_) {
                     break;
                 }

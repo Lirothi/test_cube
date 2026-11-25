@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "editor/EditorContext.h"

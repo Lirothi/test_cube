@@ -9,7 +9,7 @@
 #include "core/logging/Log.h"
 #include <chrono>
 #include <cstdint>
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "rendering/meshes/LodSelect.h" // render::UpdateLodFovScale (per-frame FOV normalization)
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/InstancedDrawBatch.h"

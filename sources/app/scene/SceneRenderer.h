@@ -15,7 +15,7 @@
 #include "rendering/shadows/SdsmShadows.h" // S15: the analyze pass's decision type
 #include "rendering/rt/RtSceneAs.h"
 #include "core/task/TaskSystem.h"
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "materials/Texture2D.h"
 #include "rendering/core/UploadBatch.h"
 #include "app/scene/SceneRenderQueue.h"

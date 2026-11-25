@@ -42,7 +42,7 @@ bool OnFrameEnd(ID3D12Device* device, double nowSec);
 // Before the device goes: the self-test's GPU buffers (a leak on purpose, not one at exit).
 void ReleaseSelfTest();
 
-// 0 unless a readout failed: the number of failing series.
+// 0 unless a readout failed (the number of failing series) or a --mem-selftest / --mem-readout could not be read (2).
 int ExitCode();
 
 // Live bytes per tag right now: the GPU census (resources by pool + descriptor heaps) plus the CPU

@@ -6,8 +6,8 @@
 #include <cmath>
 #include <thread>
 
-#include "app/camera/Camera.h"
-#include "app/scene/SceneFrameData.h"
+#include "rendering/view/Camera.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest=texstream
 #include "core/logging/Log.h"
 #include "core/math/Frustum.h"

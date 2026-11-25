@@ -7,7 +7,7 @@ class Renderer;
 class Scene;
 class UploadBatch;
 #if WITH_EDITOR
-class EditorSceneDocument;
+class LevelDocumentSink;
 #endif
 
 // Everything a level needs to load/unload, passed explicitly instead of being
@@ -20,7 +20,7 @@ struct LevelLoadContext
     Renderer& renderer;
     Scene& scene;
 #if WITH_EDITOR
-    EditorSceneDocument* editorDocument = nullptr;
+    LevelDocumentSink* editorDocument = nullptr; // the editor's document (EditorSceneDocument), or null
 #endif
 };
 

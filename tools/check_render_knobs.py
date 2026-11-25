@@ -35,7 +35,10 @@ def main():
         else:  # a knob in the global namespace, reached unqualified
             patterns.append((q, re.compile(r'(?<![\w:.>])' + re.escape(name) + r'(?!\w)')))
     findings = 0
-    for rel in GAME_FILES:
+    # The settings registry's rows (architecture plan R2.2-...): the --set names moved out of App.cpp, one file a prefix.
+    rows_dir = os.path.join(ROOT, 'app', 'settings')
+    rows = sorted('app/settings/' + fn for fn in os.listdir(rows_dir) if fn.endswith('SettingRows.cpp'))
+    for rel in GAME_FILES + rows:
         path = os.path.join(ROOT, rel)
         if not os.path.exists(path):
             continue

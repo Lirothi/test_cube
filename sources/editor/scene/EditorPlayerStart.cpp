@@ -3,7 +3,7 @@
 
 #include <cmath>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/game/PlayerStartJson.h"
 #include "app/scene/Scene.h"
 #include "rendering/debug/DebugDraw.h"

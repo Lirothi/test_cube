@@ -5,7 +5,7 @@
 #include <cwchar>
 #include <vector>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "core/math/AABB.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/debug/DebugDraw.h"

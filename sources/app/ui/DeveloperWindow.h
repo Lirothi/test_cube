@@ -37,7 +37,7 @@ public:
 };
 #else
 
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "app/ui/LogWindow.h"
 #include "app/ui/MemoryTab.h"
 #include "materials/Texture2D.h"

@@ -30,8 +30,6 @@ public:
 
     void Clear();
 
-    void Tick();
-
 private:
     Renderer* renderer_ = nullptr;
     robin_hood::unordered_map<std::wstring, std::unique_ptr<FontAtlas>> fonts_;

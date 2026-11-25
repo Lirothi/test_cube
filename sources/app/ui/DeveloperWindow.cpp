@@ -702,7 +702,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         settings.debugTexMip = textureDebugViewer_.RequestedMip();
         settings.debugTexMode = true;
     }
-        oceanControlsWindow_.Draw(renderer);
+        oceanControlsWindow_.Draw(renderer, Systems::GetOceanSimulation());
         logWindow_.Draw(); // returns immediately unless open (logging plan L8 cost rule)
         DrawTraceControls();
         return false;
@@ -2008,7 +2008,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 const auto& camDir = camera.GetDirection();
                 ImGui::Text("Camera position: %.2f, %.2f, %.2f", camPos.x, camPos.y, camPos.z);
                 ImGui::Text("Camera direction: %.2f, %.2f, %.2f", camDir.x, camDir.y, camDir.z);
-                ImGui::Text("Move speed multiplier: %.2f", camera.GetMoveSpeedMult());
+                ImGui::Text("Move speed multiplier: %.2f", scene.CameraControllerRef().GetMoveSpeedMult());
                 ImGui::Text("Frame: %llu", static_cast<unsigned long long>(renderer.GetTotalFrameNumber()));
 
                 ImGui::Separator();
@@ -4217,7 +4217,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     open_ = open;
 
     textureDebugViewer_.Draw(renderer, GetOceanShoreDepthResource());
-    oceanControlsWindow_.Draw(renderer);
+    oceanControlsWindow_.Draw(renderer, Systems::GetOceanSimulation());
     logWindow_.Draw();
     DrawTraceControls();
     return graphicsSettingsDirty;

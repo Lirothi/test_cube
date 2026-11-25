@@ -11,7 +11,7 @@
 
 #include "imgui.h"
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/game/Race.h"
 #include "app/game/RaceBot.h"
 #include "app/game/VesselCamera.h"
@@ -19,6 +19,7 @@
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "input/InputManager.h"
+#include "input/InputActions.h"
 #include "rendering/core/Renderer.h"
 
 void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start)
@@ -114,7 +115,7 @@ void PlaySession::LeaveHelm(Scene& scene, bool overTheSide)
     camera.ResetHistory();
 }
 
-void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime, bool pressTaken)
+void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime)
 {
     physics::World& world = scene.Physics();
     const physics::HelmState& helm = world.GetHelm();
@@ -124,24 +125,18 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         scene.VesselCameraRef().End();
         return;
     }
-    physics::PlayerSettings& tuning = physics::GameSettings().player;
     Camera& camera = scene.CameraRef();
     const float yawBefore = camera.GetYaw();
     const float pitchBefore = camera.GetPitch();
+    // W S / A D, or what a script injected in their place (InputManager: the keys count only with `controls`).
     physics::VesselInput order;
-    if (controls)
-    {
-        order.throttle = input.GetActionAxis("MoveZ");
-        order.rudder = input.GetActionAxis("MoveX");
-        camera.AddLookInput(input);
-    }
-    camera.TakeOwedLook(deltaTime); // the mouse's own road, its smoothing and sensitivity: what it turned the camera by is the orbit's
-    order.throttle += tuning.testThrottle;
-    order.rudder += tuning.testRudder;
+    order.throttle = input.GetActionAxis(actions::kMoveZ);
+    order.rudder = input.GetActionAxis(actions::kMoveX);
+    if (controls) { scene.CameraControllerRef().AddLookInput(input); }
+    scene.CameraControllerRef().TakeOwedLook(deltaTime); // the mouse's own road, its smoothing and sensitivity: what it turned the camera by is the orbit's
     // The autopilot: B hands this helm to the race's bot (game::Race) and takes it back.
     game::Race& race = scene.RaceRef();
-    const bool scriptAutopilot = std::exchange(tuning.testAutopilot, false);
-    if (scriptAutopilot || (controls && input.WasActionPressed("Autopilot")))
+    if (input.TakeActionPress(actions::kAutopilot))
     {
         if (!race.HasTrack()) { SetStatus("No race course in this level", ImGui::GetTime() + 3.0); }
         else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", ImGui::GetTime() + 3.0); }
@@ -150,10 +145,9 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     if (race.HoldsHelm()) { order = physics::VesselInput{}; } // on the grid, the countdown running
     world.SetHelmInput(order);
     game::VesselCamera& view = scene.VesselCameraRef();
-    view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, tuning.testOrbit,
-              tuning.testOrbitPitch, deltaTime);
-    const bool scriptView = std::exchange(tuning.testView, false);
-    if (scriptView || (controls && input.WasActionPressed("ToggleView")))
+    view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, game::ScriptCamera().orbit,
+              game::ScriptCamera().orbitPitch, deltaTime);
+    if (input.TakeActionPress(actions::kToggleView))
     {
         // V: behind -> the cockpit -> cinema -> behind.
         view.NextView();
@@ -161,14 +155,12 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", ImGui::GetTime() + 3.0);
     }
     // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
-    const bool scriptAnchor = std::exchange(tuning.testAnchor, false);
-    if (scriptAnchor || (controls && input.WasActionPressed("Anchor")))
+    if (input.TakeActionPress(actions::kAnchor))
     {
         const bool down = world.ToggleAnchor(helm.object);
         SetStatus(down ? "Anchor down" : "Anchor up", ImGui::GetTime() + 3.0);
     }
-    const bool scriptLeave = std::exchange(tuning.testInteract, false);
-    if (scriptLeave || (controls && !pressTaken && input.WasActionPressed("Interact"))) { LeaveHelm(scene, true); }
+    if (input.TakeActionPress(actions::kInteract)) { LeaveHelm(scene, true); }
 }
 
 void PlaySession::TogglePossess(Scene& scene)
@@ -190,6 +182,8 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     const bool take = controls && !watching && input.WindowIsForeground(); // the mouse is the desktop's: a window in the background keeps the keys and leaves it alone
     if (take != input.IsMouseCaptured()) { input.SetMouseCapture(take); }
     mouseTaken_ = take;
+    // The keys are this session's only with `controls`; a script's injected input counts either way (R12.3).
+    InputManager::KeysScope keys(input, controls);
 
     Camera& camera = scene.CameraRef();
     physics::World& world = scene.Physics();
@@ -201,13 +195,13 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
         return;
     }
     // On foot, Tab hangs the chase camera on the next racer (the next bot boat outside a race), past the last one gives it back.
-    if (controls && input.WasActionPressed("WatchNext"))
+    if (input.TakeActionPress(actions::kWatchNext))
     {
         const std::string on = scene.RaceRef().WatchNext();
         SetStatus(on.empty() ? std::string("Camera: yours") : "Camera: " + on + " (Tab: the next)", ImGui::GetTime() + 3.0);
     }
     // And V its view: behind -> the cockpit -> cinema.
-    if (watching && controls && input.WasActionPressed("ToggleView"))
+    if (watching && input.TakeActionPress(actions::kToggleView))
     {
         game::VesselCamera& view = scene.SpectatorCameraRef();
         view.NextView();
@@ -219,13 +213,12 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     const physics::PlayerState onFoot = world.GetPlayerState();
     RenderableObject* vessel = possessed_ && onFoot.exists ? world.FindVessel(onFoot.feet, kHelmReach) : nullptr;
     vesselInReach_ = vessel != nullptr;
-    const bool scriptInteract = std::exchange(physics::GameSettings().player.testInteract, false);
-    if (vessel && (scriptInteract || (controls && input.WasActionPressed("Interact"))))
+    if (vessel && input.TakeActionPress(actions::kInteract))
     {
         TakeHelm(scene, vessel);
         if (atHelm_)
         {
-            TickHelm(input, scene, controls, deltaTime, true);
+            TickHelm(input, scene, controls, deltaTime);
             return;
         }
     }
@@ -235,12 +228,13 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     // Watching a bot the player stands: the mouse moving over the panel does not turn their head meanwhile.
     if (hasBody)
     {
-        controller_.Tick(input, camera, world, controls && !watching, deltaTime);
+        InputManager::KeysScope playerKeys(input, controls && !watching);
+        controller_.Tick(input, camera, scene.CameraControllerRef(), world, controls && !watching, deltaTime);
     }
     else
     {
         world.SetPlayerInput(physics::PlayerInput{});
-        if (controls && !watching) { camera.UpdateFromInput(input, deltaTime, true); }
+        if (controls && !watching) { scene.CameraControllerRef().UpdateFromInput(input, deltaTime, true); }
     }
 }
 

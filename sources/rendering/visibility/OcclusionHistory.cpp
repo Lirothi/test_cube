@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 
 namespace vis
 {

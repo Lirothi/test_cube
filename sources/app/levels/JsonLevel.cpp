@@ -67,7 +67,7 @@ namespace
 }
 #pragma warning(pop)
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "rendering/core/PhotographicSettingsJson.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
@@ -82,7 +82,7 @@ namespace
 #include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanSimulation.h"
 #if WITH_EDITOR
-#include "editor/scene/EditorSceneDocument.h"
+#include "app/levels/LevelDocumentSink.h"
 #endif
 
 using namespace Math;
@@ -274,7 +274,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 #if WITH_EDITOR
     if (ctx.editorDocument)
     {
-        ctx.editorDocument->ResetFromLevelJson(sourcePath_, j);
+        ctx.editorDocument->BeginLevel(sourcePath_, j);
     }
 #endif
 
@@ -540,13 +540,13 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             if (IsFreeCameraStart(o))
             {
 #if WITH_EDITOR
-                const EditorObjectId editorObjectId =
+                const Scene::SceneObjectId editorObjectId =
                     ctx.editorDocument
-                        ? ctx.editorDocument->ReadOrAllocateObjectId(o)
-                        : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
+                        ? ctx.editorDocument->LevelObjectId(o)
+                        : ReadOrAllocateEditorObjectId(o, nextEditorObjectId);
                 if (ctx.editorDocument)
                 {
-                    ctx.editorDocument->AddObjectFromJson(editorObjectId, o);
+                    ctx.editorDocument->AddLevelObject(editorObjectId, o);
                 }
 #endif
                 if (enabled)
@@ -562,8 +562,8 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 #if WITH_EDITOR
                 if (ctx.editorDocument)
                 {
-                    const EditorObjectId startId = ctx.editorDocument->ReadOrAllocateObjectId(o);
-                    ctx.editorDocument->AddObjectFromJson(startId, o);
+                    const Scene::SceneObjectId startId = ctx.editorDocument->LevelObjectId(o);
+                    ctx.editorDocument->AddLevelObject(startId, o);
                 }
 #endif
                 if (enabled && !ctx.scene.LevelPlayerStart())
@@ -594,8 +594,8 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 #if WITH_EDITOR
                 if (ctx.editorDocument)
                 {
-                    const EditorObjectId zoneId = ctx.editorDocument->ReadOrAllocateObjectId(o);
-                    ctx.editorDocument->AddObjectFromJson(zoneId, o);
+                    const Scene::SceneObjectId zoneId = ctx.editorDocument->LevelObjectId(o);
+                    ctx.editorDocument->AddLevelObject(zoneId, o);
                 }
 #endif
                 continue;
@@ -608,10 +608,10 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
                 continue;
             }
 #if WITH_EDITOR
-            const EditorObjectId editorObjectId =
+            const Scene::SceneObjectId editorObjectId =
                 ctx.editorDocument
-                    ? ctx.editorDocument->ReadOrAllocateObjectId(o)
-                    : EditorObjectId{ ReadOrAllocateEditorObjectId(o, nextEditorObjectId) };
+                    ? ctx.editorDocument->LevelObjectId(o)
+                    : ReadOrAllocateEditorObjectId(o, nextEditorObjectId);
 #endif
             const auto objBegin = std::chrono::steady_clock::now();
             SceneObjectRegistry::ObjectList objects = objectRegistry.Create(type, creationCtx, o);
@@ -624,13 +624,13 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             boot::AddCount("level objects");
             AddLoadedObjects(scene, std::move(objects)
 #if WITH_EDITOR
-                , editorObjectId.value, enabled
+                , editorObjectId, enabled
 #endif
             );
 #if WITH_EDITOR
             if (ctx.editorDocument)
             {
-                ctx.editorDocument->AddObjectFromJson(editorObjectId, o);
+                ctx.editorDocument->AddLevelObject(editorObjectId, o);
             }
 #endif
         }
@@ -645,7 +645,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     {
         // Build environment entities after the object loop so their allocated ids
         // never collide with object ids (see EditorSceneDocument).
-        ctx.editorDocument->RebuildEnvironmentEntities();
+        ctx.editorDocument->EndLevel();
     }
 #endif
 

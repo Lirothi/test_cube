@@ -8,13 +8,13 @@
 #include <cstdint>
 #include <cstring>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "core/containers/inl_vector.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/renderables/GlassPassSrvs.h" // RenderTranslucent: the glass pass's table
 #include "materials/MaterialDataManager.h"
-#include "vfx/WindState.h" // W8: WindDistanceFade
+#include "rendering/wind/WindState.h" // W8: WindDistanceFade
 
 namespace
 {

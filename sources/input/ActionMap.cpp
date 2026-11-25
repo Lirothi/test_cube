@@ -250,6 +250,15 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
     return true;
 }
 
+std::vector<std::string_view> ActionMap::Names() const {
+    std::vector<std::string_view> names;
+    names.reserve(actions_.size());
+    for (const auto& kv : actions_) {
+        names.push_back(kv.first);
+    }
+    return names;
+}
+
 const ActionMap::Action* ActionMap::Find(std::string_view name) const {
     auto it = actions_.find(name);
     if (it == actions_.end()) {

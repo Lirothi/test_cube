@@ -2,7 +2,7 @@
 
 #include "third_party/json/json.hpp"
 
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 
 // P7: the ONE mapping between HeightFogSettings and JSON. The level reader, the editor's
 // environment object and the editor's runtime-apply path all go through these, so a field added to

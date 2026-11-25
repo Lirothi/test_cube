@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <vector>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -28,7 +28,7 @@
 #include "core/logging/Log.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
-#include "vfx/WindState.h" // W8: g_windFreeze pins the shared wind/ocean clock
+#include "rendering/wind/WindState.h" // W8: g_windFreeze pins the shared wind/ocean clock
 
 using Microsoft::WRL::ComPtr;
 

@@ -15,7 +15,7 @@
 #include <string>
 #include <type_traits>
 
-#include "app/scene/SceneFrameData.h"
+#include "rendering/scene/SceneFrameData.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SkyOcclusionMap.h" // skyVis.fallbackResolution / fallbackTexel ranges
 #include "rendering/core/Renderer.h"

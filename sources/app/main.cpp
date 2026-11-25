@@ -10,6 +10,8 @@
 #include "app/BuildVersion.h"
 #include "app/GpuRequirements.h"
 #include "app/Shipping.h"
+#include "app/BootSwitches.h"
+#include "core/settings/SettingsRegistry.h"
 #include "app/dist/Cook.h"
 #include "app/settings/Scalability.h" // --scalability-selftest
 #include "core/diagnostics/CrashHandler.h"
@@ -61,7 +63,7 @@
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: --vis-readout
 #include "rendering/core/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
-#include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
+#include "rendering/wind/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 #include "rendering/lighting/VolumetricCloud.h"  // render::g_cloudProfilePath (--cloud-profile)
 
 #include <algorithm>
@@ -200,7 +202,7 @@ void ParseFixedSettingsArg(const char* lpCmdLine)
             const char* itemEnd = (semi && semi < end) ? semi : end;
             const char* colon = std::strchr(p, ':');
             if (colon && colon < itemEnd) {
-                g_fixedSettings.emplace_back(std::string(p, colon),
+                Boot().frame.fixedSettings.emplace_back(std::string(p, colon),
                                              static_cast<float>(std::atof(colon + 1)));
             }
             if (itemEnd >= end) { break; }
@@ -223,22 +225,22 @@ void ParseTimeOfDayArgs(const char* lpCmdLine)
         const char* end = p;
         while (*end && *end != ' ' && *end != '\t') { ++end; }
         const int minutes = (colon && colon < end) ? std::atoi(colon + 1) : 0;
-        g_fixedSettings.emplace_back("tod.time", static_cast<float>(hours) + static_cast<float>(minutes) / 60.0f);
+        Boot().frame.fixedSettings.emplace_back("tod.time", static_cast<float>(hours) + static_cast<float>(minutes) / 60.0f);
     }
     if (const char* flag = std::strstr(lpCmdLine, "--date=")) {
         int year = 0, month = 0, day = 0;
         if (sscanf_s(flag + std::strlen("--date="), "%d-%d-%d", &year, &month, &day) == 3) {
-            g_fixedSettings.emplace_back("tod.year", static_cast<float>(year));
-            g_fixedSettings.emplace_back("tod.month", static_cast<float>(month));
-            g_fixedSettings.emplace_back("tod.day", static_cast<float>(day));
+            Boot().frame.fixedSettings.emplace_back("tod.year", static_cast<float>(year));
+            Boot().frame.fixedSettings.emplace_back("tod.month", static_cast<float>(month));
+            Boot().frame.fixedSettings.emplace_back("tod.day", static_cast<float>(day));
         }
     }
     if (const char* flag = std::strstr(lpCmdLine, "--time-speed=")) {
-        g_fixedSettings.emplace_back("tod.speed", static_cast<float>(std::atof(flag + std::strlen("--time-speed="))));
-        g_fixedSettings.emplace_back("tod.animate", 1.0f);
+        Boot().frame.fixedSettings.emplace_back("tod.speed", static_cast<float>(std::atof(flag + std::strlen("--time-speed="))));
+        Boot().frame.fixedSettings.emplace_back("tod.animate", 1.0f);
     }
     if (std::strstr(lpCmdLine, "--time-freeze")) {
-        g_fixedSettings.emplace_back("tod.animate", 0.0f);
+        Boot().frame.fixedSettings.emplace_back("tod.animate", 0.0f);
     }
     // T3 rollback: a level without `timeOfDay` lights with its `directionalLight` as authored.
     if (std::strstr(lpCmdLine, "--tod-legacy-light")) {
@@ -385,6 +387,25 @@ int WINAPI WinMain(
         }
         ~LogSession() { logging::Shutdown(); }
     } logSession(lpCmdLine);
+    settings::Registry().ReportRefused(); // R2.1: rows refused at static initialisation (a name twice), now that the log is up
+
+    // "--help" (architecture plan R3.2): the switch table (app/BootSwitches.cpp) to the console the program was started
+    // from and to the session log, then quit. A Shipping build drops the switch before it gets here, like every switch
+    // its table row does not keep.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--help")) {
+        const std::string text = "test_cube switches ([shipping] = a Shipping build keeps it):\n" + boot::HelpText(false);
+        if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+            const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+            DWORD written = 0;
+            if (out && out != INVALID_HANDLE_VALUE) {
+                WriteFile(out, "\r\n", 2, &written, nullptr);
+                WriteFile(out, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+            }
+            FreeConsole();
+        }
+        logging::WriteRawLines(logging::LogLevel::Info, logging::LogCategory::App, text);
+        return 0;
+    }
 
     // --crash-selftest=<arm> (any build; §9): a crash of that kind, its minidump and -- in Shipping -- the message box.
     if (lpCmdLine) {
@@ -1088,13 +1109,13 @@ int WINAPI WinMain(
             }
             const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
             const bool skyEdits = std::strstr(lpCmdLine, "--scene-stress-sky") != nullptr;
-            if (roughnessEdits || skyEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
+            if (roughnessEdits || skyEdits) { Boot().frame.levelPath = "data/levels/wind_test.json"; }
             // "--stress-level=<path>": a fourth level in the switch rotation (plan S9e: one with many shadowed lights),
             // and the one the run boots into -- so the churn starts on it (a reload, then every switch, leaves it).
             if (const char* extra = std::strstr(lpCmdLine, "--stress-level=")) {
                 const char* p = extra + std::strlen("--stress-level=");
-                while (*p && !std::isspace(static_cast<unsigned char>(*p))) { g_sceneStressExtraLevel.push_back(*p); ++p; }
-                if (!roughnessEdits && !skyEdits) { g_bootLevelPath = g_sceneStressExtraLevel; }
+                while (*p && !std::isspace(static_cast<unsigned char>(*p))) { Boot().harness.sceneStressExtraLevel.push_back(*p); ++p; }
+                if (!roughnessEdits && !skyEdits) { Boot().frame.levelPath = Boot().harness.sceneStressExtraLevel; }
             }
             // The stress harness is a diagnostic run by definition, so the per-frame buckets are
             // wanted here without a separate flag.
@@ -1128,29 +1149,29 @@ int WINAPI WinMain(
     // "--level=<path>" overrides the boot level (headless verification of a specific level).
     if (lpCmdLine) {
         if (std::strstr(lpCmdLine, "--level=")) {
-            g_bootLevelPath = ExtractArgValue(lpCmdLine, "--level="); // quoted or not
+            Boot().frame.levelPath = ExtractArgValue(lpCmdLine, "--level="); // quoted or not
         }
         // "--shot=<path>" grabs the backbuffer to a PNG after "--shot-delay=<sec>" (default 7)
         // and exits — reliable headless verification on the flip-model swapchain.
         if (std::strstr(lpCmdLine, "--shot=")) {
-            g_shotPath = ExtractArgValue(lpCmdLine, "--shot="); // a path with a space comes quoted
+            Boot().frame.shotPath = ExtractArgValue(lpCmdLine, "--shot="); // a path with a space comes quoted
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-delay=")) {
-            g_shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
+            Boot().frame.shotDelaySec = std::atof(flag + std::strlen("--shot-delay="));
         }
         // Phase series from one process (see App.h): "--shot-count=<n> --shot-step=<sec>" with
         // --wind-freeze steps the frozen clock between frames instead of relaunching per phase.
         if (const char* flag = std::strstr(lpCmdLine, "--shot-count=")) {
-            g_shotCount = std::max(std::atoi(flag + std::strlen("--shot-count=")), 1);
+            Boot().frame.shotCount = std::max(std::atoi(flag + std::strlen("--shot-count=")), 1);
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-step=")) {
-            g_shotStepSec = std::atof(flag + std::strlen("--shot-step="));
+            Boot().frame.shotStepSec = std::atof(flag + std::strlen("--shot-step="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-interval=")) {
             // 0 = CONSECUTIVE frames (the save is synchronous, so the next loop iteration shoots the
             // next frame) -- what a temporal flicker needs; with --wind-freeze + --shot-step each frame
             // still advances the clock by exactly the step.
-            g_shotIntervalSec = std::max(std::atof(flag + std::strlen("--shot-interval=")), 0.0);
+            Boot().frame.shotIntervalSec = std::max(std::atof(flag + std::strlen("--shot-interval=")), 0.0);
         }
         // "--cam-pos=x,y,z --cam-rot=x,y,z,w": reproduce the exact view a screenshot was taken
         // from. Both are printed verbatim by the on-screen HUD, so a shot round-trips into a
@@ -1168,18 +1189,18 @@ int WINAPI WinMain(
                 }
                 return true;
             };
-            const bool hasPos = readFloats("--cam-pos=", g_camPos, 3);
-            const bool hasRot = readFloats("--cam-rot=", g_camRot, 4);
-            g_camOverride = hasPos || hasRot;
+            const bool hasPos = readFloats("--cam-pos=", Boot().frame.camPos, 3);
+            const bool hasRot = readFloats("--cam-rot=", Boot().frame.camRot, 4);
+            Boot().frame.camOverride = hasPos || hasRot;
             // "--cam-fly=x,z": constant camera drift (m/s) — the headless stand-in for flying.
-            readFloats("--cam-fly=", g_camFly, 2);
+            readFloats("--cam-fly=", Boot().frame.camFly, 2);
             // "--cam-fly-delay=<sec>": hold still this long first (motion-onset transient capture).
-            readFloats("--cam-fly-delay=", &g_camFlyDelay, 1);
+            readFloats("--cam-fly-delay=", &Boot().frame.camFlyDelay, 1);
             // "--cam-fly-yaw=<deg/s>": turn while drifting (headless mouse look; moves the cascade boxes).
-            readFloats("--cam-fly-yaw=", &g_camFlyYaw, 1);
+            readFloats("--cam-fly-yaw=", &Boot().frame.camFlyYaw, 1);
             // "--cam-orbit=<radius>,<deg/s>[,<sec per frame>]": ring around the start position (grove
             // fly-through); the third value steps the orbit by a fixed time per frame (App.h).
-            readFloats("--cam-orbit=", g_camOrbit, 3);
+            readFloats("--cam-orbit=", Boot().frame.camOrbit, 3);
         }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must
@@ -1192,6 +1213,10 @@ int WINAPI WinMain(
             const char* p = flag + std::strlen("--wind-freeze");
             vfx::g_windFrozenTime_game = (*p == '=') ? static_cast<float>(std::atof(p + 1)) : 0.0f;
         }
+        // "--settings-dump=<file>" (architecture plan R2.0): every readable setting after the warmup, then quit.
+        if (std::strstr(lpCmdLine, "--settings-dump=")) {
+            Boot().harness.settingsDumpPath = ExtractArgValue(lpCmdLine, "--settings-dump="); // a path with a space comes quoted
+        }
         // Temporary VSM perf harness (see App.h). "--profdump=<path>" dumps profiler rows + exits.
         // "--vsm-refdist=<f>" pre-sets the runtime VSM tunable for a sweep;
         // "--vsm-resident" flips g_residentIterOnly on. All read the globals in VirtualShadowMap.h.
@@ -1199,7 +1224,7 @@ int WINAPI WinMain(
             const char* p = flag + std::strlen("--profdump=");
             std::string path;
             while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
-            g_profDumpPath = path;
+            Boot().frame.profDumpPath = path;
         }
         // "--memreport[=<sec>]": one memory report (platform, the GPU census by tag, every GPU
         // object by size) into the session log <sec> s after the first frame, default 10 (memory
@@ -1267,14 +1292,14 @@ int WINAPI WinMain(
         }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
         if (const char* flag = std::strstr(lpCmdLine, "--trace=")) {
-            g_traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));
+            Boot().frame.traceFrames = static_cast<uint32_t>(std::atoi(flag + std::strlen("--trace=")));
         }
         // "--window=<w>x<h>": borderless window with exactly that client size (see App.h).
         if (const char* flag = std::strstr(lpCmdLine, "--window=")) {
             const char* p = flag + std::strlen("--window=");
-            g_windowSize[0] = std::atoi(p);
-            if (const char* x = std::strchr(p, 'x')) { g_windowSize[1] = std::atoi(x + 1); }
-            if (g_windowSize[0] < 64 || g_windowSize[1] < 64) { g_windowSize[0] = g_windowSize[1] = 0; }
+            Boot().frame.windowSize[0] = std::atoi(p);
+            if (const char* x = std::strchr(p, 'x')) { Boot().frame.windowSize[1] = std::atoi(x + 1); }
+            if (Boot().frame.windowSize[0] < 64 || Boot().frame.windowSize[1] < 64) { Boot().frame.windowSize[0] = Boot().frame.windowSize[1] = 0; }
         }
         // "--dlss=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>": boot upscaler mode, so a
         // native-resolution capture no longer needs an F-key by hand (see App.h). An unrecognised
@@ -1283,13 +1308,13 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--dlss=")) {
             const char* p = flag + std::strlen("--dlss=");
             const auto is = [p](const char* name) { return std::strncmp(p, name, std::strlen(name)) == 0; };
-            if      (is("ultraperf"))    { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eUltraPerformance); }
-            else if (is("ultraquality")) { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eUltraQuality); }
-            else if (is("off"))          { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eOff); }
-            else if (is("perf"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxPerformance); }
-            else if (is("balanced"))     { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eBalanced); }
-            else if (is("quality"))      { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eMaxQuality); }
-            else if (is("dlaa"))         { g_bootDlssMode = static_cast<int>(sl::DLSSMode::eDLAA); }
+            if      (is("ultraperf"))    { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eUltraPerformance); }
+            else if (is("ultraquality")) { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eUltraQuality); }
+            else if (is("off"))          { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eOff); }
+            else if (is("perf"))         { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eMaxPerformance); }
+            else if (is("balanced"))     { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eBalanced); }
+            else if (is("quality"))      { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eMaxQuality); }
+            else if (is("dlaa"))         { Boot().frame.dlssMode = static_cast<int>(sl::DLSSMode::eDLAA); }
         }
         // "--dlss-mvec=<engine|camera|legacy>": which motion vectors the upscaler is told about
         // (Renderer.h). The A/B that found the inverted-sign bug; `legacy` is the pre-fix sign.
@@ -1302,71 +1327,71 @@ int WINAPI WinMain(
         }
         // "--log-window": open the session-log viewer at boot (see App.h).
         if (std::strstr(lpCmdLine, "--log-window")) {
-            g_bootLogWindow = true;
+            Boot().editor.logWindow = true;
         }
         // "--mem-window": open Developer Controls on the Memory tab at boot (see App.h).
         if (std::strstr(lpCmdLine, "--mem-window")) {
-            g_bootMemoryWindow = true;
+            Boot().editor.memoryWindow = true;
         }
         // "--dev-tab=<label>": open Developer Controls on that tab at boot (see App.h).
         if (const char* flag = std::strstr(lpCmdLine, "--dev-tab=")) {
             const char* value = flag + std::strlen("--dev-tab=");
             const char* end = value;
             while (*end && *end != ' ' && *end != '\t') { ++end; }
-            g_bootDevTab.assign(value, end);
+            Boot().editor.devTab.assign(value, end);
         }
         // "--scalability=low|medium|high|ultra|off": the graphics preset at boot, over what the player saved
         // (docs/scalability_plan.md §4.5). Kept by Shipping's switch filter.
         if (const std::string level = ExtractArgValue(lpCmdLine, "--scalability="); !level.empty()) {
             std::string l = level;
             for (char& c : l) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
-            g_bootScalability = l == "low" ? 0 : l == "medium" ? 1 : l == "high" ? 2 : l == "ultra" ? 3 : l == "off" ? -1 :
+            Boot().frame.scalability = l == "low" ? 0 : l == "medium" ? 1 : l == "high" ? 2 : l == "ultra" ? 3 : l == "off" ? -1 :
                                 l == "auto" ? -3 : -2;
-            if (g_bootScalability == -2) {
+            if (Boot().frame.scalability == -2) {
                 LOG_WARNING(logging::LogCategory::App, "--scalability={}: low, medium, high, ultra, auto or off", level);
             }
         }
         // "--settings-menu[=display|graphics|image|controls|menu]": the player's settings open at boot (see App.h).
         if (std::strstr(lpCmdLine, "--settings-menu")) {
             const std::string tab = ExtractArgValue(lpCmdLine, "--settings-menu=");
-            g_bootSettingsMenu = tab.empty() || tab.rfind("--", 0) == 0 ? "graphics" : tab;
+            Boot().editor.settingsMenu = tab.empty() || tab.rfind("--", 0) == 0 ? "graphics" : tab;
         }
-        // "--scalability-check": the graphics levels' gate in this process (see App.cpp g_scalabilityCheck).
+        // "--scalability-check": the graphics levels' gate in this process (see App.cpp Boot().harness.scalabilityCheck).
         if (std::strstr(lpCmdLine, "--scalability-check")) {
-            g_scalabilityCheck = true;
+            Boot().harness.scalabilityCheck = true;
         }
         // "--mcp-port=<n>": serve the editor's MCP on that port (a script's editor beside the owner's, see App.h).
         if (const char* flag = std::strstr(lpCmdLine, "--mcp-port=")) {
-            g_bootMcpPort = std::atoi(flag + std::strlen("--mcp-port="));
+            Boot().editor.mcpPort = std::atoi(flag + std::strlen("--mcp-port="));
         }
         // "--editor": open the Level Editor at boot, so a --shot can photograph its panels.
         if (std::strstr(lpCmdLine, "--editor")) {
-            g_bootEditor = true;
+            Boot().editor.openEditor = true;
         }
         // "--play": boot into the play session (docs/play_mode_plan.md). With the editor in the build the world stands until then; without it the world runs and the camera is free until then.
         if (std::strstr(lpCmdLine, "--play")) {
-            g_bootPlay = true;
+            Boot().editor.play = true;
         }
         // "--edit-mesh=<path>": open the Mesh Editor on that asset at boot (implies --editor).
         if (const char* flag = std::strstr(lpCmdLine, "--edit-mesh=")) {
             const char* value = flag + std::strlen("--edit-mesh=");
             const char* end = value;
             while (*end && *end != ' ' && *end != '\t') { ++end; }
-            g_bootEditMesh.assign(value, end);
-            g_bootEditor = g_bootEditor || !g_bootEditMesh.empty();
+            Boot().editor.editMesh.assign(value, end);
+            Boot().editor.openEditor = Boot().editor.openEditor || !Boot().editor.editMesh.empty();
         }
         // "--show-import[=<name>]": the Import Assets window open at boot, <name> selected (implies
         // --editor). Not "--import...": that prefix is the offline converter's, matched by strstr.
         // "--build-dist": the Build Distribution window open at boot (implies --editor), for a --shot of it.
         if (const char* flag = std::strstr(lpCmdLine, "--build-dist")) {
-            g_bootBuildDist = true;
-            g_bootEditor = true;
+            Boot().dist.buildDist = true;
+            Boot().editor.openEditor = true;
             // "--build-dist=<profile>[,override-licences]": the profile it opens on.
             if (flag[std::strlen("--build-dist")] == '=') {
                 const char* value = flag + std::strlen("--build-dist=");
                 const char* end = value;
                 while (*end && *end != ' ' && *end != '\t') { ++end; }
-                g_bootBuildDistProfile.assign(value, end);
+                Boot().dist.buildDistProfile.assign(value, end);
             }
         }
         if (const char* flag = std::strstr(lpCmdLine, "--show-import")) {
@@ -1375,10 +1400,10 @@ int WINAPI WinMain(
                 ++value;
                 const char* end = value;
                 while (*end && *end != ' ' && *end != '\t') { ++end; }
-                g_bootImportItem.assign(value, end);
+                Boot().editor.importItem.assign(value, end);
             }
-            g_bootShowImport = true;
-            g_bootEditor = true;
+            Boot().editor.showImport = true;
+            Boot().editor.openEditor = true;
         }
         // "--inspect=<type>[#<group>]": the Inspector on that environment object, scrolled to the group (implies --editor);
         // or on the level object of that NAME ("--inspect="small_yacht 001#end"", quoted when it holds a space; any group
@@ -1396,8 +1421,8 @@ int WINAPI WinMain(
             {
                 while (*end && *end != ' ' && *end != '\t') { ++end; }
             }
-            g_bootInspect.assign(value, end);
-            g_bootEditor = g_bootEditor || !g_bootInspect.empty();
+            Boot().editor.inspect.assign(value, end);
+            Boot().editor.openEditor = Boot().editor.openEditor || !Boot().editor.inspect.empty();
         }
         // "--intent=<phrase>": one phrase through the editor's real pipeline, then quit.
         // Implies --editor, because the pipeline lives behind EditorController::Draw.
@@ -1429,7 +1454,7 @@ int WINAPI WinMain(
                     ::WideCharToMultiByte(CP_UTF8, 0, wphrase.c_str(),
                         static_cast<int>(wphrase.size()), utf8.data(), needed, nullptr, nullptr);
                     value = nullptr;   // the wide path won
-                    g_intentPhrase = utf8;
+                    Boot().harness.intentPhrase = utf8;
                 }
             }
 
@@ -1446,23 +1471,23 @@ int WINAPI WinMain(
             // than trusting either to arrive.
             const auto trimmable = [](char c) { return c == ' ' || c == '	' || c == '"'; };
             if (!phrase.empty()) {
-                g_intentPhrase = phrase;
+                Boot().harness.intentPhrase = phrase;
             }
-            std::string& out = g_intentPhrase;
+            std::string& out = Boot().harness.intentPhrase;
             while (!out.empty() && trimmable(out.back())) { out.pop_back(); }
             std::size_t front = 0;
             while (front < out.size() && trimmable(out[front])) { ++front; }
             out = out.substr(front);
-            g_bootEditor = true;
+            Boot().editor.openEditor = true;
         }
         if (std::strstr(lpCmdLine, "--intent-run")) {
-            g_intentRun = true;
+            Boot().harness.intentRun = true;
         }
         if (const char* flag = std::strstr(lpCmdLine, "--intent-repeat=")) {
-            g_intentRepeat = std::max(1, std::atoi(flag + std::strlen("--intent-repeat=")));
+            Boot().harness.intentRepeat = std::max(1, std::atoi(flag + std::strlen("--intent-repeat=")));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--intent-timeout=")) {
-            g_intentTimeoutSec = std::max(5.0, std::atof(flag + std::strlen("--intent-timeout=")));
+            Boot().harness.intentTimeoutSec = std::max(5.0, std::atof(flag + std::strlen("--intent-timeout=")));
         }
         // "--chat=<phrase>": one message through the Model Chat panel. Wide command line for
         // the same reason --intent uses it -- lpCmdLine is ANSI and turns Russian into
@@ -1498,15 +1523,15 @@ int WINAPI WinMain(
                 while (front < utf8.size() && trimmable(utf8[front])) { ++front; }
                 return utf8.substr(front);
             };
-            g_chatPhrase = phraseAfter(L"--chat=");
-            g_chatThenPhrase = phraseAfter(L"--then=");
-            if (!g_chatPhrase.empty()) {
-                g_bootEditor = true;
+            Boot().harness.chatPhrase = phraseAfter(L"--chat=");
+            Boot().harness.chatThenPhrase = phraseAfter(L"--then=");
+            if (!Boot().harness.chatPhrase.empty()) {
+                Boot().editor.openEditor = true;
             }
         }
         // "--no-hud": empty HUD text buffer, so a --shot carries no frame-varying FPS readout.
         if (std::strstr(lpCmdLine, "--no-hud")) {
-            g_hudHidden = true;
+            Boot().frame.hudHidden = true;
         }
         // "--sweep=<setting>:<v0>,<v1>,...[;<setting>:<v0>,...]": one process, one shot per value
         // (see App.h). The first value count drives --shot-count, so the caller does not have to
@@ -1530,17 +1555,17 @@ int WINAPI WinMain(
                         v = comma + 1;
                     }
                     if (first) {
-                        g_sweepSetting.assign(p, colon);
-                        g_sweepValues = std::move(values);
+                        Boot().frame.sweepSetting.assign(p, colon);
+                        Boot().frame.sweepValues = std::move(values);
                     } else {
-                        g_sweepExtra.emplace_back(std::string(p, colon), std::move(values));
+                        Boot().frame.sweepExtra.emplace_back(std::string(p, colon), std::move(values));
                     }
                     first = false;
                 }
                 p = groupEnd + 1;
             }
-            if (!g_sweepValues.empty()) {
-                g_shotCount = static_cast<int>(g_sweepValues.size());
+            if (!Boot().frame.sweepValues.empty()) {
+                Boot().frame.shotCount = static_cast<int>(Boot().frame.sweepValues.size());
             }
         }
         // "--set=...": parsed once, above the scene-stress branch (ParseFixedSettingsArg).
@@ -1996,19 +2021,19 @@ int WINAPI WinMain(
                                   L"\n\nCopy the whole game folder again (the content folder beside test_cube.exe).");
             return 1;
         }
-        if (g_bootLevelPath.empty()) { g_bootLevelPath = boot.bootLevel; }
-        if (!vfs::IsFile(g_bootLevelPath)) {
-            LOG_ERROR(logging::LogCategory::App, "boot: the level {} is not in the game's content", g_bootLevelPath);
-            shipping::ShowMessage(L"test_cube", L"The level " + vfs::Widen(g_bootLevelPath) +
+        if (Boot().frame.levelPath.empty()) { Boot().frame.levelPath = boot.bootLevel; }
+        if (!vfs::IsFile(Boot().frame.levelPath)) {
+            LOG_ERROR(logging::LogCategory::App, "boot: the level {} is not in the game's content", Boot().frame.levelPath);
+            shipping::ShowMessage(L"test_cube", L"The level " + vfs::Widen(Boot().frame.levelPath) +
                                   L" is not in the game's content.\n\nCopy the whole game folder again.");
             return 1;
         }
         if (boot.startMode == "play")
         {
-            g_bootPlay = true;
-            g_playByLevelRule = true; // a level without a Player Start: the free camera (AppController)
+            Boot().editor.play = true;
+            Boot().dist.playByLevelRule = true; // a level without a Player Start: the free camera (AppController)
         }
-        LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, g_bootLevelPath, boot.startMode);
+        LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, Boot().frame.levelPath, boot.startMode);
     }
 #endif
 
@@ -2020,6 +2045,6 @@ int WINAPI WinMain(
     if (memExit != 0) { return memExit; }
     if (const int retireExit = render::RetireSelfTestExitCode(); retireExit >= 0) { return retireExit; } // --retire-selftest
     if (const int throwExit = diag::ThrowSelfTestExitCode(); throwExit >= 0) { return throwExit; } // --throw-selftest
-    if (g_scalabilityCheckExit != 0) { return g_scalabilityCheckExit; } // --scalability-check's failed reads
+    if (Boot().harness.scalabilityCheckExit != 0) { return Boot().harness.scalabilityCheckExit; } // --scalability-check's failed reads
     return rtaudit::ExitCode();
 }

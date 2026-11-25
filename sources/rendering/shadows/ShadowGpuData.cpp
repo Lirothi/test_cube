@@ -37,7 +37,7 @@
 #include "rendering/renderables/InstanceTypes.h" // Tessy N5: MaterialSurfaceParamsGpu by mesh group
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // Tessy N4: tessy::g_atlas
-#include "vfx/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
+#include "rendering/wind/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
 

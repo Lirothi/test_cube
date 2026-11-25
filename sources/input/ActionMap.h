@@ -28,6 +28,11 @@ public:
     // Bindings in file order, for the on-screen controls overlay.
     const std::vector<BindingDesc>& GetBindingDescs() const { return bindingDescs_; }
 
+    // Whether the file binds the action, and every action it binds (R12.1: InputManager::LoadActions checks them
+    // against input/InputActions.h).
+    bool Has(std::string_view name) const { return Find(name) != nullptr; }
+    std::vector<std::string_view> Names() const;
+
 private:
     struct Digital {
         // Returns true when any key or mouse button is active

@@ -13,7 +13,6 @@
 #include <string_view>
 #include <vector>
 
-#include "app/Systems.h"
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
 #include "imgui.h"
@@ -2345,7 +2344,7 @@ void OceanControlsWindow::DrawConfigControls(Renderer& renderer, OceanSimulation
     ImGui::TreePop();
 }
 
-void OceanControlsWindow::Draw(Renderer& renderer)
+void OceanControlsWindow::Draw(Renderer& renderer, OceanSimulation* ocean)
 {
     if (!open_)
     {
@@ -2362,7 +2361,6 @@ void OceanControlsWindow::Draw(Renderer& renderer)
     if (ImGui::Begin("Ocean Controls [F7]###OceanControls", &open_, windowFlags))
     {
         ui::HandleWindowTitleDoubleClickMaximize(maximize_);
-        OceanSimulation* ocean = Systems::GetOceanSimulation();
         if (!ocean)
         {
             ImGui::TextDisabled("No ocean simulation.");

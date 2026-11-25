@@ -9,6 +9,7 @@
 #include "physics/PhysicsTypes.h"
 
 class OceanRenderable;
+class DebugDrawSystem;
 class RenderableObject;
 class RenderableObjectBase;
 
@@ -52,21 +53,8 @@ namespace physics
         float stepHeight = 0.4f;      // m: a ledge this high is walked up
         float maxSlopeDeg = 50.0f;    // a slope steeper than this is a wall
         float swimDepth = 1.3f;       // water deeper than this over the feet floats the body: the eye just over the surface, no more walking on the bottom
-        // A script has no keyboard (MCP, the gates' live road): what the keys would say. testMoveX / Z in the world's axes, length up to 1.
-        float testMoveX = 0.0f;
-        float testMoveZ = 0.0f;
-        bool testJump = false;        // one press, cleared when taken
-        bool testCrouch = false;
-        bool testSprint = false;
-        bool testInteract = false;    // one press of the helm's key, cleared when taken
-        bool testView = false;        // one press of the view's key, cleared when taken
-        bool testAnchor = false;      // one press of the anchor's key at the helm, cleared when taken
-        bool testAutopilot = false;   // one press of the autopilot's key at the helm, cleared when taken
-        float testThrottle = 0.0f;    // what W and S say at the helm
-        float testRudder = 0.0f;      // what A and D say
-        float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
-        float testOrbitPitch = 0.0f;  // radians the chase camera looks further down: a script's shot from above (the wake's pattern), held while it is not 0
-        bool testFreeCamera = false;  // at the helm the boat's camera stands down: the frame's camera is whatever a script's set_camera says (a film's shots)
+        // A script's keys (--set player.test*) are not here: they go through InputManager's channel (architecture plan
+        // R12.3), and the player's input comes in by SetPlayerInput as the keys' does.
     };
 
     // What the keys say this frame.
@@ -233,6 +221,7 @@ namespace physics
         void LoadFinished();
         // The eye for physics.debug and for the character.
         void SetCamera(const Math::float3& position) { camera_ = position; }
+        void SetDebugDraw(DebugDrawSystem* draw) { debugDraw_ = draw; } // physics.debug lines go here
         // The water for the "buoyant" Dynamic bodies and the player's swim. Null = none.
         void SetOcean(const OceanRenderable* ocean);
         // The player: a body from `feet` on, falling if there is nothing under them; below physics.killY it comes back there. A world gone (physics.enabled:0) brings it back with
@@ -277,6 +266,7 @@ namespace physics
         struct Impl;
         std::unique_ptr<Impl> impl_;
         Math::float3 camera_;
+        DebugDrawSystem* debugDraw_ = nullptr;
     };
 
     // The shape an asset's settings give, without a world: for the Mesh Editor. `lines` are pairs of model-space points, thinned out

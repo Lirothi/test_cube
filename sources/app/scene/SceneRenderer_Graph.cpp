@@ -26,7 +26,7 @@
 #include <cstdint>
 #include <initializer_list>
 
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 #include "app/Systems.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -42,7 +42,7 @@
 #include "rendering/shadows/LocalShadowCache.h" // local-light plan S7
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
-#include "vfx/WindState.h"
+#include "rendering/wind/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"
 #include "app/scene/SkyOcclusionMap.h" // plan S's fallback without RT

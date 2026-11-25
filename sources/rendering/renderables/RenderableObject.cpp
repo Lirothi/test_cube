@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <cstring>
 
-#include "app/Systems.h"
 #include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
 #include "ocean/WaterMask.h" // SetWaterMask registers the hulls the water stays out of
 #include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
@@ -16,7 +15,7 @@
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
 #include "core/math/Frustum.h"
-#include "app/camera/Camera.h"
+#include "rendering/view/Camera.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;
@@ -643,9 +642,6 @@ void RenderableObject::PostTick(float dt)
     // The frame's SyncSceneState runs at the hand-over now (Scene::Sync, game thread plan G4), after everything the
     // game half does to a transform this frame -- the editor, the buoyancy, a level load.
     RenderableObjectBase::PostTick(dt);
-
-    //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
-    //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(pos_ + GetLocalBounds().GetCenter(), GetLocalBounds().GetHalfExtents() * scale_, rotEuler_, { 0.0f, 1.0f, 0.0f, 0.7f }, true);
 }
 
 void RenderableObject::SetMesh(std::shared_ptr<Mesh> mesh)
