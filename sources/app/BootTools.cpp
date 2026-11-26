@@ -102,10 +102,11 @@ int RunEarlyTools(const char* lpCmdLine)
 
         // --crash-selftest=<arm> (any build; §9): a crash of that kind, its minidump and -- in Shipping -- the message box.
         if (lpCmdLine) {
-            if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); arm == "terminate-frame") {
+            if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); arm == "terminate-frame" || arm == "throw-frame") {
                 // No early exit: the game starts as always (and installs the handlers as always), and its first frame throws
-                // after the renderer's BeginFrame (crash::SelfTestFrame, App.cpp) -- through the renderer's terminate handler.
-                crash::ArmSelfTestInFrame();
+                // after the renderer's BeginFrame (crash::SelfTestFrame, App.cpp) -- terminate-frame through the renderer's
+                // terminate handler, throw-frame to the unhandled-exception filter with the throw site's frames.
+                crash::ArmSelfTestInFrame(arm == "terminate-frame");
             } else if (arm == "pass-throw" || arm.rfind("pass-throw@", 0) == 0) {
                 // No early exit either: a render pass throws once inside its frame task (R15.3) -- a Fatal naming the pass
                 // and the dump; render::PassThrowSelfTestFrame (App.cpp) ends a run that goes on instead.

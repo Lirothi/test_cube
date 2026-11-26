@@ -4342,6 +4342,86 @@ Release_Editor 12 — CLEAN, `EditorSpawnDelete` проходит; полный 
   контроль — тот же вход до правки читался `balanced`, после — `maxQuality`. Изменённые файлы просмотрены на тот же
   след (строка с отступом тела после законченного оператора) — других потерь нет.
 
+#### Второе ревью волны 2 (2026-11-26, по слову владельца «сделай ревью 2й волны»)
+
+Отдельное чтение `be9c4487..2ae20a86` (4 коммита, 291 файл): стресс в общем цикле, DLSS на смене размера, канал stderr
+Debug, реестр настроек и таблица графики, вкладка Settings, MCP `get_settings` / `reset_settings`, канал ввода R12,
+общие раскладки R5. Каждая находка проверена кодом, скриптом или пробой; правок нет — ждут слова владельца.
+
+- **(1) Исключение на игровом потоке теряет в дампе место броска — во всех прогонах, не только под стрессом.**
+  `App::Run` (`App.cpp:2056-2176`) обернул цикл в `try { … } catch (const std::exception&) { OnFrameThrew; throw; }`:
+  `catch` безусловный, условна только передача стрессу. До волны в `WinMain` не было ни одного `catch`: исключение шло в
+  `UnhandledFilter` первым проходом, стек цел, мини-дамп с указателями места броска. Теперь первый проход находит этот
+  `catch`, стек раскручивается до `App::Run` (деструкторы между ними уже отработали), `throw;` — новое исключение, и
+  `UnhandledFilter` получает контекст переброса: в дампе `App::Run`, кадров места броска нет. Это то, что R15.3 чинил
+  для задач кадра. Проба (отдельная программа, тот же MSVC, scratchpad `rethrow_probe`): без `catch` фильтр видит
+  `ThrowSiteDeep ← FrameWork ← Loop ← main`, с `catch` + `throw;` — `LoopCatchRethrow ← main`. Исправление: ловить
+  только под стрессом (цикл — лямбда: `if (стресс) { try { loop(); } catch … } else { loop(); }`) или фильтром SEH, как
+  `RunNotingThrowSite`: `OnFrameThrew` в фильтре и `EXCEPTION_CONTINUE_SEARCH`. Контроль — ветка `--crash-selftest`,
+  бросающая в кадре без `noexcept` (сегодняшняя `terminate-frame` идёт через `noexcept` и до этого `catch` не доходит):
+  кадры места броска в дампе.
+- **(2) Восемь строк, которые сохраняет файл графики, помечены Transient; три строки с P в файл не попадают.** Скрипт
+  (`persist_flags.py`: таблица `kEntries` против флагов `TC_SETTING`). `ssr.technique`, `ssr.ueQuality`, `ssr.ueSteps`,
+  `ssr.ueRays`, `ssr.ueGlossy`, `render.reflectionSource`, `reflections.resolution`, `reflections.oceanResolution` пишутся
+  в `user_settings.json`, а флаг у них — `SettingTransient`. Вкладка Settings (`DeveloperWindow.cpp:457`) решает по флагу,
+  сохранять ли: правка любой из восьми графику изменённой не метит, метки P у них нет, и текст вкладки называет их
+  временными. Но в файл значение уходит при первом же чужом сохранении (`Capture` читает все строки таблицы), а если
+  сохранения не было — теряется. Обратное: у `physics.enabled`, `physics.debug`, `rt.alphaTest` стоит P, но в файле их нет
+  и не было — метка лжёт, правка зовёт сохранение впустую. R2.n обещал сверить флаги с потребителями, эта пара осталась.
+  Исправление: `SettingPersistent` — у каждой строки, которую пишет таблица, и только у неё (`csm.*` и `shadow.mode`
+  сохраняются кодом, им P верен); проверка «строка таблицы графики ⇔ P» в `--scalability-selftest` или
+  `settings_names.py`.
+- **(3, мелочь) Комментарии говорят не то.** `App.cpp:2182`: AV на выходе якобы шёл от OTA-плагинов Streamline в
+  `Renderer::InitD3D12`, но в `Renderer` про OTA ничего нет, а «Остаток волны 2» показал: версия плагинов ни при чём,
+  причина — отложенная лямбда DLSS. `GraphicsSettings.cpp:161`: «a preset before its fields», а код (484-505) применяет
+  пресет UE SSR после полей.
+- **(4, мелочь) Поток-читатель канала stderr (Debug) живёт после `logging::Shutdown` и после разрушения статиков.** Строка,
+  пришедшая в stderr во время выхода, — это `LOG_ERROR` после закрытия лога и запись в разрушенную
+  `inline std::string g_line`. Окно узкое. Исправление: останавливать поток в `~LogSession` (флаг и последний `Pump`).
+- Чисто:
+  - `DlssHandler::ReleaseFeatureIfResized` — обе точки стоят после `WaitForPreviousFrame`, размеры обновлены до вызова;
+  - раскладки R5 — все 38 списков `*_FIELDS` дают одни смещения по правилам cbuffer HLSL и по упаковке C++ (скрипт
+    `shared_layout.py`, поле за полем; массивы — только `float4` / `uint4` / `float4x4`);
+  - вкладка Settings и MCP читают и пишут строки после `WaitRenderForGame`;
+  - `SettingsSeries`: порядок «новые раньше», действия, пины;
+  - канал ввода: нажатие ждёт взятия, `KeysScope`, `ClearInjected`;
+  - операции стресса идут после `Present`, до хенд-овера;
+  - `sg.*` сверены со старой веткой.
+
+**Исправлено (2026-11-26, «Да, чини все»).**
+- (1) `App::Run`: цикл стал лямбдой `runFrames`. `try` / `catch` вокруг неё — только под `--scene-stress`, остальные
+  прогоны зовут её без обёртки. `crash::Report` с указателями исключения пишет в строку Fatal кадры его контекста
+  (`; frames: module+offset …`, после дампа). Обход вынесен из `NoteThrowSite` в общий `FramesFrom`, так что теперь у
+  каждого падения с контекстом стек в логе, и `tools/symbolize.py` называет кадры. Новая ветка
+  `--crash-selftest=throw-frame`: первый кадр бросает на игровом потоке без `noexcept` и без `catch` на пути.
+  - Проверено (Release): кадры `ThrowFrameSelfTest ← кадр (App.cpp:1640) ← runFrames ← App::Run ← WinMain`, код
+    `0xE06D7363`.
+  - Контроль — безусловный `catch` во временной сборке: кадры `App::Run` (`App.cpp:2180`, сам `catch`) ← `WinMain`,
+    места броска нет. Файл возвращён байт в байт.
+  - Под стрессом `--scene-stress=3 --crash-selftest=throw-frame` — `verdict: FAULT op=warmup … exception during warmup
+    frame`, код 2.
+- (1а, найдено этим прогоном, от волны 2) FAULT до первого `afterFrame` шёл, когда `scene_stress.log` ещё не был открыт:
+  в файле оставался CLEAN прошлого прогона, хотя строка вердикта ссылается на этот файл. Старый драйвер открывал лог до
+  первого кадра. Исправлено: `EnsureLog_` в `OnFrameThrew` и `Fault_`. Повтор: в файле FAULT этого прогона и DRED.
+- (2) P получили 11 строк: восемь из ревью и ещё `dlss.mode`, `aa.renderScale`, `csm.maxDistance` — их пишет кодовая
+  часть файла (тройка DLSS, подгонка CSM). `physics.enabled`, `physics.debug`, `rt.alphaTest` стали Transient. Проверка
+  `GraphicsPersistentFlagMismatches` (`GraphicsSettings.cpp`, зовёт `--scalability-selftest`) ловит:
+  - строку P, которую файл не пишет, и строку, которую файл пишет, без P;
+  - строку с P и Transient разом;
+  - семью с P;
+  - запись таблицы или кодовое имя без строки.
+
+  Итог — `ok … (0 mismatches)`, PASS. Контроль: `ssr.technique` возвращена в Transient во временной сборке —
+  `ssr.technique: the graphics file saves it, but the row is not SettingPersistent`, FAIL, код 1.
+- (3) Комментарии: `App.cpp` называет причину AV на выходе — фичу DLSS из отложенной очереди Streamline
+  (`DlssHandler::ReleaseFeatureIfResized`); `GraphicsSettings.cpp` — пресет UE SSR после полей.
+- (4) `stderr_log::Stop` в `~LogSession` (Debug): останавливает поток-читатель (флаг и ожидание), сливает последние
+  строки и неоконченную строку, снимает хук `abort` и обнуляет `g_read`. Проверено в Debug: строка, записанная в stderr
+  прямо перед закрытием лога, есть в логе (`stderr: stderr probe …`). Контроль — та же строка при прежнем деструкторе:
+  в логе её нет.
+- Шесть конфигураций — без предупреждений; `check_*.py` — 0; `settings_names` — 976 / 900. `--scene-stress=3` (Release)
+  и `=6` (Release_Editor) — CLEAN, выход чистый. `docs/agents/distribution.md` — ветка `throw-frame`.
+
 #### Волна 3: большие разрезы
 
 Содержание — разделы 5 и 9.5. Здесь — первые шаги и якоря; подшаги дописываются в этот раздел перед началом этапа.

@@ -29,7 +29,7 @@ namespace
     Options g_options;
     std::filesystem::path g_folder;              // absolute, made at Install
     std::atomic<bool> g_installed{ false };
-    std::atomic<bool> g_selfTestInFrame{ false }; // --crash-selftest=terminate-frame (ArmSelfTestInFrame)
+    std::atomic<int> g_selfTestInFrame{ 0 };     // --crash-selftest=terminate-frame / throw-frame (ArmSelfTestInFrame)
     std::atomic<bool> g_reporting{ false };      // the first crash reports; any other thread that crashes meanwhile waits
     std::atomic<DWORD> g_reportingThread{ 0 };   // ... and a fault inside the report on that thread ends the process
     HANDLE g_request = nullptr;
@@ -89,6 +89,34 @@ namespace
         std::snprintf(text, sizeof(text), "%s+0x%llx", narrow,
                       static_cast<unsigned long long>(static_cast<const char*>(address) - reinterpret_cast<const char*>(module)));
         return text;
+    }
+
+    // The frames from an exception's own context, as DeviceRemovalWatch walks a thread: " module+offset" each, named by
+    // tools/symbolize.py. Reads the stack only (RtlVirtualUnwind; a frame without unwind data is a leaf: its return address
+    // at Rsp).
+    std::string FramesFrom(const CONTEXT& from)
+    {
+        CONTEXT context = from;
+        std::string frames;
+        for (int i = 0; i < 32 && context.Rip != 0; ++i)
+        {
+            frames += ' ';
+            frames += ModuleAndOffset(reinterpret_cast<const void*>(context.Rip));
+            DWORD64 imageBase = 0;
+            const PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
+            if (!fn)
+            {
+                MEMORY_BASIC_INFORMATION mbi = {};
+                if (VirtualQuery(reinterpret_cast<void*>(context.Rsp), &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT) { break; }
+                context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
+                context.Rsp += 8;
+                continue;
+            }
+            void* handlerData = nullptr;
+            DWORD64 establisher = 0;
+            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
+        }
+        return frames;
     }
 
     std::string Describe(const EXCEPTION_POINTERS* pointers)
@@ -174,11 +202,16 @@ namespace
             dumped = WaitForSingleObject(g_done, 60000) == WAIT_OBJECT_0 && g_dumpWritten;
         }
         const std::string described = what ? std::string(what) : pointers ? Describe(pointers) : std::string("a crash");
+        // After the dump (the walk reads the faulting thread's stack): the frames of the exception's context -- for a C++
+        // throw nobody caught, where it was thrown (a catch that rethrows would have unwound them: App::Run catches only
+        // under --scene-stress for that reason).
+        const std::string frames = pointers && pointers->ContextRecord ? FramesFrom(*pointers->ContextRecord) : std::string();
         char dumpUtf8[1024] = {};
         WideCharToMultiByte(CP_UTF8, 0, g_dumpPath, -1, dumpUtf8, sizeof(dumpUtf8) - 1, nullptr, nullptr);
         char logPath[1024] = {};
         logging::GetSessionFilePath(logPath, sizeof(logPath));
-        LOG_FATAL(logging::LogCategory::Core, "crash: {} -- {} {}", described, dumped ? "minidump" : "NO minidump", dumpUtf8);
+        LOG_FATAL(logging::LogCategory::Core, "crash: {} -- {} {}{}{}", described, dumped ? "minidump" : "NO minidump", dumpUtf8,
+                  frames.empty() ? "" : "; frames:", frames);
         logging::Flush(2000);
         if (g_options.messageBox)
         {
@@ -271,9 +304,12 @@ namespace
     // reaches std::terminate. A throw that merely leaves WinMain does not: crash::Install replaced the CRT's top-level filter
     // (which would have called std::terminate), so it is UnhandledFilter's "an uncaught C++ exception" instead. Probed
     // 2026-11-24 (MSVC 14.51): through noexcept, std::current_exception() is set in the terminate handler.
+    // throw-frame is that second road: UnhandledFilter on the first pass, the stack whole -- its report's frames start here
+    // (a catch on the way that rethrows would have unwound them; the second review of wave 2, item 1).
     __declspec(noinline) void ThrowFrameSelfTest()
     {
-        throw std::runtime_error("the crash self-test's uncaught exception in a frame (--crash-selftest=terminate-frame)");
+        throw std::runtime_error("the crash self-test's uncaught exception in a frame (--crash-selftest=terminate-frame / "
+                                 "throw-frame)");
     }
     __declspec(noinline) void ThrowThroughNoexcept() noexcept { ThrowFrameSelfTest(); }
 }
@@ -346,7 +382,7 @@ int SelfTest(const std::string& arm, Options options, std::span<const SelfTestAr
         std::string names;
         for (const SelfTestArm& a : moreArms) { names += std::string(", ") + a.name; }
         LOG_ERROR(logging::LogCategory::Core, "--crash-selftest={}: arms are av, stack, abort, terminate, throw, purecall, "
-                  "invalidparam, fastfail, overflow{}, terminate-frame", arm, names);
+                  "invalidparam, fastfail, overflow{}, terminate-frame, throw-frame", arm, names);
         return 2;
     }
     Install(options);
@@ -408,28 +444,7 @@ void NoteThrowSite(::_EXCEPTION_POINTERS* pointers)
 {
     // The first one only: the report that follows names one dump.
     if (!pointers || !pointers->ContextRecord || g_throwSiteDump[0] != L'\0') { return; }
-    // The frames from the exception's own context, as DeviceRemovalWatch walks a thread: module+offset, named by
-    // tools/symbolize.py.
-    CONTEXT context = *pointers->ContextRecord;
-    std::string frames;
-    for (int i = 0; i < 32 && context.Rip != 0; ++i)
-    {
-        frames += ' ';
-        frames += ModuleAndOffset(reinterpret_cast<const void*>(context.Rip));
-        DWORD64 imageBase = 0;
-        const PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr);
-        if (!fn)
-        {
-            MEMORY_BASIC_INFORMATION mbi = {};
-            if (VirtualQuery(reinterpret_cast<void*>(context.Rsp), &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT) { break; }
-            context.Rip = *reinterpret_cast<DWORD64*>(context.Rsp);
-            context.Rsp += 8;
-            continue;
-        }
-        void* handlerData = nullptr;
-        DWORD64 establisher = 0;
-        RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, fn, &context, &handlerData, &establisher, nullptr);
-    }
+    const std::string frames = FramesFrom(*pointers->ContextRecord);
     // The dump with the exception's context, on this thread: a C++ throw, not a fault -- its stack is sound.
     bool written = false;
     if (g_installed.load() && !g_folder.empty())
@@ -459,18 +474,21 @@ void NoteThrowSite(::_EXCEPTION_POINTERS* pointers)
     logging::Flush(2000);
 }
 
-void ArmSelfTestInFrame()
+void ArmSelfTestInFrame(bool throughNoexcept)
 {
-    g_selfTestInFrame.store(true);
-    LOG_INFO(logging::LogCategory::Core, "crash self-test: terminate-frame -- the first frame after Renderer::BeginFrame throws "
-             "on the game thread");
+    g_selfTestInFrame.store(throughNoexcept ? 1 : 2);
+    LOG_INFO(logging::LogCategory::Core, "crash self-test: {} -- the first frame after Renderer::BeginFrame throws on the game "
+             "thread", throughNoexcept ? "terminate-frame" : "throw-frame");
 }
 
 void SelfTestFrame()
 {
-    if (!g_selfTestInFrame.exchange(false)) { return; }
-    LOG_INFO(logging::LogCategory::Core, "crash self-test: terminate-frame throws now, out of a noexcept function");
+    const int arm = g_selfTestInFrame.exchange(0);
+    if (arm == 0) { return; }
+    LOG_INFO(logging::LogCategory::Core, "crash self-test: {} throws now{}", arm == 1 ? "terminate-frame" : "throw-frame",
+             arm == 1 ? ", out of a noexcept function" : ", and nobody catches it");
     logging::Flush(2000);
-    ThrowThroughNoexcept();
+    if (arm == 1) { ThrowThroughNoexcept(); }
+    ThrowFrameSelfTest();
 }
 }

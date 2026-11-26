@@ -78,7 +78,12 @@ distribution: packages, our file system over packages and direct paths, encrypti
   (a dependency on a task that already ran), `graphcap` (a ninth member of a render graph's CL group: the Fatal names
   the pass) -- docs/architecture_review_plan.md R15. `pass-throw[@<Pass>]` (default
   Skybox) starts the game as `terminate-frame` does: the pass throws once inside its frame task, which must end the
-  process with `INVARIANT FAILURE: frame task '<Pass>' threw: ...`; a run whose frames go on ends itself with exit 1. `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any
+  process with `INVARIANT FAILURE: frame task '<Pass>' threw: ...`; a run whose frames go on ends itself with exit 1.
+  `throw-frame` (2026-11-26) starts it the same way and throws in the first frame on the game thread with no `noexcept`
+  and no `catch` on the way: the Fatal line `crash: an uncaught C++ exception ... ; frames: ...` lists the throw site
+  first (`tools/symbolize.py` names it). A report with the exception's context logs its frames; a `catch` that rethrows
+  unwinds them first, so `App::Run` catches a frame's exception only under `--scene-stress` (its FAULT verdict).
+  `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any
   of the game's message boxes (the gates' way past them).
   **A dev build reports its crashes too** (2026-11-18, the code review; main.cpp, `#if !TC_PACKAGED`): Debug, Release and
   Release_Editor install the same handler -- no message box, minidumps in `logs/crashes` (the newest 10 kept,

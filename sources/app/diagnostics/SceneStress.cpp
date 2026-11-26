@@ -303,6 +303,7 @@ public:
     void OnFrameThrew(const char* what) override
     {
         if (phase_ == Phase::Done) { return; }
+        EnsureLog_();
         std::snprintf(faultDetail_, sizeof(faultDetail_), "exception during %s frame: %.220s", opName_[0] ? opName_ : "warmup", what);
         Log("EXCEPTION: %s\n", faultDetail_);
         Fault_(iter_, opName_[0] ? opName_ : "warmup", faultDetail_);
@@ -310,6 +311,16 @@ public:
 
 private:
     enum class Phase { Start, Warmup, Spawned, Frames, Drain, Done };
+
+    // A fault before the first afterFrame (a throw in the first frame: OnFrameThrew) comes before Begin_ opened the log --
+    // and the verdict names scene_stress.log, which must be this run's, not the last run's CLEAN (the second review of
+    // wave 2: its own loop had opened the log before any frame).
+    void EnsureLog_()
+    {
+        if (gLog) { return; }
+        gLog.Open("scene_stress.log", diag::ArtifactMode::PerRunTruncate);
+        Log("scene lifecycle stress harness (a fault before its first frame was presented)\n");
+    }
 
     // The first frame: the stress's log, crash filter and InfoQueue, and the sky / roughness runs' conditions.
     void Begin_()
@@ -513,6 +524,7 @@ private:
     // (the device likely removed), as the stress always has.
     void Fault_(int iter, const char* op, const char* reason)
     {
+        EnsureLog_();
         exitCode_ = FinishFault_(iter, op, reason);
         phase_ = Phase::Done;
         memtrace::Stop();

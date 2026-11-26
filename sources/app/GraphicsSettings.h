@@ -216,6 +216,13 @@ enum class GraphicsControl
 // Controls marks a control a graphics level manages, and one changed by hand over it (docs/scalability_plan.md §3.3).
 const char* ScalabilityKnobOf(GraphicsControl control);
 
+// A settings row is SettingPersistent exactly when the graphics file saves its value: a table entry names it, or a part
+// kept in code saves it (the DLSS mode and render scale, the shadow mode, the CSM fit). The Settings tab of Developer
+// Controls marks the graphics changed by that flag and shows it as P: a saved row without it was edited "transiently"
+// and then saved by the next unrelated save (the second review of wave 2, item 2). Each mismatch, named; empty = none.
+// --scalability-selftest fails on any.
+std::vector<std::string> GraphicsPersistentFlagMismatches();
+
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
 // exposure and colour grading) stay in the level. The CSM fit has no level-serialization path, so
 // it is a project default here and is re-applied whenever a level is loaded.

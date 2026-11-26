@@ -58,7 +58,9 @@ namespace crash
     // --crash-selftest=terminate-frame (main.cpp arms it instead of calling SelfTest): the game starts as always, and the
     // first frame after the renderer's BeginFrame throws out of a noexcept function on the game thread (SelfTestFrame): to
     // std::terminate, on the thread whose terminate handler the renderer sets there over this one
-    // (docs/architecture_review_plan.md M2).
-    void ArmSelfTestInFrame();
+    // (docs/architecture_review_plan.md M2). --crash-selftest=throw-frame (`throughNoexcept` false): the same throw with no
+    // noexcept and no catch on the way -- UnhandledFilter reports it, its frames from the throw site (the second review of
+    // wave 2, item 1: a catch that rethrows had unwound them).
+    void ArmSelfTestInFrame(bool throughNoexcept);
     void SelfTestFrame(); // throws once when armed, does nothing otherwise
 }

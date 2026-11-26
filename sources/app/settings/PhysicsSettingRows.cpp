@@ -16,10 +16,10 @@ namespace
 {
 const SettingDesc kPhysicsRows[] = {
     // The physics world (docs/physics_plan.md): game-side knobs, no render copy.
-    TC_SETTING("physics.enabled", Bool, SettingPersistent,
+    TC_SETTING("physics.enabled", Bool, SettingTransient,
                [](SettingContext&, float value) { physics::GameSettings().enabled = value != 0.0f; return true; },
                [](SettingContext&, float& out) { out = AsFloat(physics::GameSettings().enabled); return true; }),
-    TC_SETTING("physics.debug", Int, SettingPersistent,
+    TC_SETTING("physics.debug", Int, SettingTransient,
                [](SettingContext&, float value) { physics::GameSettings().debug = static_cast<int>(value); return true; },
                [](SettingContext&, float& out) { out = AsFloat(physics::GameSettings().debug); return true; }),
     TC_SETTING("physics.debugRadius", Float, SettingTransient,

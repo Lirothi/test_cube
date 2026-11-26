@@ -2053,7 +2053,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
         };
         harness::FrameContext beginFrameContext{ renderer, scene, levelManager, appController_.SettingsRef(), isRunning_ };
-        try {
+        // The frames as one call: run bare, or inside --scene-stress's catch (below).
+        const auto runFrames = [&]()
+        {
         while (isRunning_) {
             // Switched only here, between frames. --rt-audit (G9) runs with the render thread whatever the settings say.
             const bool threaded = threading::g_renderThreadEnabled || rtaudit::Enabled();
@@ -2167,20 +2169,33 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 gameWaitLogStart = frameStart;
             }
         }
+        };
+        // A frame that throws ends a --scene-stress with its FAULT verdict and DRED, as its own loop did (R3.3e) -- caught
+        // there only. A catch that rethrows unwinds the stack to itself first: every other run's crash report (the
+        // unhandled-exception filter's minidump and frames) would show this catch instead of the throw site (the second
+        // review of wave 2, item 1; --crash-selftest=throw-frame).
+        if (sceneStressHarness->Wanted())
+        {
+            try {
+                runFrames();
+            }
+            catch (const std::exception& e) {
+                sceneStressHarness->OnFrameThrew(e.what()); // the verdict, DRED, the process ended
+                throw;
+            }
         }
-        catch (const std::exception& e) {
-            // A frame that throws ends a --scene-stress with its FAULT verdict and DRED, as its own loop did (R3.3e); every
-            // run goes on to the terminate handler as before.
-            if (sceneStressHarness && sceneStressHarness->Wanted()) { sceneStressHarness->OnFrameThrew(e.what()); }
-            throw;
+        else
+        {
+            runFrames();
         }
         wholeCycle.reset();
         renderer.LogGpuIdleWaits(GetTimeSeconds() - gameWaitLogStart); // R16.10: the rest of the run's, and the total
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
         logInputLag(" (the rest of the run)");
         // The stress harness holds the device's InfoQueue and its DRED file: gone before the GPU teardown, as its driver
-        // always was (R3.3e). (The access violation its runs had at exit was not this reference but the OTA Streamline
-        // plugins, Renderer::InitD3D12.) Its list's pointer is not used after the loop.
+        // always was (R3.3e). (The access violation its runs had at exit was not this reference but DLSS's feature released
+        // through Streamline's deferred queue after the stress's resize: DlssHandler::ReleaseFeatureIfResized.) Its list's
+        // pointer is not used after the loop.
         sceneStressHarness.reset();
 
         timeEndPeriod(1);

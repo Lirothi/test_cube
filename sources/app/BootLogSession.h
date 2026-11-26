@@ -5,6 +5,7 @@
 #include <io.h>
 #include <windows.h>
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -26,6 +27,8 @@ namespace stderr_log
 inline CRITICAL_SECTION g_lock;
 inline HANDLE g_read = nullptr;
 inline std::string g_line; // a line still being written
+inline std::atomic<bool> g_stop{ false }; // Stop: the reader's loop ends
+inline HANDLE g_thread = nullptr;
 
 inline void Pump()
 {
@@ -63,11 +66,37 @@ inline void Pump()
 
 inline DWORD WINAPI Reader(void*)
 {
-    for (;;)
+    while (!g_stop.load())
     {
         Pump();
         Sleep(50);
     }
+    return 0;
+}
+
+// ~LogSession, before the log closes: the reader stops, the last lines go in, and nothing is read from here on -- a
+// reader left running wrote to a closed log, and into g_line after the statics' destruction, if stderr had anything to
+// say during the exit (the second review of wave 2, item 4).
+inline void Stop()
+{
+    if (g_read == nullptr) { return; }
+    crash::SetAbortHook(nullptr);
+    g_stop.store(true);
+    if (g_thread != nullptr)
+    {
+        WaitForSingleObject(g_thread, 2000);
+        CloseHandle(g_thread);
+        g_thread = nullptr;
+    }
+    Pump(); // what came since the reader's last pass
+    EnterCriticalSection(&g_lock);
+    if (!g_line.empty())
+    {
+        LOG_ERROR(logging::LogCategory::Core, "stderr: {}", g_line); // a last line without its newline
+        g_line.clear();
+    }
+    g_read = nullptr; // Pump does nothing from here
+    LeaveCriticalSection(&g_lock);
 }
 
 inline void Install()
@@ -100,7 +129,7 @@ inline void Install()
     g_read = readEnd;
     crash::SetAbortHook(&Pump);
     // thread-ok: nothing it calls throws but std::string's growth (bad_alloc ends in std::terminate, the crash handler's)
-    if (const HANDLE reader = CreateThread(nullptr, 64 * 1024, Reader, nullptr, 0, nullptr)) { CloseHandle(reader); }
+    g_thread = CreateThread(nullptr, 64 * 1024, Reader, nullptr, 0, nullptr);
 }
 } // namespace stderr_log
 #endif
@@ -163,6 +192,12 @@ struct LogSession {
         });
 #endif
     }
-    ~LogSession() { logging::Shutdown(); }
+    ~LogSession()
+    {
+#if defined(_DEBUG)
+        stderr_log::Stop(); // before the log closes (Debug's stderr pipe)
+#endif
+        logging::Shutdown();
+    }
 };
 }

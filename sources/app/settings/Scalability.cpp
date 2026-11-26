@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "app/settings/UserSettings.h"
+#include "app/GraphicsSettings.h" // --scalability-selftest: GraphicsPersistentFlagMismatches
 #include "core/settings/SettingsRegistry.h" // ScalabilityKnobs: the rows flagged SettingScalable
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
@@ -941,6 +942,13 @@ int RunScalabilitySelfTest()
                 LOG_INFO(logging::LogCategory::App, "scalability self-test: knobs the table may name but does not: {}", unused);
             }
         }
+    }
+    // The graphics file against the rows' SettingPersistent (GraphicsSettings.h): the Settings tab saves by that flag.
+    {
+        const std::vector<std::string> mismatches = GraphicsPersistentFlagMismatches();
+        for (const std::string& m : mismatches) { LOG_ERROR(logging::LogCategory::App, "scalability self-test:   {}", m); }
+        check(mismatches.empty(), "a row is SettingPersistent exactly when the graphics file saves it (" +
+                                      std::to_string(mismatches.size()) + " mismatches)");
     }
 
     // The control arms: each mutation of the shipped table must be refused, naming why.

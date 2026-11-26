@@ -20,7 +20,7 @@ namespace
 const SettingDesc kReflectionRows[] = {
     // Reflection trace resolution as a fraction of the RENDER resolution, the one DLSS takes
     // (graphics_settings reflections.resolution; the RT and SSR traces run at it), for a 4K sweep.
-    TC_SETTING("reflections.resolution", Float, SettingTransient | SettingScalable | SettingCostTargets,
+    TC_SETTING("reflections.resolution", Float, SettingPersistent | SettingScalable | SettingCostTargets,
                [](SettingContext&, float value)
                {
                    const float scale = std::clamp(value, 0.25f, 1.0f);
@@ -72,7 +72,7 @@ const SettingDesc kReflectionRows[] = {
     TC_SETTING("ssr.waterNormalCascades", Int, SettingPersistent | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { c.renderSettings.waterReflectionNormalCascades = static_cast<uint32_t>(std::clamp(static_cast<int>(value + 0.5f), 1, 4)); return true; },
                [](SettingContext& c, float& out) { out = static_cast<float>(static_cast<std::uint64_t>(c.renderSettings.waterReflectionNormalCascades)); return true; }),
-    TC_SETTING("reflections.oceanResolution", Float, SettingTransient | SettingScalable | SettingCostTargets,
+    TC_SETTING("reflections.oceanResolution", Float, SettingPersistent | SettingScalable | SettingCostTargets,
                [](SettingContext&, float value)
                {
                    const float scale = std::clamp(value, 0.25f, 1.0f);
@@ -102,7 +102,7 @@ const SettingDesc kReflectionRows[] = {
     TC_SETTING("ssr.temporalClampExpand", Float, SettingPersistent,
                [](SettingContext& c, float value) { value = std::isfinite(value) ? std::clamp(value, 0.0f, 2.0f) : 0.8f; c.renderSettings.ssrTemporalClampExpand = value; return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.ssrTemporalClampExpand); return true; }),
-    TC_SETTING("ssr.ueQuality", Int, SettingTransient | SettingScalable | SettingCostNextFrame,
+    TC_SETTING("ssr.ueQuality", Int, SettingPersistent | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value)
                {
                    const uint32_t q = static_cast<uint32_t>(std::max(0.0f, value));
@@ -112,7 +112,7 @@ const SettingDesc kReflectionRows[] = {
                    return true;
                },
                [](SettingContext& c, float& out) { out = static_cast<float>(static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.renderSettings.ssrUe.preset))); return true; }),
-    TC_SETTING("ssr.ueSteps", Int, SettingTransient,
+    TC_SETTING("ssr.ueSteps", Int, SettingPersistent,
                [](SettingContext& c, float value)
                {
                    c.renderSettings.ssrUe.numSteps = static_cast<uint32_t>(std::max(4.0f, value));
@@ -120,7 +120,7 @@ const SettingDesc kReflectionRows[] = {
                    return true;
                },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.ssrUe.numSteps); return true; }),
-    TC_SETTING("ssr.ueRays", Int, SettingTransient,
+    TC_SETTING("ssr.ueRays", Int, SettingPersistent,
                [](SettingContext& c, float value)
                {
                    c.renderSettings.ssrUe.numRays = static_cast<uint32_t>(std::max(1.0f, value));
@@ -128,7 +128,7 @@ const SettingDesc kReflectionRows[] = {
                    return true;
                },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.ssrUe.numRays); return true; }),
-    TC_SETTING("ssr.ueGlossy", Bool, SettingTransient,
+    TC_SETTING("ssr.ueGlossy", Bool, SettingPersistent,
                [](SettingContext& c, float value)
                {
                    c.renderSettings.ssrUe.glossyRays = value != 0.0f;
@@ -148,7 +148,7 @@ const SettingDesc kReflectionRows[] = {
     TC_SETTING("ssr.ueMaxRoughness", Float, SettingPersistent,
                [](SettingContext& c, float value) { c.renderSettings.ssrUe.maxRoughness = value; return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.ssrUe.maxRoughness); return true; }),
-    TC_SETTING("ssr.technique", Int, SettingTransient,
+    TC_SETTING("ssr.technique", Int, SettingPersistent,
                [](SettingContext& c, float value)
                {
                    const uint32_t t = (uint32_t)std::max(0.0f, value);

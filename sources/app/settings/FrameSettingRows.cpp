@@ -109,7 +109,7 @@ const SettingDesc kFrameRows[] = {
                [](SettingContext&, float value) { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; },
                [](SettingContext&, float& out) { out = g_camFlyForward; return true; }),
     // The upscaler at the frame's safe point (g_requestDlssMode); it reads as asked until the frame takes it.
-    TC_SETTING("dlss.mode", Int, SettingTransient | SettingScalable | SettingCostTargets,
+    TC_SETTING("dlss.mode", Int, SettingPersistent | SettingScalable | SettingCostTargets,
                [](SettingContext&, float value) { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; },
                [](SettingContext&, float& out)
                {
@@ -118,7 +118,7 @@ const SettingDesc kFrameRows[] = {
                    return true;
                }),
     // Without DLSS (the resolution group's native road): the render scale at the frame's safe point, FXAA at once.
-    TC_SETTING("aa.renderScale", Float, SettingTransient | SettingScalable | SettingCostTargets,
+    TC_SETTING("aa.renderScale", Float, SettingPersistent | SettingScalable | SettingCostTargets,
                [](SettingContext&, float value) { g_requestRenderScale = std::clamp(value, 0.25f, 1.0f); return true; },
                [](SettingContext&, float& out)
                {

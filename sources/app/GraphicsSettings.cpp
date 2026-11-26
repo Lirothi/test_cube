@@ -158,7 +158,9 @@ namespace
     // R2.n (architecture plan): the persisted graphics through the settings registry. One entry a knob: its path in
     // user_settings.json's graphics section (the file's format is what it was), its --set name (the row that writes and
     // reads it -- its clamp is the one, decision В11 (а)), the JSON kind, the Developer Controls control a single Reset
-    // moves, the tab a tab's Reset moves. In the order the graphics are applied (a preset before its fields). Kept in
+    // moves, the tab a tab's Reset moves. In the order the graphics are applied (the UE SSR preset after its fields:
+    // ApplyEntries). Every row an entry names is SettingPersistent, and only those and the kept-in-code parts' rows
+    // (PersistentFlagMismatches, --scalability-selftest). Kept in
     // code: the DLSS trio (the renderer's own calls, coupled), the shadow mode (a --shadow-mode boot override keeps the
     // live mode, the file's is remembered) and the CSM fit (a struct the scene owns and gets back at each level load).
     enum class PKind : std::uint8_t { Bool, Int, Uint, Float, ReflectionSource, SsrTechnique };
@@ -1082,6 +1084,61 @@ bool GraphicsSettingsManager::ResetAll(Renderer& renderer, Scene& scene,
     const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
     ApplyAll(defaults, renderer, scene, settings);
     return FinishReset(managedBefore, renderer, scene, settings);
+}
+
+std::vector<std::string> GraphicsPersistentFlagMismatches()
+{
+    // What the parts kept in code save (ToJson): the DLSS mode and render scale, the shadow mode, the CSM fit's fields.
+    static constexpr const char* kKeptInCode[] = {
+        "dlss.mode", "aa.renderScale", "shadow.mode", "csm.maxDistance", "csm.filterMode", "csm.sharpen", "csm.receiverBias",
+        "csm.overBlurCorrect", "csm.slopeScale", "csm.maxSlope", "csm.depthBias", "csm.normalBias", "csm.blendFraction",
+        "csm.distanceFade", "csm.scissorOptim", "csm.scissorPad", "csm.accurateCull", "csm.hzbCull",
+    };
+    const auto saved = [](const std::string& name) {
+        for (const PEntry& e : kEntries)
+        {
+            if (name == e.setting) { return true; }
+        }
+        for (const char* kept : kKeptInCode)
+        {
+            if (name == kept) { return true; }
+        }
+        return false;
+    };
+    std::vector<std::string> out;
+    const settings::SettingsRegistry& registry = settings::Registry();
+    std::vector<std::string> rows;
+    for (const settings::SettingDesc& d : registry.All())
+    {
+        rows.emplace_back(d.name);
+        const bool persistent = (d.flags & settings::SettingPersistent) != 0u;
+        if (persistent != saved(d.name))
+        {
+            out.push_back(std::string(d.name) + (persistent ? ": SettingPersistent, but the graphics file does not save it"
+                                                            : ": the graphics file saves it, but the row is not SettingPersistent"));
+        }
+        if (persistent && (d.flags & settings::SettingTransient) != 0u)
+        {
+            out.push_back(std::string(d.name) + ": both SettingPersistent and SettingTransient");
+        }
+    }
+    for (const settings::SettingFamily& f : registry.Families())
+    {
+        if ((f.flags & settings::SettingPersistent) != 0u)
+        {
+            out.push_back(std::string(f.prefix) + "*: a family is SettingPersistent, but the graphics file saves no family key");
+        }
+    }
+    const auto isRow = [&](const std::string& name) { return std::find(rows.begin(), rows.end(), name) != rows.end(); };
+    for (const PEntry& e : kEntries)
+    {
+        if (!isRow(e.setting)) { out.push_back(std::string(e.setting) + ": a graphics table entry names no row"); }
+    }
+    for (const char* kept : kKeptInCode)
+    {
+        if (!isRow(kept)) { out.push_back(std::string(kept) + ": kept in code, but no row has that name"); }
+    }
+    return out;
 }
 
 const char* ScalabilityKnobOf(GraphicsControl control)

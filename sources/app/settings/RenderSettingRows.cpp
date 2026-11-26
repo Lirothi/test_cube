@@ -21,7 +21,7 @@ const SettingDesc kRenderRows[] = {
     // and on RT-capable hardware that means the screen-space path never runs -- so without this
     // key there is no headless way to exercise, measure or gate SSR at all. (Found the hard way
     // in P6C step 6: a "HiZ" capture that had quietly been tracing the TLAS.)
-    TC_SETTING("render.reflectionSource", Int, SettingTransient | SettingScalable | SettingCostNextFrame,
+    TC_SETTING("render.reflectionSource", Int, SettingPersistent | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value)
                {
                    const uint32_t r = (uint32_t)std::max(0.0f, value);
@@ -39,7 +39,7 @@ const SettingDesc kRenderRows[] = {
     TC_SETTING("rt.alphaMode", Int, SettingPersistent | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { c.renderSettings.rtAlphaMode = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; },
                [](SettingContext& c, float& out) { out = static_cast<float>(static_cast<std::uint64_t>(c.renderSettings.rtAlphaMode)); return true; }),
-    TC_SETTING("rt.alphaTest", Float, SettingPersistent,
+    TC_SETTING("rt.alphaTest", Float, SettingTransient,
                [](SettingContext& c, float value) { c.renderSettings.rtAlphaMode = value != 0.0f ? 2u : 0u; return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.rtAlphaMode); return true; }),
     // Glass refraction: the glass under the surface in metres (0 = straight through, a few mm = a hollow

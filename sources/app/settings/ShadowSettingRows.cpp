@@ -89,7 +89,7 @@ const SettingDesc kShadowRows[] = {
                [](SettingContext& c, float& out) { out = AsFloat(c.scene.CascadeConfig().normalBiasInTexels); return true; }),
     // Shadow distance, headless. S10's terminator lives at this plane, and on a small level
     // it is otherwise off-screen -- pulling it in is how the fade gets tested at all.
-    TC_SETTING("csm.maxDistance", Float, SettingTransient,
+    TC_SETTING("csm.maxDistance", Float, SettingPersistent,
                [](SettingContext& ctx, float value)
                {
                    CascadeShadowConfig& c = ctx.scene.CascadeConfig();
