@@ -2,6 +2,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 #include "rendering/scene/SceneRenderConfig.h"
 
@@ -254,8 +255,16 @@ public:
     bool ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings);
     bool ResetControl(GraphicsControl control, Renderer& renderer, Scene& scene,
                       SceneRenderSettings& settings);
+    // The Reset button of the control whose setting this is (a persisted row's --set name, or a control's scalability
+    // knob: dlss.mode, shadow.mode, ...): --graphics-reset-at-dump=<setting>. False when no control has it.
+    bool ResetSetting(const std::string& setting, Renderer& renderer, Scene& scene, SceneRenderSettings& settings);
 
     const std::string& Status() const { return status_; }
+
+    // --settings-dump's graphics lines (architecture plan R2.n's gate): the file Save would write, whole (not only what
+    // differs from the defaults), as `<prefix><json path> <json value>` lines.
+    void DescribeFile(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings, const char* prefix,
+                      std::vector<std::string>& lines) const;
 
 private:
     // After a Reset applied the defaults: the graphics levels take their knobs back, then the save.

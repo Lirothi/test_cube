@@ -148,23 +148,23 @@ public:
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
         UpdateUniform(owner, lightPreExposureHandle_, material, render::g_preExposure, cbData);
         const auto& v = owner_.SkyViewFrame();
-        UpdateUniform(owner, sunHandle_, material, v.sunDirection, cbData);
-        UpdateUniform(owner, illuminanceHandle_, material, v.illuminance, cbData);
-        UpdateUniform(owner, planetHandle_, material, v.planet, cbData);
-        UpdateUniform(owner, skyExposureHandle_, material, v.exposure, cbData);
-        UpdateUniform(owner, light1DirectionHandle_, material, v.light1Direction, cbData);
-        UpdateUniform(owner, light1IlluminanceHandle_, material, v.light1Illuminance, cbData);
-        UpdateUniform(owner, moonDiscHandle_, material, v.moonDisc, cbData);
-        UpdateUniform(owner, moonDisc2Handle_, material, v.moonDisc2, cbData);
+        UpdateUniform(owner, sunHandle_, material, v.SkySunDirection, cbData);
+        UpdateUniform(owner, illuminanceHandle_, material, v.SkyIlluminance, cbData);
+        UpdateUniform(owner, planetHandle_, material, v.SkyPlanet, cbData);
+        UpdateUniform(owner, skyExposureHandle_, material, v.SkyExposure, cbData);
+        UpdateUniform(owner, light1DirectionHandle_, material, v.SkyLight1Direction, cbData);
+        UpdateUniform(owner, light1IlluminanceHandle_, material, v.SkyLight1Illuminance, cbData);
+        UpdateUniform(owner, moonDiscHandle_, material, v.SkyMoonDisc, cbData);
+        UpdateUniform(owner, moonDisc2Handle_, material, v.SkyMoonDisc2, cbData);
         UpdateUniform(owner, moonGlowHandle_, material, owner_.MoonGlow(), cbData);
         // N2: the night sky; drawn only over the procedural sky (row0.w is 0 otherwise).
         NightSkyFrameData night = owner_.NightSky();
-        if (v.planet[3] == 0.0f) { night.row0[3] = 0.0f; }
-        UpdateUniform(owner, nightGlowHandle_, material, night.glow, cbData);
-        UpdateUniform(owner, nightLayersHandle_, material, night.layers, cbData);
-        UpdateUniform(owner, nightRowHandle_[0], material, night.row0, cbData);
-        UpdateUniform(owner, nightRowHandle_[1], material, night.row1, cbData);
-        UpdateUniform(owner, nightRowHandle_[2], material, night.row2, cbData);
+        if (v.SkyPlanet[3] == 0.0f) { night.nightRow0[3] = 0.0f; }
+        UpdateUniform(owner, nightGlowHandle_, material, night.nightGlow, cbData);
+        UpdateUniform(owner, nightLayersHandle_, material, night.nightLayers, cbData);
+        UpdateUniform(owner, nightRowHandle_[0], material, night.nightRow0, cbData);
+        UpdateUniform(owner, nightRowHandle_[1], material, night.nightRow1, cbData);
+        UpdateUniform(owner, nightRowHandle_[2], material, night.nightRow2, cbData);
         // Ultra Dynamic Sky's sky material over the atmosphere (uds_sky.hlsli); glow.w 0 = off.
         const UdsSkyFrameData& uds = owner_.UdsSky();
         UpdateUniform(owner, udsHandle_[0], material, uds.params, cbData);
@@ -308,12 +308,12 @@ bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, R
 {
     // t3 (time-of-day N1): the moon's texture, or the same type-correct null as the LUTs -- the table is
     // always full, and the shader reads t3 only when skyMoonDisc2.y says the texture is ready.
-    const bool moonTexture = skyViewFrame_.planet[3] != 0 && skyViewFrame_.moonDisc2[1] != 0.0f && moonSrv_.ptr != 0;
+    const bool moonTexture = skyViewFrame_.SkyPlanet[3] != 0 && skyViewFrame_.SkyMoonDisc2[1] != 0.0f && moonSrv_.ptr != 0;
     // t4 (N2): the Milky Way's map, read only when night.layers[1] says it exists.
-    const bool nightMap = skyViewFrame_.planet[3] != 0 && nightSky_.layers[1] > 0.0f && nightMapSrv_.ptr != 0;
+    const bool nightMap = skyViewFrame_.SkyPlanet[3] != 0 && nightSky_.nightLayers[1] > 0.0f && nightMapSrv_.ptr != 0;
     ctx.srvTable[0] = renderer->StageSrvUavTable({FileCubeSrv(),
-        skyViewFrame_.planet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
-        skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_,
+        skyViewFrame_.SkyPlanet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
+        skyViewFrame_.SkyPlanet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_,
         moonTexture ? moonSrv_ : nullSkyViewSrv_,
         nightMap ? nightMapSrv_ : nullSkyViewSrv_}).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());

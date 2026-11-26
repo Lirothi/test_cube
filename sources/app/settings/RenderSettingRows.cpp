@@ -32,7 +32,7 @@ const SettingDesc kRenderRows[] = {
                [](SettingContext& c, float& out) { out = static_cast<float>(static_cast<std::uint64_t>(static_cast<std::uint32_t>(c.renderSettings.reflectionSource))); return true; }),
     // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
     TC_SETTING("rt.alphaMissKeep", Float, SettingPersistent,
-               [](SettingContext& c, float value) { c.renderSettings.rtAlphaMissKeep = value; return true; },
+               [](SettingContext& c, float value) { value = std::isfinite(value) ? std::clamp(value, 0.0f, 1.0f) : 0.15f; c.renderSettings.rtAlphaMissKeep = value; return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.rtAlphaMissKeep); return true; }),
     // RT foliage alpha mode: 0 off (solid cards), 1 first-hit holes, 2 full candidates.
     // rt.alphaTest stays as the legacy on/off alias.
@@ -58,7 +58,7 @@ const SettingDesc kRenderRows[] = {
                [](SettingContext& c, float value) { c.renderSettings.rtCutoutOpacityOverride = std::min(value, 1.0f); return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.rtCutoutOpacityOverride); return true; }),
     TC_SETTING("rt.windRadius", Float, SettingPersistent,
-               [](SettingContext& c, float value) { c.renderSettings.rtWindBlasRadius = value; return true; },
+               [](SettingContext& c, float value) { value = std::isfinite(value) ? std::clamp(value, 0.0f, 100.0f) : 40.0f; c.renderSettings.rtWindBlasRadius = value; return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.renderSettings.rtWindBlasRadius); return true; }),
     TC_SETTING("render.preExposure", Bool, SettingTransient,
                [](SettingContext&, float value) { render::g_preExposureEnabled_game = value != 0.0f; return true; },

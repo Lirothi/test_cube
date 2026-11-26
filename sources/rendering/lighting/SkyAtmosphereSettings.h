@@ -1,19 +1,17 @@
 #pragma once
 
 #include <cmath>
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/sky_atmosphere.h" // SkyAtmosphereParameters, SkyViewFrameData: the fields, once (R5.3)
+#include "shaders/shared/night_sky.h" // NightSkyFrameData's fields, once (R5.3)
 
 // B1: kilometre-space atmosphere, separate from metre-space height/froxel fog.
 // UE SkyAtmosphereComponent.cpp:94-128 (Earth defaults). No sun/view/exposure in this key.
 struct SkyAtmosphereParameters
 {
-    float radii[4] = {6360.0f, 6420.0f, -1.0f / 8.0f, -1.0f / 1.2f};
-    float rayleigh[4] = {0.005802f, 0.013558f, 0.033100f, 0.0f};
-    float mieScattering[4] = {0.003996f, 0.003996f, 0.003996f, 0.8f};
-    float mieAbsorption[4] = {0.000444f, 0.000444f, 0.000444f, 0.0f};
-    float ozone[4] = {0.000650f, 0.001881f, 0.000085f, 25.0f};
-    float ozoneDensity[4] = {1.0f / 15.0f, -2.0f / 3.0f, -1.0f / 15.0f, 8.0f / 3.0f};
-    // FColor(170) converted from sRGB to linear, NOT 170/255.
-    float groundAlbedo[4] = {0.40197778f, 0.40197778f, 0.40197778f, 1.0f};
+    // shaders/shared/sky_atmosphere.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::FloatArray<4>; // rows the C++ indexes (float[4] before R5.3)
+    SKY_ATMOSPHERE_FIELDS
 };
 static_assert(sizeof(SkyAtmosphereParameters) == 112, "SkyAtmosphereCB layout");
 
@@ -34,7 +32,7 @@ static_assert(sizeof(SkyAtmosphereParameters) == 112, "SkyAtmosphereCB layout");
 inline void SkyTransmittanceTowardSun(const SkyAtmosphereParameters& a, float sunElevationRadians,
                                       float outTransmittance[3], float minElevationDegrees = -90.0f)
 {
-    const float bottom = a.radii[0], top = a.radii[1];
+    const float bottom = a.AtmosphereRadii[0], top = a.AtmosphereRadii[1];
     const float minEl = minElevationDegrees * 3.14159265358979323846f / 180.0f;
     const float elevation = sunElevationRadians > minEl ? sunElevationRadians : minEl;
 
@@ -80,16 +78,16 @@ inline void SkyTransmittanceTowardSun(const SkyAtmosphereParameters& a, float su
             const float x = t * dirOut, y = originHeight + t * dirUp;
             const float height = std::sqrt(x * x + y * y) - bottom;
 
-            const float densityMie = std::exp(a.radii[3] * height);
-            const float densityRay = std::exp(a.radii[2] * height);
-            const float ozoneRaw = height < a.ozone[3] ? a.ozoneDensity[0] * height + a.ozoneDensity[1]
-                                                       : a.ozoneDensity[2] * height + a.ozoneDensity[3];
+            const float densityMie = std::exp(a.AtmosphereRadii[3] * height);
+            const float densityRay = std::exp(a.AtmosphereRadii[2] * height);
+            const float ozoneRaw = height < a.AbsorptionExtinction[3] ? a.AbsorptionDensity[0] * height + a.AbsorptionDensity[1]
+                                                       : a.AbsorptionDensity[2] * height + a.AbsorptionDensity[3];
             const float densityOzo = ozoneRaw < 0.0f ? 0.0f : (ozoneRaw > 1.0f ? 1.0f : ozoneRaw);
             for (int ch = 0; ch < 3; ++ch)
             {
-                const float extinction = densityMie * (a.mieScattering[ch] + a.mieAbsorption[ch])
-                                       + densityRay * a.rayleigh[ch]
-                                       + densityOzo * a.ozone[ch];
+                const float extinction = densityMie * (a.MieScattering[ch] + a.MieAbsorption[ch])
+                                       + densityRay * a.RayleighScattering[ch]
+                                       + densityOzo * a.AbsorptionExtinction[ch];
                 opticalDepth[ch] += static_cast<double>(segment) * extinction;
             }
         }
@@ -157,10 +155,10 @@ inline void SetSkyMedium(SkyAtmosphereSettings& s, float rayleighScale, float mi
     const float absorption = s.mieAbsorptionScale >= 0.0f ? s.mieAbsorptionScale : mieScale;
     for (unsigned i = 0; i < 3; ++i)
     {
-        s.parameters.rayleigh[i] = earth.rayleigh[i] * rayleighScale * s.rayleighTint[i];
-        s.parameters.mieScattering[i] = earth.mieScattering[i] * mieScale * s.mieTint[i];
-        s.parameters.mieAbsorption[i] = earth.mieAbsorption[i] * absorption;
-        s.parameters.ozone[i] = earth.ozone[i] * ozoneScale * s.ozoneTint[i];
+        s.parameters.RayleighScattering[i] = earth.RayleighScattering[i] * rayleighScale * s.rayleighTint[i];
+        s.parameters.MieScattering[i] = earth.MieScattering[i] * mieScale * s.mieTint[i];
+        s.parameters.MieAbsorption[i] = earth.MieAbsorption[i] * absorption;
+        s.parameters.AbsorptionExtinction[i] = earth.AbsorptionExtinction[i] * ozoneScale * s.ozoneTint[i];
     }
 }
 
@@ -187,20 +185,9 @@ struct UdsSkyFrameData
 // Shared CPU/HLSL layout; LUT uses local Z-up, world Y is altitude above sea level.
 struct SkyViewFrameData
 {
-    float sunDirection[4]{}; // local XYZ to sun; w angular radius in radians
-    float illuminance[4]{}; // outer-space RGB lux; w sky-only luminance scale
-    float exposure[4] = {1, 1, 0, 0}; // x: pre-exposure before FP16 storage; y: UE SkyLuminanceFactor (sky pixel, capture, distant light)
-    float planet[4]{}; // view height, bottom radius, top radius (km), enabled
-    // Time-of-day plan N1: the atmosphere's SECOND light, the moon (UE NUM_ATMOSPHERE_LIGHTS 2,
-    // SkyAtmosphere.usf:1117/1403/1688 sum both). Zero illuminance = no second light; every LUT skips it.
-    float light1Direction[4]{};   // local XYZ to the moon; w its disc's angular radius (0 = no disc: the captures)
-    float light1Illuminance[4]{}; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
-    float moonDisc[4]{};          // the FULL moon's outer-space RGB lux (the disc's reference); w the phase angle (rad)
-    float moonDisc2[4]{};         // x the disc's lit scale (phase law / Lommel-Seeliger integral), y 1 = albedo/normal texture ready
-    // Time-of-day plan N2: the night sky's own light (night_sky.hlsli) for what reads the SKY as a whole --
-    // the distant light: rgb the airglow's zenith radiance (cd/m2), w the stars' and the Milky Way's mean
-    // radiance. Zero = no night sky.
-    float nightGlow[4]{};
+    // shaders/shared/sky_atmosphere.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::FloatArray<4>; // rows the C++ indexes (float[4] before R5.3)
+    SKY_VIEW_FIELDS
 };
 static_assert(sizeof(SkyViewFrameData) == 144, "SkyView frame CB layout");
 
@@ -208,11 +195,9 @@ static_assert(sizeof(SkyViewFrameData) == 144, "SkyView frame CB layout");
 // sky_ibl_capture_cs.hlsl): the rotation onto the celestial sphere and the layers' scales.
 struct NightSkyFrameData
 {
-    float glow[4]{};   // rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean radiance
-    float layers[4]{}; // x stars (x physical), y Milky Way (x physical, 0 = its map not ready), z twinkle, w time (s)
-    float row0[4]{};   // world direction (Y up) -> equatorial, by rows; row0.w 1 = the night sky is drawn
-    float row1[4]{};
-    float row2[4]{};
+    // shaders/shared/night_sky.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::FloatArray<4>; // rows the C++ indexes (float[4] before R5.3)
+    NIGHT_SKY_FIELDS
 };
 static_assert(sizeof(NightSkyFrameData) == 80, "night sky CB layout");
 // The stars' and the Milky Way's mean radiance over the sphere, cd/m2 -- what a picture too coarse to

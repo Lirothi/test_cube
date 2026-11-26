@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/cloud.h" // VolumetricCloudConstants' fields, once (R5.3)
 
 // Volumetric clouds, part C of docs/volumetric_fog_sky_clouds_ssgi_plan.md. AUTHORED BY THE LEVEL
 // (the `volumetricCloud` object): a level with the section has clouds, one without has none -- the
@@ -163,38 +165,10 @@ struct VolumetricCloudSettings
 // blob (like FogApplyConstants), so all members are float4 / float4x4 and nothing pads.
 struct VolumetricCloudConstants
 {
-    float invViewProjNoJitter[16];
-    float viewProjNoJitter[16];
-    float prevViewProjNoJitter[16];
-    float shadowViewProj[16];
-    float shadowInvViewProj[16];
-    float camera[4];      // xyz camera (m), w planet bottom radius (km)
-    float layer[4];       // bottom radius km, top radius km, 1 / height km, bottom altitude km
-    float sun[4];         // xyz to sun, w phase g
-    float sunColor[4];    // rgb effective illuminance, w phase g2
-    float phase[4];       // blend, ms contribution, ms occlusion, ms eccentricity
-    float trace[4];       // sample max, sample min, 1 / distance to max (1/km), stop transmittance
-    float shadowTrace[4]; // shadow samples, shadow distance km, sky bottom visibility, tracing max distance km
-    float medium[4];      // extinction 1/m, albedo, coverage, cloud type bias
-    float formation[4];   // 1 / formation tile (1/km), its time coordinate (0..1, wraps), macro variation, 1 / macro tile (1/km)
-    float wind[4];        // xyz world drift offset (m), w tracing start max distance km
-    float output[4];      // width, height, preExposure, 1/preExposure
-    float depth[4];       // depth width, depth height, proj._33, proj._43
-    float aerial[4];      // aerial on, aerial start km, distant on, debug view
-    float temporal[4];    // history valid, history weight, exposure ratio, frame index
-    float shadowMap[4];   // resolution, 1/resolution, far depth km, strength
-    float shadowMap2[4];  // sample count, depth bias km, z the air's sun under the deck (CloudAirSunScale; the capture's aerial perspective), w unused
-    float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
-    float profile[4];     // x: the overcast's evenness (overcast x overcastEvenness), y: 1 / LUT width, z: 1 / LUT height, w: unused
-    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, z: diffused light, w: overcast (0..1)
-    float erosion[4];     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
-    float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's threshold lift
-    // Time-of-day plan N3: x the atmosphere's top radius (km), y 1 = the light reaches each sample through
-    // the air (sky transmittance LUT; `sun`/`sunColor` are then the light's OUTER-SPACE values), z which
-    // body lights the clouds (0 the sun, 1 the moon), w the sine of reflectionHorizonFadeDeg (the capture).
-    float light[4];
-    float shadowSun[4];   // xyz direction TO the light whose cloud shadow the map stores -- what lights the ground
-    float resolve[4];     // xy the resolved clouds' size, z render pixels per resolved pixel (1, or 2 in trace mode 0), w 1 = blue-noise start offset
+    // shaders/shared/cloud.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::FloatArray<4>; // rows the C++ indexes (float[4] before R5.3)
+    using float4x4 = shader_shared::FloatArray<16>; // float[16] before R5.3
+    CLOUD_FIELDS
 };
 static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 24 * 16, "CloudCB layout");
 

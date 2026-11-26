@@ -130,6 +130,7 @@ void DlssHandler::Shutdown()
         slFreeResources(sl::kFeatureDLSS, viewport_);
         resourcesAllocated_ = false;
     }
+    featureLive_ = false;
 
     exposureUpload_.Reset();
     exposureTex_.Reset();
@@ -165,6 +166,7 @@ void DlssHandler::OnStreamlineInitialized(sl::Result initResult)
 {
     available_ = (initResult == sl::Result::eOk);
     resourcesAllocated_ = false;
+    featureLive_ = false;
     frameToken_ = nullptr;
     outputValid_ = false;
     resetPending_ = true;
@@ -682,8 +684,38 @@ bool DlssHandler::EvaluateInternal(ID3D12GraphicsCommandList* cl)
         }
     }
 
+    // The feature now exists at these sizes (created by this evaluate, or the one before at the same sizes).
+    featureLive_ = true;
+    featureInWidth_ = color.width;
+    featureInHeight_ = color.height;
+    featureOutWidth_ = output.width;
+    featureOutHeight_ = output.height;
     outputValid_ = true;
     return true;
+}
+
+void DlssHandler::ReleaseFeatureIfResized()
+{
+    if (!available_ || !featureLive_)
+    {
+        return;
+    }
+    const UINT inWidth = std::max(renderer_.renderWidth_, 1u);
+    const UINT inHeight = std::max(renderer_.renderHeight_, 1u);
+    const UINT outWidth = std::max(renderer_.width_, 1u);
+    const UINT outHeight = std::max(renderer_.height_, 1u);
+    if (inWidth == featureInWidth_ && inHeight == featureInHeight_ && outWidth == featureOutWidth_ &&
+        outHeight == featureOutHeight_)
+    {
+        return;
+    }
+    const sl::Result result = slFreeResources(sl::kFeatureDLSS, viewport_);
+    LOG_DEBUG(logging::LogCategory::Render, "DLSS: the feature at {}x{} -> {}x{} released for {}x{} -> {}x{} (result {})",
+              featureInWidth_, featureInHeight_, featureOutWidth_, featureOutHeight_, inWidth, inHeight, outWidth, outHeight,
+              static_cast<int>(result));
+    featureLive_ = false;
+    resetPending_ = true;
+    outputValid_ = false;
 }
 
 bool DlssHandler::IsActive() const

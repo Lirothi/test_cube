@@ -31,197 +31,15 @@
 #include "rendering/visibility/OcclusionHistory.h"
 #include "core/threading/RenderThread.h" // G8: threading::g_renderThreadEnabled
 #include "third_party/json/json.hpp"
+#include "app/settings/SettingContext.h"    // R2.n: the graphics file through the registry
+#include "core/settings/SettingsRegistry.h"
+#include <array>
+#include <cstring>
 
 namespace
 {
     using json = nlohmann::json;
 
-    struct GraphicsSettingsSnapshot
-    {
-        bool asyncCompute = true;
-        bool vsync = false; // UE r.VSync default
-        int maxFps = 0;     // UE t.MaxFPS default: uncapped
-        float mouseSmoothingMs = 0.0f; // g_cameraMouseSmoothingMs: 0 = the look input applied at once
-        bool renderThread = true;      // threading::g_renderThreadEnabled (game thread plan G8/G9): on by default
-        bool oneFrameThreadLag = true; // threading::g_oneFrameThreadLag: UE's r.OneFrameThreadLag 1
-        bool rhiThread = true;         // threading::g_rhiThreadEnabled (G10b, UE r.RHIThread.Enable): on by default
-        bool visibilityChunkMask = true;
-        int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);
-        int occlusionQueryLatency = static_cast<int>(vis::kOcclusionBufferedFrames);
-        bool occlusionIndirectQueries = false;
-        bool indirectGBuffer = true;
-        bool gbufferHzbCull = true;
-        bool rasterBindless = true; // texture streaming A6: material textures by heap index (SM6.6)
-        int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, powers of two 4..64
-        int fogGridZ = static_cast<int>(render::kFogGridZ);           // volumetric fog slices, 16..128
-        std::uint32_t cloudShadowUpdateFrames = 4u; // 1 = the whole cloud shadow map every frame (UE), 4, 16
-        bool cloudShadowBilinearWeather = true;     // the map's march: 1 macro-variation tap instead of the view's 4
-        bool cloudShadowDetailMean = false;         // the map's march: erosion by its mean, no fetch (VolumetricCloudSettings.h: not worth it)
-        std::uint32_t cloudTraceMode = 1u;          // UE r.VolumetricRenderTarget.Mode: 1 half-res trace (ours), 0 quarter-res (UE's default)
-        float cloudCaptureTexels = 0.5f;            // the clouds' drift (cube texels) before the sky's cube re-captures them; 0 = every 4 frames
-        // Texture streaming A3 (UE r.Streaming.*)
-        bool streamingEnabled = true;
-        int streamingPoolSizeMB = -1;   // -1 = 70 % of dedicated VRAM, 0 = unlimited
-        int streamingMipBias = 0;
-        float streamingBoost = 1.0f;
-        float streamingHiddenScale = 0.5f;
-        bool streamingMipFade = true;
-        bool streamingPerTextureBias = true; // UE r.Streaming.UsePerTextureBias: mip bias is a budget ceiling, not a cap
-        std::uint32_t textureAnisotropy = 16u; // UE r.MaxAnisotropy: the material samplers (render::g_textureAnisotropy)
-        // GI: the DDGI probe volume (SceneFrameData.h SceneRenderSettings::gi*, the same defaults).
-        bool giEnabled = true;
-        float giSpacing = 0.5f;
-        float giHysteresis = 0.98f;
-        float giIntensity = 1.0f;
-        bool giFar = true;
-        float giFarSpacing = 2.0f;
-        // ...the trace's price (SceneRenderSettings::giUpdateDivisor ... giSleepPeriod, the same defaults).
-        std::uint32_t giDivisor = 4u;
-        std::uint32_t giFarDivisor = 4u;
-        std::uint32_t giRays = 64u;
-        std::uint32_t giFixedRayPeriod = 4u;
-        std::uint32_t giSleepPeriod = 4u;
-        float giRayDistance = 200.0f;
-        bool giInfiniteBounce = true;
-        bool giBounceVisibility = true;
-        bool giSkyRay = true;
-        bool giLights = true;
-        // The RT sky visibility (SceneRenderSettings::skyVis*, the same defaults), on the GI tab.
-        bool skyVisEnabled = true;
-        std::uint32_t skyVisRays = 8u;
-        float skyVisHistory = 0.995f;
-        float skyVisMaxDistance = 15.0f;
-        float skyVisDiffuse = 1.0f;
-        float skyVisSpecular = 1.0f;
-        bool skyVisFilter = true;
-        std::uint32_t skyVisFogRays = 2u;
-        std::uint32_t skyVisFilterRadius = 4u;
-        bool skyVisSeed = true;
-        bool skyVisFallback = true; // ...and without the trace, from above (SceneRenderSettings::skyVisFallback)
-        std::uint32_t skyVisFallbackResolution = 512u; // its map (SceneRenderSettings::skyVisFallbackResolution)
-        float skyVisFallbackTexel = 1.0f;
-        float skyVisFallbackFade = 0.25f;
-
-        bool dlssEnabled = false;
-        sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
-        float renderScale = 1.0f;
-        bool fxaa = false;
-
-        SsrTechnique ssrTechnique = SsrTechnique::LogMarch;
-        UeSsrSettings ssrUe{};
-        bool reflectionTemporal = true;
-        float reflectionTemporalBlend = 0.125f;
-        float reflectionTemporalStillInertia = 0.8f;
-        bool waterReflectionTemporal = false;
-        float waterReflectionTemporalBlend = 0.125f;
-        float waterReflectionTemporalStillInertia = 0.0f;
-        bool waterReflectionSurfaceNormal = false;
-        std::uint32_t waterReflectionNormalCascades = 4u;
-        float waterReflectionNormalFilter = 0.0f;
-        float waterReflectionPrefilter = 1.0f;
-        float reflectionResolution = 0.5f;
-        float oceanReflectionResolution = 0.5f;
-        float reflectionGlossyScale = 1.0f;
-        float sunMetalSpecInfluence = 0.0f;
-        ReflectionSource reflectionSource = ReflectionSource::RT;
-        std::uint32_t rtAlphaMode = 2u;
-        float rtAlphaMissKeep = 0.15f;
-        bool rtWindBlas = true;
-        float rtWindBlasRadius = 40.0f;
-
-        bool lodEnabled = true;
-        bool lodUeScreenSize = true; // render::g_lodUeScreenSize_game / g_lodPixelError / g_lodDistanceScale
-        float lodPixelError = 8.0f; // UE's PixelError, 1080p pixels (LodSelect.h); persisted as "uePixelError"
-        float lodDistanceScale = 1.0f;
-        float lodBound0 = 8.0f;  // render::g_lodBound0_game..2 (LodSelect.h says why these)
-        float lodBound1 = 16.0f;
-        float lodBound2 = 32.0f;
-        float lodTemporalLag = 0.5f; // render::g_lodTemporalLag_game (UE lod.TemporalLag)
-        float chunkLodDistance = 24.0f;
-        float chunkLodFactor = 2.0f;
-
-        render::ShadowMode shadowMode = render::ShadowMode::VSM;
-        bool giIndirectShadows = true;
-        float localShadowWindRange = 30.0f; // render::g_localShadowWindRange_game (metres, < 0 = every light sways)
-        unsigned localShadowMaxRes = 2048u; // render::g_localShadowMaxRes_game: UE r.Shadow.MaxResolution of the lamps' atlases
-        CascadeShadowConfig csm{};
-        // The CSM atlas edge (render::g_csmAtlasRes_game) -- a RESOURCE size, shared by Legacy and
-        // SDSM, reallocated at GPU idle by Scene::ReconcileShadowMode.
-        std::uint32_t csmAtlasRes = 4096u;
-
-        // S15 (SDSM). Defaults mirror render::sdsm::g_* -- one place decides them (the header),
-        // and this snapshot only records what the user changed.
-        std::uint32_t sdsmPartitions = 4u;
-        float sdsmBorderTexels = 4.0f;
-        float sdsmDilation = 0.01f;
-        float sdsmMinScaleOverSphere = 0.02f;
-        float sdsmZMargin = 25.0f;
-        float sdsmStabilityFrames = 30.0f;
-        // S20: the partition cache -- partitions 1+ re-render every min(N, 2^p) frames; 1 = off.
-        std::uint32_t sdsmCacheFrames = 4u;
-        float sdsmCacheDilation = 0.05f;
-        // S21: stable partitions -- texel snap + size/depth hysteresis.
-        bool sdsmTexelSnap = true;
-        float sdsmSizeHysteresis = 0.1f;
-        // S16 (EVSM4). Off by default: it costs an RGBA32F atlas beside the depth one.
-        bool sdsmEvsm = false;
-        float sdsmEvsmPos = 42.0f;
-        float sdsmEvsmNeg = 5.25f;
-        float sdsmBlur = 0.002f;
-        float sdsmBlurMaxTexels = 16.0f;
-
-        bool contactEnabled = false;
-        std::uint32_t contactLocalMode = 1u;
-        bool contactTemporalDither = true;
-        bool contactLengthInWorldSpace = false;
-        float contactLength = 0.05f;
-        float contactIntensity = 1.0f;
-        std::uint32_t contactSteps = 8u;
-        float contactMaxThickness = 0.5f;
-        float contactNormalOffset = 0.04f;
-        float contactGrazingFade = 0.15f;
-        float contactMinDistance = 0.0f;
-        float contactMaxDistance = 0.0f;
-        float contactFadeBand = 10.0f;
-
-        int shadowLodBias = 1;
-        bool shadowLodBiasNearTier = false;
-        int shadowLodTierStride = 2;
-        float vsmLodRefDistance = vsm::kLodRefDist;
-        std::uint32_t vsmRequestDownscale = vsm::kRequestDownscale;
-        std::uint32_t vsmLruFrames = vsm::kLruFrameThreshold;
-        int vsmClipmapFirstLevel = 6;
-        float vsmResolutionLodBiasDirectional = 0.0f;
-        float vsmResolutionLodBiasLocal = 0.0f;
-        std::uint32_t smrtRayCount = 8u;
-        std::uint32_t smrtSamplesPerRay = 4u;
-        std::uint32_t localSmrtRayCount = 4u;
-        std::uint32_t localSmrtSamplesPerRay = 4u;
-        bool smrtTemporalDither = true;
-        std::uint32_t smrtAdaptiveRayCount = 1u;
-        float smrtSunAngleDeg = 0.5357f;
-        float smrtTexelDitherScale = 2.0f;
-        float smrtRayLengthScale = 1.5f;
-        float vsmClipmapDepthBias = 0.0002f;
-        float vsmClipmapDepthBiasDecay = 1.0f;
-        float vsmClipmapDepthBiasFloorTexels = 0.0f;
-        float vsmClipmapNormalBias = 1.0f;
-        float vsmLocalLateralTexels = 1.5f; // plan S10b: the 3x3 PCF's reach (vsm::g_localLateralTexels_game)
-        float vsmLocalDepthPushTexels = 0.5f;
-        bool vsmResidentOnly = true;
-        bool vsmSingleDraw = true;
-        bool vsmHzbCull = false;
-        bool vsmPageCaching = true;
-        bool tessyEnabled = true; // Tessy: the master switch (tessy::g_enabled_game)
-        bool tessyVsm = true; // Tessy N3 (tessy::g_vsm_game)
-        bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader_game)
-        bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas_game)
-        bool tessyGBuffer = true; // Tessy N5 (tessy::g_gbuffer_game); on by default since 2026-10-30 (owner)
-        bool tessySdsm = true;    // Tessy (tessy::g_sdsm_game): the SDSM sun partitions; on by default (owner, 2026-10-30)
-        bool tessyLod = false;    // Tessy N7 (tessy::g_lod_game): the cluster DAG's cut (camera, lamp atlases, VSM pages)
-        float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError_game): the camera's DAG cut threshold, screen pixels
-        float vsmWindRange = 64.0f;
-    };
 
     const char* DlssModeName(sl::DLSSMode mode)
     {
@@ -337,152 +155,230 @@ namespace
         return it != root.end() && it->is_object() ? *it : empty;
     }
 
-    void Sanitize(GraphicsSettingsSnapshot& s)
+    // R2.n (architecture plan): the persisted graphics through the settings registry. One entry a knob: its path in
+    // user_settings.json's graphics section (the file's format is what it was), its --set name (the row that writes and
+    // reads it -- its clamp is the one, decision В11 (а)), the JSON kind, the Developer Controls control a single Reset
+    // moves, the tab a tab's Reset moves. In the order the graphics are applied (a preset before its fields). Kept in
+    // code: the DLSS trio (the renderer's own calls, coupled), the shadow mode (a --shadow-mode boot override keeps the
+    // live mode, the file's is remembered) and the CSM fit (a struct the scene owns and gets back at each level load).
+    enum class PKind : std::uint8_t { Bool, Int, Uint, Float, ReflectionSource, SsrTechnique };
+    enum class PTab : std::uint8_t { Frame, Visibility, Upscale, Reflections, Fog, Sky, Streaming, Gi, Lod, Contact, Sdsm, Vsm, Csm };
+    constexpr GraphicsControl kNoControl = static_cast<GraphicsControl>(0x7FFFFFFF); // a tab's Reset alone moves it
+    struct PEntry
     {
-        const auto finite = [](float value, float fallback)
-        {
-            return std::isfinite(value) ? value : fallback;
-        };
+        const char* path;
+        const char* setting;
+        PKind kind;
+        GraphicsControl control;
+        PTab tab;
+    };
+    const PEntry kEntries[] = {
+        { "performance.asyncCompute", "frame.asyncCompute", PKind::Bool, GraphicsControl::AsyncCompute, PTab::Frame }, // asyncCompute
+        { "frame.vsync", "frame.vsync", PKind::Bool, GraphicsControl::VSync, PTab::Frame }, // vsync
+        { "frame.maxFps", "frame.maxFps", PKind::Int, GraphicsControl::MaxFps, PTab::Frame }, // maxFps
+        { "frame.mouseSmoothingMs", "camera.mouseSmoothing", PKind::Float, GraphicsControl::MouseSmoothing, PTab::Frame }, // mouseSmoothingMs
+        { "frame.renderThread", "frame.renderThread", PKind::Bool, GraphicsControl::RenderThread, PTab::Frame }, // renderThread
+        { "frame.oneFrameThreadLag", "frame.oneFrameThreadLag", PKind::Bool, GraphicsControl::OneFrameThreadLag, PTab::Frame }, // oneFrameThreadLag
+        { "frame.rhiThread", "frame.rhiThread", PKind::Bool, GraphicsControl::RhiThread, PTab::Frame }, // rhiThread
+        { "visibility.chunkMask", "vis.chunkMask", PKind::Bool, GraphicsControl::VisibilityChunkMask, PTab::Visibility }, // visibilityChunkMask
+        { "visibility.occlusionMethod", "vis.method", PKind::Int, GraphicsControl::OcclusionMethod, PTab::Visibility }, // occlusionMethod
+        { "visibility.queryLatency", "vis.queryLatency", PKind::Int, GraphicsControl::OcclusionQueryLatency, PTab::Visibility }, // occlusionQueryLatency
+        { "visibility.queryGpuDrivenObjects", "vis.indirectQueries", PKind::Bool, GraphicsControl::OcclusionIndirectQueries, PTab::Visibility }, // occlusionIndirectQueries
+        { "performance.gpuDrivenGBuffer", "gbuffer.indirect", PKind::Bool, GraphicsControl::IndirectGBuffer, PTab::Visibility }, // indirectGBuffer
+        { "performance.gbufferHzbCull", "gbuffer.hzb", PKind::Bool, GraphicsControl::GbufferHzb, PTab::Visibility }, // gbufferHzbCull
+        { "performance.rasterBindless", "raster.bindless", PKind::Bool, GraphicsControl::RasterBindless, PTab::Visibility }, // rasterBindless
+        { "antiAliasing.fxaa", "aa.fxaa", PKind::Bool, GraphicsControl::Fxaa, PTab::Upscale }, // fxaa
+        { "reflections.ssrTechnique", "ssr.technique", PKind::SsrTechnique, GraphicsControl::SsrTechnique, PTab::Reflections }, // ssrTechnique
+        { "reflections.ueSsr.preset", "ssr.ueQuality", PKind::Uint, GraphicsControl::UeSsrQuality, PTab::Reflections }, // ssrUe.preset
+        { "reflections.ueSsr.stepsPerRay", "ssr.ueSteps", PKind::Uint, GraphicsControl::UeSsrSteps, PTab::Reflections }, // ssrUe.numSteps
+        { "reflections.ueSsr.raysPerPixel", "ssr.ueRays", PKind::Uint, GraphicsControl::UeSsrRays, PTab::Reflections }, // ssrUe.numRays
+        { "reflections.ueSsr.glossyRays", "ssr.ueGlossy", PKind::Bool, GraphicsControl::UeSsrGlossyRays, PTab::Reflections }, // ssrUe.glossyRays
+        { "reflections.ueSsr.useSurfaceRoughness", "ssr.ueUseSurfaceRoughness", PKind::Bool, GraphicsControl::UeSsrUseSurfaceRoughness, PTab::Reflections }, // ssrUe.useSurfaceRoughness
+        { "reflections.ueSsr.roughnessOverride", "ssr.ueRoughnessOverride", PKind::Float, GraphicsControl::UeSsrRoughnessOverride, PTab::Reflections }, // ssrUe.roughnessOverride
+        { "reflections.ueSsr.intensity", "ssr.ueIntensity", PKind::Float, GraphicsControl::UeSsrIntensity, PTab::Reflections }, // ssrUe.intensity
+        { "reflections.ueSsr.maxRoughness", "ssr.ueMaxRoughness", PKind::Float, GraphicsControl::UeSsrMaxRoughness, PTab::Reflections }, // ssrUe.maxRoughness
+        { "reflections.temporal", "ssr.temporal", PKind::Bool, GraphicsControl::ReflectionTemporal, PTab::Reflections }, // reflectionTemporal
+        { "reflections.temporalBlend", "ssr.temporalBlend", PKind::Float, GraphicsControl::ReflectionTemporalBlend, PTab::Reflections }, // reflectionTemporalBlend
+        { "reflections.temporalStillInertia", "ssr.temporalClampExpand", PKind::Float, GraphicsControl::ReflectionTemporalStillInertia, PTab::Reflections }, // reflectionTemporalStillInertia
+        { "reflections.waterTemporal", "ssr.waterTemporal", PKind::Bool, GraphicsControl::WaterReflectionTemporal, PTab::Reflections }, // waterReflectionTemporal
+        { "reflections.waterTemporalBlend", "ssr.waterTemporalBlend", PKind::Float, GraphicsControl::WaterReflectionTemporalBlend, PTab::Reflections }, // waterReflectionTemporalBlend
+        { "reflections.waterTemporalStillInertia", "ssr.waterTemporalInertia", PKind::Float, GraphicsControl::WaterReflectionTemporalStillInertia, PTab::Reflections }, // waterReflectionTemporalStillInertia
+        { "reflections.waterSurfaceNormal", "ssr.waterSurfaceNormal", PKind::Bool, GraphicsControl::WaterReflectionSurfaceNormal, PTab::Reflections }, // waterReflectionSurfaceNormal
+        { "reflections.waterNormalCascades", "ssr.waterNormalCascades", PKind::Uint, GraphicsControl::WaterReflectionNormalCascades, PTab::Reflections }, // waterReflectionNormalCascades
+        { "reflections.waterNormalFilter", "ocean.reflectionNormalFilter", PKind::Float, GraphicsControl::WaterReflectionNormalFilter, PTab::Reflections }, // waterReflectionNormalFilter
+        { "reflections.waterPrefilter", "ocean.reflectionPrefilter", PKind::Float, GraphicsControl::WaterReflectionPrefilter, PTab::Reflections }, // waterReflectionPrefilter
+        { "reflections.glossyBlur", "reflections.glossyBlur", PKind::Float, GraphicsControl::ReflectionGlossyScale, PTab::Reflections }, // reflectionGlossyScale
+        { "reflections.sunMetalSpec", "light.sunMetalSpec", PKind::Float, GraphicsControl::SunMetalSpecInfluence, PTab::Reflections }, // sunMetalSpecInfluence
+        { "reflections.source", "render.reflectionSource", PKind::ReflectionSource, GraphicsControl::ReflectionSource, PTab::Reflections }, // reflectionSource
+        { "reflections.rtFoliageAlphaMode", "rt.alphaMode", PKind::Uint, GraphicsControl::RtAlphaMode, PTab::Reflections }, // rtAlphaMode
+        { "reflections.rtFoliageFill", "rt.alphaMissKeep", PKind::Float, GraphicsControl::RtAlphaMissKeep, PTab::Reflections }, // rtAlphaMissKeep
+        { "reflections.rtWindSway", "rt.windBlas", PKind::Bool, GraphicsControl::RtWindBlas, PTab::Reflections }, // rtWindBlas
+        { "reflections.rtWindRadius", "rt.windRadius", PKind::Float, GraphicsControl::RtWindBlasRadius, PTab::Reflections }, // rtWindBlasRadius
+        { "reflections.resolution", "reflections.resolution", PKind::Float, GraphicsControl::ReflectionResolution, PTab::Reflections }, // reflectionResolution
+        { "reflections.oceanResolution", "reflections.oceanResolution", PKind::Float, GraphicsControl::OceanReflectionResolution, PTab::Reflections }, // oceanReflectionResolution
+        { "performance.fogGridPixels", "fog.gridPixels", PKind::Int, GraphicsControl::FogGridPixels, PTab::Fog }, // fogGridPixels
+        { "performance.fogGridZ", "fog.gridZ", PKind::Int, GraphicsControl::FogGridZ, PTab::Fog }, // fogGridZ
+        { "cloudShadow.updateFrames", "cloudShadow.updateFrames", PKind::Uint, GraphicsControl::CloudShadowUpdateFrames, PTab::Sky }, // cloudShadowUpdateFrames
+        { "cloudShadow.bilinearWeather", "cloudShadow.bilinearWeather", PKind::Bool, GraphicsControl::CloudShadowBilinearWeather, PTab::Sky }, // cloudShadowBilinearWeather
+        { "cloudShadow.detailMean", "cloudShadow.detailMean", PKind::Bool, GraphicsControl::CloudShadowDetailMean, PTab::Sky }, // cloudShadowDetailMean
+        { "cloudTrace.mode", "cloudTrace.mode", PKind::Uint, GraphicsControl::CloudTraceMode, PTab::Sky }, // cloudTraceMode
+        { "cloudTrace.captureTexels", "cloud.captureTexels", PKind::Float, GraphicsControl::CloudCaptureTexels, PTab::Sky }, // cloudCaptureTexels
+        { "streaming.enabled", "streaming.enabled", PKind::Bool, GraphicsControl::StreamingEnabled, PTab::Streaming }, // streamingEnabled
+        { "streaming.poolSizeMB", "streaming.poolSizeMB", PKind::Int, GraphicsControl::StreamingPoolSizeMB, PTab::Streaming }, // streamingPoolSizeMB
+        { "streaming.mipBias", "streaming.mipBias", PKind::Int, GraphicsControl::StreamingMipBias, PTab::Streaming }, // streamingMipBias
+        { "streaming.boost", "streaming.boost", PKind::Float, GraphicsControl::StreamingBoost, PTab::Streaming }, // streamingBoost
+        { "streaming.hiddenScale", "streaming.hiddenScale", PKind::Float, GraphicsControl::StreamingHiddenScale, PTab::Streaming }, // streamingHiddenScale
+        { "streaming.mipFade", "streaming.mipFade", PKind::Bool, GraphicsControl::StreamingMipFade, PTab::Streaming }, // streamingMipFade
+        { "streaming.perTextureBias", "streaming.perTextureBias", PKind::Bool, GraphicsControl::StreamingPerTextureBias, PTab::Streaming }, // streamingPerTextureBias
+        { "streaming.anisotropy", "textures.anisotropy", PKind::Uint, GraphicsControl::StreamingAnisotropy, PTab::Streaming }, // textureAnisotropy
+        { "gi.enabled", "gi.enabled", PKind::Bool, GraphicsControl::GiEnabled, PTab::Gi }, // giEnabled
+        { "gi.spacing", "gi.spacing", PKind::Float, GraphicsControl::GiSpacing, PTab::Gi }, // giSpacing
+        { "gi.hysteresis", "gi.hysteresis", PKind::Float, GraphicsControl::GiHysteresis, PTab::Gi }, // giHysteresis
+        { "gi.intensity", "gi.intensity", PKind::Float, GraphicsControl::GiIntensity, PTab::Gi }, // giIntensity
+        { "gi.farCascade", "gi.far", PKind::Bool, GraphicsControl::GiFar, PTab::Gi }, // giFar
+        { "gi.farSpacing", "gi.farSpacing", PKind::Float, GraphicsControl::GiFarSpacing, PTab::Gi }, // giFarSpacing
+        { "gi.divisor", "gi.divisor", PKind::Uint, GraphicsControl::GiDivisor, PTab::Gi }, // giDivisor
+        { "gi.farDivisor", "gi.farDivisor", PKind::Uint, GraphicsControl::GiFarDivisor, PTab::Gi }, // giFarDivisor
+        { "gi.rays", "gi.rays", PKind::Uint, GraphicsControl::GiRays, PTab::Gi }, // giRays
+        { "gi.fixedRayPeriod", "gi.fixedRayPeriod", PKind::Uint, GraphicsControl::GiFixedRayPeriod, PTab::Gi }, // giFixedRayPeriod
+        { "gi.sleepPeriod", "gi.sleepPeriod", PKind::Uint, GraphicsControl::GiSleepPeriod, PTab::Gi }, // giSleepPeriod
+        { "gi.rayDistance", "gi.rayDistance", PKind::Float, GraphicsControl::GiRayDistance, PTab::Gi }, // giRayDistance
+        { "gi.infiniteBounce", "gi.infiniteBounce", PKind::Bool, GraphicsControl::GiInfiniteBounce, PTab::Gi }, // giInfiniteBounce
+        { "gi.bounceVisibility", "gi.bounceVisibility", PKind::Bool, GraphicsControl::GiBounceVisibility, PTab::Gi }, // giBounceVisibility
+        { "gi.skyRay", "gi.skyRay", PKind::Bool, GraphicsControl::GiSkyRay, PTab::Gi }, // giSkyRay
+        { "gi.lights", "gi.lights", PKind::Bool, GraphicsControl::GiLights, PTab::Gi }, // giLights
+        { "skyVis.enabled", "skyVis.enabled", PKind::Bool, GraphicsControl::SkyVisEnabled, PTab::Gi }, // skyVisEnabled
+        { "skyVis.rays", "skyVis.rays", PKind::Uint, GraphicsControl::SkyVisRays, PTab::Gi }, // skyVisRays
+        { "skyVis.history", "skyVis.history", PKind::Float, GraphicsControl::SkyVisHistory, PTab::Gi }, // skyVisHistory
+        { "skyVis.maxDistance", "skyVis.maxDistance", PKind::Float, GraphicsControl::SkyVisMaxDistance, PTab::Gi }, // skyVisMaxDistance
+        { "skyVis.diffuse", "skyVis.diffuse", PKind::Float, GraphicsControl::SkyVisDiffuse, PTab::Gi }, // skyVisDiffuse
+        { "skyVis.specular", "skyVis.specular", PKind::Float, GraphicsControl::SkyVisSpecular, PTab::Gi }, // skyVisSpecular
+        { "skyVis.spatialFilter", "skyVis.filter", PKind::Bool, GraphicsControl::SkyVisFilter, PTab::Gi }, // skyVisFilter
+        { "skyVis.fogRays", "skyVis.fogRays", PKind::Uint, GraphicsControl::SkyVisFogRays, PTab::Gi }, // skyVisFogRays
+        { "skyVis.filterRadius", "skyVis.filterRadius", PKind::Uint, GraphicsControl::SkyVisFilterRadius, PTab::Gi }, // skyVisFilterRadius
+        { "skyVis.seed", "skyVis.seed", PKind::Bool, GraphicsControl::SkyVisSeed, PTab::Gi }, // skyVisSeed
+        { "skyVis.fallback", "skyVis.fallback", PKind::Bool, GraphicsControl::SkyVisFallback, PTab::Gi }, // skyVisFallback
+        { "skyVis.fallbackResolution", "skyVis.fallbackResolution", PKind::Uint, GraphicsControl::SkyVisFallbackResolution, PTab::Gi }, // skyVisFallbackResolution
+        { "skyVis.fallbackTexel", "skyVis.fallbackTexel", PKind::Float, GraphicsControl::SkyVisFallbackTexel, PTab::Gi }, // skyVisFallbackTexel
+        { "skyVis.fallbackFade", "skyVis.fallbackFade", PKind::Float, GraphicsControl::SkyVisFallbackFade, PTab::Gi }, // skyVisFallbackFade
+        { "lod.enabled", "lod.enabled", PKind::Bool, GraphicsControl::LodEnabled, PTab::Lod }, // lodEnabled
+        { "lod.ueScreenSize", "lod.ue", PKind::Bool, GraphicsControl::LodUeScreenSize, PTab::Lod }, // lodUeScreenSize
+        { "lod.uePixelError", "lod.pixelError", PKind::Float, GraphicsControl::LodPixelError, PTab::Lod }, // lodPixelError
+        { "lod.distanceScale", "lod.distanceScale", PKind::Float, GraphicsControl::LodDistanceScale, PTab::Lod }, // lodDistanceScale
+        { "lod.regularMeshRatios[0]", "lod.bound0", PKind::Float, GraphicsControl::LodBound0, PTab::Lod }, // lodBound0
+        { "lod.regularMeshRatios[1]", "lod.bound1", PKind::Float, GraphicsControl::LodBound1, PTab::Lod }, // lodBound1
+        { "lod.regularMeshRatios[2]", "lod.bound2", PKind::Float, GraphicsControl::LodBound2, PTab::Lod }, // lodBound2
+        { "lod.temporalLag", "lod.temporalLag", PKind::Float, GraphicsControl::LodTemporalLag, PTab::Lod }, // lodTemporalLag
+        { "lod.chunkDistance", "lod.chunkDist0", PKind::Float, GraphicsControl::ChunkLodDistance, PTab::Lod }, // chunkLodDistance
+        { "lod.chunkFactor", "lod.chunkFactor", PKind::Float, GraphicsControl::ChunkLodFactor, PTab::Lod }, // chunkLodFactor
+        { "shadows.contact.enabled", "contact.enabled", PKind::Bool, GraphicsControl::ContactEnabled, PTab::Contact }, // contactEnabled
+        { "shadows.contact.localLightMode", "contact.localMode", PKind::Uint, GraphicsControl::ContactLocalMode, PTab::Contact }, // contactLocalMode
+        { "shadows.contact.temporalDither", "contact.temporal", PKind::Bool, GraphicsControl::ContactTemporal, PTab::Contact }, // contactTemporalDither
+        { "shadows.contact.lengthInWorldSpace", "contact.lengthInWorldSpace", PKind::Bool, GraphicsControl::ContactLengthWorldSpace, PTab::Contact }, // contactLengthInWorldSpace
+        { "shadows.contact.length", "contact.length", PKind::Float, GraphicsControl::ContactLength, PTab::Contact }, // contactLength
+        { "shadows.contact.intensity", "contact.intensity", PKind::Float, GraphicsControl::ContactIntensity, PTab::Contact }, // contactIntensity
+        { "shadows.contact.steps", "contact.steps", PKind::Uint, GraphicsControl::ContactSteps, PTab::Contact }, // contactSteps
+        { "shadows.contact.maxThickness", "contact.thickness", PKind::Float, GraphicsControl::ContactThickness, PTab::Contact }, // contactMaxThickness
+        { "shadows.contact.normalOffset", "contact.normalOffset", PKind::Float, GraphicsControl::ContactNormalOffset, PTab::Contact }, // contactNormalOffset
+        { "shadows.contact.grazingFade", "contact.grazingFade", PKind::Float, GraphicsControl::ContactGrazingFade, PTab::Contact }, // contactGrazingFade
+        { "shadows.contact.minDistance", "contact.minDistance", PKind::Float, GraphicsControl::ContactMinDistance, PTab::Contact }, // contactMinDistance
+        { "shadows.contact.maxDistance", "contact.maxDistance", PKind::Float, GraphicsControl::ContactMaxDistance, PTab::Contact }, // contactMaxDistance
+        { "shadows.contact.fadeBand", "contact.fadeBand", PKind::Float, GraphicsControl::ContactFadeBand, PTab::Contact }, // contactFadeBand
+        { "shadows.sdsm.partitions", "sdsm.partitions", PKind::Uint, GraphicsControl::SdsmPartitions, PTab::Sdsm }, // sdsmPartitions
+        { "shadows.sdsm.borderTexels", "sdsm.borderTexels", PKind::Float, GraphicsControl::SdsmBorder, PTab::Sdsm }, // sdsmBorderTexels
+        { "shadows.sdsm.dilation", "sdsm.dilation", PKind::Float, GraphicsControl::SdsmDilation, PTab::Sdsm }, // sdsmDilation
+        { "shadows.sdsm.minScaleOverSphere", "sdsm.minScaleOverSphere", PKind::Float, GraphicsControl::SdsmMinScale, PTab::Sdsm }, // sdsmMinScaleOverSphere
+        { "shadows.sdsm.zMargin", "sdsm.zMargin", PKind::Float, GraphicsControl::SdsmZMargin, PTab::Sdsm }, // sdsmZMargin
+        { "shadows.sdsm.stabilityFrames", "sdsm.stabilityFrames", PKind::Float, GraphicsControl::SdsmStability, PTab::Sdsm }, // sdsmStabilityFrames
+        { "shadows.sdsm.cacheFrames", "sdsm.cacheFrames", PKind::Uint, GraphicsControl::SdsmCacheFrames, PTab::Sdsm }, // sdsmCacheFrames
+        { "shadows.sdsm.cacheDilation", "sdsm.cacheDilation", PKind::Float, GraphicsControl::SdsmCacheDilation, PTab::Sdsm }, // sdsmCacheDilation
+        { "shadows.sdsm.texelSnap", "sdsm.texelSnap", PKind::Bool, GraphicsControl::SdsmTexelSnap, PTab::Sdsm }, // sdsmTexelSnap
+        { "shadows.sdsm.sizeHysteresis", "sdsm.sizeHysteresis", PKind::Float, GraphicsControl::SdsmSizeHysteresis, PTab::Sdsm }, // sdsmSizeHysteresis
+        { "shadows.sdsm.evsm", "sdsm.evsm", PKind::Bool, GraphicsControl::SdsmEvsm, PTab::Sdsm }, // sdsmEvsm
+        { "shadows.sdsm.evsmPositiveExponent", "sdsm.evsmPos", PKind::Float, GraphicsControl::SdsmEvsmPos, PTab::Sdsm }, // sdsmEvsmPos
+        { "shadows.sdsm.evsmNegativeExponent", "sdsm.evsmNeg", PKind::Float, GraphicsControl::SdsmEvsmNeg, PTab::Sdsm }, // sdsmEvsmNeg
+        { "shadows.sdsm.evsmBlur", "sdsm.blur", PKind::Float, GraphicsControl::SdsmBlur, PTab::Sdsm }, // sdsmBlur
+        { "shadows.sdsm.evsmBlurMaxTexels", "sdsm.blurMaxTexels", PKind::Float, GraphicsControl::SdsmBlurMax, PTab::Sdsm }, // sdsmBlurMaxTexels
+        { "shadows.gpuInstancedCasters", "shadow.giIndirect", PKind::Bool, GraphicsControl::GiIndirectShadows, PTab::Vsm }, // giIndirectShadows
+        { "shadows.localLightWindRange", "shadow.localWindRange", PKind::Float, GraphicsControl::LocalShadowWindRange, PTab::Vsm }, // localShadowWindRange
+        { "shadows.localLightMaxResolution", "shadow.localMaxRes", PKind::Uint, kNoControl, PTab::Vsm }, // localShadowMaxRes
+        { "shadows.vsm.shadowLodBias", "vsm.shadowLodBias", PKind::Int, GraphicsControl::ShadowLodBias, PTab::Vsm }, // shadowLodBias
+        { "shadows.vsm.biasNearestTier", "vsm.shadowLodBiasNearTier", PKind::Bool, GraphicsControl::ShadowLodBiasNearTier, PTab::Vsm }, // shadowLodBiasNearTier
+        { "shadows.vsm.shadowTiersPerLod", "vsm.shadowLodTierStride", PKind::Int, GraphicsControl::ShadowLodTierStride, PTab::Vsm }, // shadowLodTierStride
+        { "shadows.vsm.lodRefDistance", "vsm.lodRefDistance", PKind::Float, GraphicsControl::VsmRefDistance, PTab::Vsm }, // vsmLodRefDistance
+        { "shadows.vsm.requestDownscale", "vsm.requestDownscale", PKind::Uint, GraphicsControl::VsmRequestDownscale, PTab::Vsm }, // vsmRequestDownscale
+        { "shadows.vsm.lruFrames", "vsm.lruFrames", PKind::Uint, GraphicsControl::VsmLru, PTab::Vsm }, // vsmLruFrames
+        { "shadows.vsm.clipmapFirstLevel", "vsm.clipmapFirstLevel", PKind::Int, GraphicsControl::VsmClipmapFirstLevel, PTab::Vsm }, // vsmClipmapFirstLevel
+        { "shadows.vsm.resolutionLodBiasDirectional", "vsm.resolutionLodBiasDirectional", PKind::Float, GraphicsControl::VsmResolutionLodBiasDirectional, PTab::Vsm }, // vsmResolutionLodBiasDirectional
+        { "shadows.vsm.resolutionLodBiasLocal", "vsm.resolutionLodBiasLocal", PKind::Float, kNoControl, PTab::Vsm }, // vsmResolutionLodBiasLocal
+        { "shadows.vsm.smrtRayCount", "vsm.smrtRayCount", PKind::Uint, GraphicsControl::VsmSmrtRays, PTab::Vsm }, // smrtRayCount
+        { "shadows.vsm.smrtSamplesPerRay", "vsm.smrtSamplesPerRay", PKind::Uint, GraphicsControl::VsmSmrtSamples, PTab::Vsm }, // smrtSamplesPerRay
+        { "shadows.vsm.localSmrtRayCount", "vsm.localSmrtRayCount", PKind::Uint, GraphicsControl::VsmLocalSmrtRays, PTab::Vsm }, // localSmrtRayCount
+        { "shadows.vsm.localSmrtSamplesPerRay", "vsm.localSmrtSamplesPerRay", PKind::Uint, GraphicsControl::VsmLocalSmrtSamples, PTab::Vsm }, // localSmrtSamplesPerRay
+        { "shadows.vsm.smrtTemporalDither", "vsm.smrtTemporalDither", PKind::Bool, GraphicsControl::VsmSmrtTemporal, PTab::Vsm }, // smrtTemporalDither
+        { "shadows.vsm.smrtAdaptiveAfterRays", "vsm.smrtAdaptiveRayCount", PKind::Uint, GraphicsControl::VsmSmrtAdaptive, PTab::Vsm }, // smrtAdaptiveRayCount
+        { "shadows.vsm.smrtSunAngleDeg", "vsm.smrtSourceAngleDeg", PKind::Float, GraphicsControl::VsmSmrtSunAngle, PTab::Vsm }, // smrtSunAngleDeg
+        { "shadows.vsm.smrtTexelDither", "vsm.smrtTexelDitherScale", PKind::Float, GraphicsControl::VsmSmrtTexelDither, PTab::Vsm }, // smrtTexelDitherScale
+        { "shadows.vsm.smrtRayLengthScale", "vsm.smrtRayLengthScale", PKind::Float, GraphicsControl::VsmSmrtRayLength, PTab::Vsm }, // smrtRayLengthScale
+        { "shadows.vsm.clipmapDepthBias", "vsm.clipmapDepthBias", PKind::Float, GraphicsControl::VsmDepthBias, PTab::Vsm }, // vsmClipmapDepthBias
+        { "shadows.vsm.depthBiasDecay", "vsm.clipmapDepthBiasDecay", PKind::Float, GraphicsControl::VsmDepthBiasDecay, PTab::Vsm }, // vsmClipmapDepthBiasDecay
+        { "shadows.vsm.depthBiasFloorTexels", "vsm.clipmapDepthBiasFloor", PKind::Float, GraphicsControl::VsmDepthBiasFloor, PTab::Vsm }, // vsmClipmapDepthBiasFloorTexels
+        { "shadows.vsm.clipmapNormalBias", "vsm.clipmapNormalBias", PKind::Float, GraphicsControl::VsmNormalBias, PTab::Vsm }, // vsmClipmapNormalBias
+        { "shadows.vsm.localLateralBiasTexels", "vsm.localLateralTexels", PKind::Float, GraphicsControl::VsmLocalLateralBias, PTab::Vsm }, // vsmLocalLateralTexels
+        { "shadows.vsm.localDepthPushTexels", "vsm.localDepthPushTexels", PKind::Float, GraphicsControl::VsmLocalDepthPush, PTab::Vsm }, // vsmLocalDepthPushTexels
+        { "shadows.vsm.residentOnly", "vsm.residentOnly", PKind::Bool, GraphicsControl::VsmResidentOnly, PTab::Vsm }, // vsmResidentOnly
+        { "shadows.vsm.singleDraw", "vsm.singleDraw", PKind::Bool, GraphicsControl::VsmSingleDraw, PTab::Vsm }, // vsmSingleDraw
+        { "shadows.vsm.hzbCull", "vsm.hzbCull", PKind::Bool, GraphicsControl::VsmHzbCull, PTab::Vsm }, // vsmHzbCull
+        { "shadows.vsm.pageCaching", "vsm.pageCaching", PKind::Bool, GraphicsControl::VsmPageCaching, PTab::Vsm }, // vsmPageCaching
+        { "shadows.vsm.tessyEnabled", "tessy.enabled", PKind::Bool, GraphicsControl::TessyEnabled, PTab::Vsm }, // tessyEnabled
+        { "shadows.vsm.tessy", "tessy.vsm", PKind::Bool, GraphicsControl::TessyVsm, PTab::Vsm }, // tessyVsm
+        { "shadows.vsm.tessyRaster", "tessy.raster", PKind::Bool, GraphicsControl::TessyRaster, PTab::Vsm }, // tessyRaster
+        { "shadows.vsm.tessyAtlas", "tessy.atlas", PKind::Bool, GraphicsControl::TessyAtlas, PTab::Vsm }, // tessyAtlas
+        { "shadows.vsm.tessyGBuffer", "tessy.gbuffer", PKind::Bool, GraphicsControl::TessyGBuffer, PTab::Vsm }, // tessyGBuffer
+        { "shadows.vsm.tessySdsm", "tessy.sdsm", PKind::Bool, GraphicsControl::TessySdsm, PTab::Vsm }, // tessySdsm
+        { "shadows.vsm.tessyLod", "tessy.lod", PKind::Bool, GraphicsControl::TessyLod, PTab::Vsm }, // tessyLod
+        { "shadows.vsm.tessyLodPixelError", "tessy.lodPixelError", PKind::Float, GraphicsControl::TessyLodPixelError, PTab::Vsm }, // tessyLodPixelError
+        { "shadows.vsm.windRange", "vsm.windRange", PKind::Float, GraphicsControl::VsmWindRange, PTab::Vsm }, // vsmWindRange
+        { "shadows.legacyCsm.atlasResolution", "csm.atlasRes", PKind::Uint, GraphicsControl::CsmAtlasRes, PTab::Csm }, // csmAtlasRes
+    };
+    constexpr std::size_t kEntryCount = sizeof(kEntries) / sizeof(kEntries[0]);
 
+    struct GraphicsSettingsSnapshot;
+    GraphicsSettingsSnapshot& CompiledDefaults();
+
+    struct GraphicsSettingsSnapshot
+    {
+        std::array<float, kEntryCount> value{};
+        std::array<bool, kEntryCount> has{}; // the file (or the live state) gave it; an entry without one is not applied
+        bool dlssEnabled = false;
+        sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
+        float renderScale = 1.0f;
+        render::ShadowMode shadowMode = render::ShadowMode::VSM;
+        CascadeShadowConfig csm{};
+    };
+
+    // The live values before the graphics file is applied (GraphicsSettingsManager::Initialize): what a knob the defaults
+    // file does not hold goes back to, as the old snapshot struct's initializers did. Empty before then.
+    GraphicsSettingsSnapshot& CompiledDefaults()
+    {
+        static GraphicsSettingsSnapshot compiled{};
+        return compiled;
+    }
+
+    // The kept-in-code parts' clamps, as the load had them (the rest is the rows').
+    void SanitizeKept(GraphicsSettingsSnapshot& s)
+    {
+        const auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
+        (void)finite;
         const int dlss = static_cast<int>(s.dlssMode);
-        if (dlss < static_cast<int>(sl::DLSSMode::eOff) ||
-            dlss > static_cast<int>(sl::DLSSMode::eDLAA))
+        if (dlss < static_cast<int>(sl::DLSSMode::eOff) || dlss > static_cast<int>(sl::DLSSMode::eDLAA))
         {
             s.dlssMode = sl::DLSSMode::eBalanced;
         }
         s.renderScale = std::clamp(finite(s.renderScale, 1.0f), 0.1f, 1.0f);
-        s.maxFps = render::ClampMaxFps(s.maxFps);
-        s.mouseSmoothingMs = std::clamp(finite(s.mouseSmoothingMs, 0.0f), 0.0f, kCameraMouseSmoothingMaxMs);
-        s.cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
-        s.cloudTraceMode = render::SanitizeCloudTraceMode(s.cloudTraceMode);
-        s.cloudCaptureTexels = render::SanitizeCloudCaptureTexels(finite(s.cloudCaptureTexels, 0.5f));
-        s.occlusionMethod = std::clamp(s.occlusionMethod, 0, 2);
-        s.occlusionQueryLatency = std::clamp(
-            s.occlusionQueryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
-
-        s.ssrUe.numSteps = std::clamp(s.ssrUe.numSteps, 4u, 64u);
-        s.ssrUe.numSteps = std::min(64u, (s.ssrUe.numSteps + 3u) & ~3u);
-        s.ssrUe.numRays = std::clamp(s.ssrUe.numRays, 1u, 12u);
-        s.ssrUe.roughnessOverride = std::clamp(finite(s.ssrUe.roughnessOverride, 0.0f), 0.0f, 1.0f);
-        s.ssrUe.intensity = std::clamp(finite(s.ssrUe.intensity, 1.0f), 0.0f, 1.0f);
-        s.ssrUe.maxRoughness = std::clamp(finite(s.ssrUe.maxRoughness, 0.6f), 0.01f, 1.0f);
-        s.reflectionTemporalBlend = std::clamp(finite(s.reflectionTemporalBlend, 0.125f), 0.02f, 1.0f);
-        s.reflectionTemporalStillInertia = std::clamp(finite(s.reflectionTemporalStillInertia, 0.8f), 0.0f, 2.0f);
-        s.waterReflectionTemporalBlend = std::clamp(finite(s.waterReflectionTemporalBlend, 0.125f), 0.02f, 1.0f);
-        s.waterReflectionTemporalStillInertia = std::clamp(finite(s.waterReflectionTemporalStillInertia, 0.0f), 0.0f, 2.0f);
-        s.waterReflectionNormalCascades = std::clamp(s.waterReflectionNormalCascades, 1u, 4u);
-        s.waterReflectionNormalFilter = std::clamp(finite(s.waterReflectionNormalFilter, 0.0f), 0.0f, 4.0f);
-        s.waterReflectionPrefilter = std::clamp(finite(s.waterReflectionPrefilter, 1.0f), 0.0f, 3.0f);
-        s.reflectionResolution =std::clamp(finite(s.reflectionResolution, 0.5f), 0.25f, 1.0f);
-        s.oceanReflectionResolution = std::clamp(finite(s.oceanReflectionResolution, 0.5f), 0.25f, 1.0f);
-        s.reflectionGlossyScale = std::clamp(finite(s.reflectionGlossyScale, 1.0f), 0.0f, 24.0f);
-        s.sunMetalSpecInfluence = std::clamp(finite(s.sunMetalSpecInfluence, 0.0f), 0.0f, 16.0f);
-        s.rtAlphaMode = std::min(s.rtAlphaMode, 2u);
-        s.rtAlphaMissKeep = std::clamp(finite(s.rtAlphaMissKeep, 0.15f), 0.0f, 1.0f);
-        s.rtWindBlasRadius = std::clamp(finite(s.rtWindBlasRadius, 40.0f), 0.0f, 100.0f);
-
-        s.lodPixelError = std::clamp(finite(s.lodPixelError, 8.0f), 0.5f, 64.0f);
-        s.tessyLodPixelError = std::clamp(finite(s.tessyLodPixelError, 1.0f), 0.25f, 64.0f);
-        s.lodDistanceScale = std::clamp(finite(s.lodDistanceScale, 1.0f), 0.1f, 8.0f);
-        s.lodBound0 = std::clamp(finite(s.lodBound0, 8.0f), 2.0f, 60.0f);
-        s.lodBound1 = std::clamp(finite(s.lodBound1, 16.0f), 4.0f, 120.0f);
-        s.lodBound2 = std::clamp(finite(s.lodBound2, 32.0f), 8.0f, 240.0f);
-        s.lodTemporalLag = std::clamp(finite(s.lodTemporalLag, 0.5f), 0.0f, 2.0f);
-        s.chunkLodDistance = std::clamp(finite(s.chunkLodDistance, 24.0f), 24.0f, 400.0f);
-        s.chunkLodFactor = std::clamp(finite(s.chunkLodFactor, 2.0f), 1.2f, 4.0f);
-
-        // S15 (SDSM). The partition count is a hard cap, not a taste: it is the atlas's 2x2 grid
-        // and the compile-time bound of every unrolled loop in the analysis.
-        // Powers of two only: the 2x2 tile split and the gutter arithmetic assume an even edge,
-        // and a non-power-of-two atlas buys nothing anyone would ask for.
-        {
-            std::uint32_t r = std::clamp(s.csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
-            std::uint32_t p = render::kCsmAtlasResMin;
-            while (p * 2u <= r) { p *= 2u; }
-            s.csmAtlasRes = p;
-        }
-
-        s.sdsmPartitions = std::clamp(s.sdsmPartitions, 1u, render::sdsm::kMaxPartitions);
-        s.sdsmBorderTexels = std::clamp(finite(s.sdsmBorderTexels, 4.0f), 0.0f, 32.0f);
-        s.sdsmDilation = std::clamp(finite(s.sdsmDilation, 0.01f), 0.0f, 0.45f);
-        s.sdsmMinScaleOverSphere = std::clamp(finite(s.sdsmMinScaleOverSphere, 0.02f), 0.001f, 1.0f);
-        s.sdsmZMargin = std::clamp(finite(s.sdsmZMargin, 25.0f), 0.0f, 1000.0f);
-        s.sdsmStabilityFrames = std::clamp(finite(s.sdsmStabilityFrames, 30.0f), 0.0f, 240.0f);
-        s.sdsmCacheFrames = std::clamp(s.sdsmCacheFrames, 1u, 16u);
-        s.sdsmCacheDilation = std::clamp(finite(s.sdsmCacheDilation, 0.05f), 0.0f, 0.5f);
-        s.sdsmSizeHysteresis = std::clamp(finite(s.sdsmSizeHysteresis, 0.1f), 0.0f, 0.5f);
-        s.sdsmEvsmPos = std::clamp(finite(s.sdsmEvsmPos, 42.0f), 1.0f, render::sdsm::kEvsmMaxExponent);
-        s.sdsmEvsmNeg = std::clamp(finite(s.sdsmEvsmNeg, 5.25f), 1.0f, render::sdsm::kEvsmMaxExponent);
-        s.sdsmBlur = std::clamp(finite(s.sdsmBlur, 0.002f), 0.0f, 0.25f);
-        s.sdsmBlurMaxTexels = std::clamp(finite(s.sdsmBlurMaxTexels, 16.0f), 1.0f, 64.0f);
-
-        s.contactLocalMode = std::min(s.contactLocalMode, 2u);
-        s.contactLength = std::max(0.0f, finite(s.contactLength, 0.05f));
-        s.contactIntensity = std::clamp(finite(s.contactIntensity, 1.0f), 0.0f, 1.0f);
-        s.contactSteps = std::clamp(s.contactSteps, 1u, 16u);
-        s.contactMaxThickness = std::clamp(finite(s.contactMaxThickness, 0.5f), 0.0f, 3.0f);
-        s.contactNormalOffset = std::clamp(finite(s.contactNormalOffset, 0.04f), 0.0f, 0.5f);
-        s.contactGrazingFade = std::clamp(finite(s.contactGrazingFade, 0.15f), 0.0f, 0.5f);
-        // Same ceiling as the far end: the window is [min, max] and there is no reason the near
-        // edge should reach a tenth as far as the far one. 200 here is what actually blocked
-        // "start contacts at 500 m" -- the slider AND this clamp both had to move.
-        s.contactMinDistance = std::clamp(finite(s.contactMinDistance, 0.0f), 0.0f, 2000.0f);
-        s.contactMaxDistance = std::clamp(finite(s.contactMaxDistance, 0.0f), 0.0f, 2000.0f);
-        s.contactFadeBand = std::clamp(finite(s.contactFadeBand, 10.0f), 0.1f, 200.0f);
-        s.localShadowWindRange = std::clamp(finite(s.localShadowWindRange, 30.0f), -1.0f, 2000.0f);
-        s.localShadowMaxRes = std::clamp(s.localShadowMaxRes, render::kLocalShadowMaxResMin, render::kLocalShadowMaxResMax);
-        // --set gi.*'s own ranges (App.cpp ApplySweepValue).
-        s.giSpacing = std::clamp(finite(s.giSpacing, 0.5f), 0.1f, 8.0f);
-        s.giHysteresis = std::clamp(finite(s.giHysteresis, 0.98f), 0.0f, 0.99f);
-        s.giIntensity = std::clamp(finite(s.giIntensity, 1.0f), 0.0f, 16.0f);
-        s.giFarSpacing = std::clamp(finite(s.giFarSpacing, 2.0f), 0.5f, 8.0f);
-        s.giDivisor = std::clamp(s.giDivisor, 1u, 64u);
-        s.giFarDivisor = std::clamp(s.giFarDivisor, 1u, 64u);
-        s.giRays = std::clamp((s.giRays + 15u) / 16u * 16u, 16u, 64u);
-        s.giFixedRayPeriod = std::clamp(s.giFixedRayPeriod, 1u, 64u);
-        s.giSleepPeriod = std::clamp(s.giSleepPeriod, 1u, 64u);
-        s.giRayDistance = std::clamp(finite(s.giRayDistance, 200.0f), 1.0f, 1000.0f);
-        // --set skyVis.*'s own ranges (App.cpp ApplySweepValue).
-        s.skyVisRays = std::clamp(s.skyVisRays, 1u, 16u);
-        s.skyVisHistory = std::clamp(finite(s.skyVisHistory, 0.995f), 0.0f, 0.995f);
-        s.skyVisMaxDistance = std::clamp(finite(s.skyVisMaxDistance, 15.0f), 0.5f, 500.0f);
-        s.skyVisDiffuse = std::clamp(finite(s.skyVisDiffuse, 1.0f), 0.0f, 1.0f);
-        s.skyVisSpecular = std::clamp(finite(s.skyVisSpecular, 1.0f), 0.0f, 1.0f);
-        s.skyVisFogRays = std::min(s.skyVisFogRays, 8u);
-        s.skyVisFilterRadius = std::clamp(s.skyVisFilterRadius, 1u, 4u);
-        s.skyVisFallbackResolution = SkyOcclusionMap::ClampResolution(s.skyVisFallbackResolution);
-        s.skyVisFallbackTexel = SkyOcclusionMap::ClampTexel(s.skyVisFallbackTexel);
-        s.skyVisFallbackFade = std::clamp(finite(s.skyVisFallbackFade, 0.25f), 0.0f, 1.0f);
-
-        s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
-        s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
-        s.vsmLodRefDistance = std::clamp(finite(s.vsmLodRefDistance, vsm::kLodRefDist), 1.0f, 40.0f);
-        s.vsmRequestDownscale = std::clamp(s.vsmRequestDownscale, 1u, 8u);
-        s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, vsm::kMaxLruFrames);
-        s.vsmClipmapFirstLevel = std::clamp(s.vsmClipmapFirstLevel, 0, 16);
-        s.vsmResolutionLodBiasDirectional = std::clamp(finite(s.vsmResolutionLodBiasDirectional, 0.0f), -4.0f, 4.0f);
-        s.vsmResolutionLodBiasLocal = std::clamp(finite(s.vsmResolutionLodBiasLocal, 0.0f), -4.0f, 4.0f);
-        s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);
-        s.smrtSamplesPerRay = std::clamp(s.smrtSamplesPerRay, 1u, vsm::kSmrtMaxSamplesPerRay);
-        s.localSmrtRayCount = std::min(s.localSmrtRayCount, vsm::kSmrtMaxRays);
-        s.localSmrtSamplesPerRay = std::min(s.localSmrtSamplesPerRay, vsm::kSmrtMaxSamplesPerRay);
-        s.smrtAdaptiveRayCount = std::min(s.smrtAdaptiveRayCount, 8u);
-        s.smrtSunAngleDeg = std::clamp(finite(s.smrtSunAngleDeg, 0.5357f), 0.0f, 8.0f);
-        s.smrtTexelDitherScale = std::clamp(finite(s.smrtTexelDitherScale, 2.0f), 0.0f, 4.0f);
-        s.smrtRayLengthScale = std::clamp(finite(s.smrtRayLengthScale, 1.5f), 0.0f, 4.0f);
-        s.vsmClipmapDepthBias = std::clamp(finite(s.vsmClipmapDepthBias, 0.0002f), 0.0f, 0.01f);
-        s.vsmClipmapDepthBiasDecay = std::clamp(finite(s.vsmClipmapDepthBiasDecay, 1.0f), 0.25f, 1.0f);
-        s.vsmClipmapDepthBiasFloorTexels = std::clamp(finite(s.vsmClipmapDepthBiasFloorTexels, 0.0f), 0.0f, 1.5f);
-        s.vsmClipmapNormalBias = std::clamp(finite(s.vsmClipmapNormalBias, 1.0f), 0.0f, 4.0f);
-        s.vsmLocalLateralTexels = std::clamp(finite(s.vsmLocalLateralTexels, 1.5f), 0.0f, 4.0f);
-        s.vsmLocalDepthPushTexels = std::clamp(finite(s.vsmLocalDepthPushTexels, 0.5f), 0.0f, 4.0f);
-        s.vsmWindRange = std::clamp(finite(s.vsmWindRange, 64.0f), 0.0f, 4096.0f);
-
         s.csm.maxDistance = std::clamp(finite(s.csm.maxDistance, 300.0f), 20.0f, 1000.0f);
         for (float& split : s.csm.sliceDistances)
-        {
             split = std::clamp(finite(split, s.csm.maxDistance), 0.5f, 1000.0f);
-        }
         s.csm.cascadeDistributionExponent = std::clamp(
             finite(s.csm.cascadeDistributionExponent, 3.0f), 0.1f, 10.0f);
         s.csm.overlapInTexels = std::clamp(finite(s.csm.overlapInTexels, 2.0f), 0.0f, 8.0f);
@@ -503,71 +399,49 @@ namespace
         s.csm.csmReceiverBias = std::clamp(finite(s.csm.csmReceiverBias, 0.9f), 0.0f, 1.0f);
     }
 
-    // A float from the scalability table into a snapshot field of any type (an enum by its number, a bool by non-zero).
-    template <class T>
-    void PutKnob(T& field, float v)
+    settings::SettingContext Ctx(const Scene& scene, const SceneRenderSettings& settings)
     {
-        if constexpr (std::is_enum_v<T>) { field = static_cast<T>(static_cast<std::underlying_type_t<T>>(std::lround(v))); }
-        else if constexpr (std::is_same_v<T, bool>) { field = v != 0.0f; }
-        else if constexpr (std::is_integral_v<T>) { field = static_cast<T>(std::lround(v)); }
-        else { field = static_cast<T>(v); }
+        return settings::SettingContext{ const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings) };
     }
 
     // The knobs the graphics levels manage are saved with the values they had before (docs/scalability_plan.md §3.3):
     // the graphics section is the person's own, and an autosave while Low is chosen must not make Low their own; a value
-    // changed by hand over the level is an override, saved with the levels (Scalability::NoteManualValues). Every
-    // persisted knob of settings::ScalabilityKnobs(); the rest (ocean.sunShadowRays, the spray's ceilings...) is not in
-    // this section.
+    // changed by hand over the level is an override, saved with the levels (Scalability::NoteManualValues).
     void CaptureScalabilityOriginals(GraphicsSettingsSnapshot& s)
     {
         const settings::Scalability& sc = settings::TheScalability();
         float v = 0.0f;
-        const auto put = [&](const char* name, auto& field) { if (sc.OriginalValue(name, v)) { PutKnob(field, v); } };
-        put("lod.pixelError", s.lodPixelError);
-        put("tessy.lodPixelError", s.tessyLodPixelError);
-        put("lod.chunkFactor", s.chunkLodFactor);
-        if (!render::g_shadowModeFromCli_game) { put("shadow.mode", s.shadowMode); }
-        put("csm.atlasRes", s.csmAtlasRes);
-        put("csm.filterMode", s.csm.filterMode);
-        put("sdsm.partitions", s.sdsmPartitions);
-        put("sdsm.cacheFrames", s.sdsmCacheFrames);
-        put("vsm.resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
-        put("vsm.smrtRayCount", s.smrtRayCount);
-        put("vsm.smrtSamplesPerRay", s.smrtSamplesPerRay);
-        put("vsm.localSmrtRayCount", s.localSmrtRayCount);
-        put("contact.enabled", s.contactEnabled);
-        put("contact.steps", s.contactSteps);
-        put("vsm.windRange", s.vsmWindRange);
-        put("shadow.localWindRange", s.localShadowWindRange);
-        put("shadow.localMaxRes", s.localShadowMaxRes);
-        put("gi.enabled", s.giEnabled);
-        put("gi.far", s.giFar);
-        put("gi.rays", s.giRays);
-        put("gi.divisor", s.giDivisor);
-        put("gi.farDivisor", s.giFarDivisor);
-        put("gi.rayDistance", s.giRayDistance);
-        put("skyVis.enabled", s.skyVisEnabled);
-        put("skyVis.rays", s.skyVisRays);
-        put("skyVis.filterRadius", s.skyVisFilterRadius);
-        put("skyVis.fogRays", s.skyVisFogRays);
-        put("render.reflectionSource", s.reflectionSource);
+        for (std::size_t i = 0; i < kEntryCount; ++i)
+        {
+            if (std::strcmp(kEntries[i].setting, "ssr.ueQuality") == 0) { continue; } // below: the preset's fields with it
+            if (sc.OriginalValue(kEntries[i].setting, v)) { s.value[i] = v; s.has[i] = true; }
+        }
+        if (!render::g_shadowModeFromCli_game && sc.OriginalValue("shadow.mode", v))
+        {
+            s.shadowMode = static_cast<render::ShadowMode>(static_cast<int>(std::lround(v)));
+        }
+        if (sc.OriginalValue("csm.filterMode", v)) { s.csm.filterMode = static_cast<decltype(s.csm.filterMode)>(std::lround(v)); }
+        if (sc.OriginalValue("dlss.mode", v)) { s.dlssMode = static_cast<sl::DLSSMode>(static_cast<int>(std::lround(v))); }
+        if (sc.OriginalValue("aa.renderScale", v)) { s.renderScale = v; }
         if (sc.OriginalValue("ssr.ueQuality", v))
         {
-            ApplyUeSsrQualityPreset(s.ssrUe, static_cast<UeSsrQualityPreset>(static_cast<std::uint32_t>(std::lround(v))));
+            UeSsrSettings ue{};
+            ApplyUeSsrQualityPreset(ue, static_cast<UeSsrQualityPreset>(static_cast<std::uint32_t>(std::lround(v))));
+            const std::pair<const char*, float> fields[] = {
+                { "ssr.ueQuality", static_cast<float>(static_cast<std::uint32_t>(ue.preset)) },
+                { "ssr.ueSteps", static_cast<float>(ue.numSteps) }, { "ssr.ueRays", static_cast<float>(ue.numRays) },
+                { "ssr.ueGlossy", static_cast<float>(ue.glossyRays) },
+                { "ssr.ueUseSurfaceRoughness", ue.useSurfaceRoughness ? 1.0f : 0.0f },
+                { "ssr.ueRoughnessOverride", ue.roughnessOverride }, { "ssr.ueIntensity", ue.intensity },
+                { "ssr.ueMaxRoughness", ue.maxRoughness } };
+            for (std::size_t i = 0; i < kEntryCount; ++i)
+            {
+                for (const auto& f : fields)
+                {
+                    if (std::strcmp(kEntries[i].setting, f.first) == 0) { s.value[i] = f.second; s.has[i] = true; }
+                }
+            }
         }
-        put("reflections.resolution", s.reflectionResolution);
-        put("rt.alphaMode", s.rtAlphaMode);
-        put("reflections.oceanResolution", s.oceanReflectionResolution);
-        put("ssr.waterNormalCascades", s.waterReflectionNormalCascades);
-        put("fog.gridPixels", s.fogGridPixels);
-        put("fog.gridZ", s.fogGridZ);
-        put("cloud.captureTexels", s.cloudCaptureTexels);
-        put("streaming.poolSizeMB", s.streamingPoolSizeMB);
-        put("streaming.mipBias", s.streamingMipBias);
-        put("textures.anisotropy", s.textureAnisotropy);
-        put("dlss.mode", s.dlssMode);
-        put("aa.renderScale", s.renderScale);
-        put("aa.fxaa", s.fxaa);
     }
 
     // `managedAsOwn`: a knob the graphics levels manage is captured with its own value (what is saved), not what the
@@ -576,822 +450,250 @@ namespace
                                      const SceneRenderSettings& settings, bool managedAsOwn = true)
     {
         GraphicsSettingsSnapshot s{};
-        s.asyncCompute = !render::g_noAsyncCompute_game;
-        s.vsync = render::g_vsync_game;
-        s.maxFps = render::g_maxFps_game;
-        s.mouseSmoothingMs = g_cameraMouseSmoothingMs;
-        s.renderThread = threading::g_renderThreadEnabled;
-        s.oneFrameThreadLag = threading::g_oneFrameThreadLag;
-        s.rhiThread = threading::g_rhiThreadEnabled;
-        s.visibilityChunkMask = render::g_visChunkMask_game;
-        s.occlusionMethod = vis::g_occlusion_game.method;
-        s.occlusionQueryLatency = vis::g_occlusion_game.queryLatency;
-        s.occlusionIndirectQueries = vis::g_occlusion_game.indirectQueries;
-        s.indirectGBuffer = render::g_indirectGBufferEnabled_game;
-        s.gbufferHzbCull = render::g_gbufferHzbCullEnabled_game;
-        s.rasterBindless = render::g_rasterBindless_game;
-        s.fogGridPixels = static_cast<int>(render::g_fogGridPixels_game);
-        s.fogGridZ = static_cast<int>(render::g_fogGridZ_game);
-        s.cloudShadowUpdateFrames = render::g_cloudShadowUpdateFrames_game;
-        s.cloudShadowBilinearWeather = render::g_cloudShadowBilinearWeather_game;
-        s.cloudShadowDetailMean = render::g_cloudShadowDetailMean_game;
-        s.cloudTraceMode = render::g_cloudTraceMode_game;
-        s.cloudCaptureTexels = render::g_cloudCaptureTexels_game;
-        s.streamingEnabled = streaming::g_enabled_game;
-        s.streamingPoolSizeMB = streaming::g_poolSizeMB_game;
-        s.streamingMipBias = streaming::g_mipBias_game;
-        s.textureAnisotropy = render::g_textureAnisotropy_game;
-        s.streamingBoost = streaming::g_boost_game;
-        s.streamingHiddenScale = streaming::g_hiddenScale_game;
-        s.streamingMipFade = streaming::g_mipFade_game;
-        s.streamingPerTextureBias = streaming::g_perTextureBias_game;
-        s.giEnabled = settings.giEnabled;
-        s.giSpacing = settings.giSpacing;
-        s.giHysteresis = settings.giHysteresis;
-        s.giIntensity = settings.giIntensity;
-        s.giFar = settings.giFarCascade;
-        s.giFarSpacing = settings.giFarSpacing;
-        s.giDivisor = settings.giUpdateDivisor;
-        s.giFarDivisor = settings.giFarDivisor;
-        s.giRays = settings.giRays;
-        s.giFixedRayPeriod = settings.giFixedRayPeriod;
-        s.giSleepPeriod = settings.giSleepPeriod;
-        s.giRayDistance = settings.giRayDistance;
-        s.giInfiniteBounce = settings.giInfiniteBounce;
-        s.giBounceVisibility = settings.giBounceVisibility;
-        s.giSkyRay = settings.giSkyRay;
-        s.giLights = settings.giLights;
-        s.skyVisEnabled = settings.skyVisEnabled;
-        s.skyVisRays = settings.skyVisRays;
-        s.skyVisHistory = settings.skyVisHistory;
-        s.skyVisMaxDistance = settings.skyVisMaxDistance;
-        s.skyVisDiffuse = settings.skyVisDiffuse;
-        s.skyVisSpecular = settings.skyVisSpecular;
-        s.skyVisFilter = settings.skyVisFilter;
-        s.skyVisFogRays = settings.skyVisFogRays;
-        s.skyVisFilterRadius = settings.skyVisFilterRadius;
-        s.skyVisSeed = settings.skyVisSeed;
-        s.skyVisFallback = settings.skyVisFallback;
-        s.skyVisFallbackResolution = settings.skyVisFallbackResolution;
-        s.skyVisFallbackTexel = settings.skyVisFallbackTexel;
-        s.skyVisFallbackFade = settings.skyVisFallbackFade;
+        settings::SettingContext ctx = Ctx(scene, settings);
+        const settings::SettingsRegistry& registry = settings::Registry();
+        for (std::size_t i = 0; i < kEntryCount; ++i)
+        {
+            float v = 0.0f;
+            s.has[i] = registry.Read(ctx, kEntries[i].setting, v) && std::isfinite(v);
+            s.value[i] = s.has[i] ? v : 0.0f;
+        }
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
-        s.fxaa = settings.doFxaa;
-
-        s.ssrTechnique = settings.ssrTechnique;
-        s.ssrUe = settings.ssrUe;
-        s.reflectionTemporal = settings.ssrTemporal;
-        s.reflectionTemporalBlend = settings.ssrTemporalBlendWeight;
-        s.reflectionTemporalStillInertia = settings.ssrTemporalClampExpand;
-        s.waterReflectionTemporal = settings.waterReflectionTemporal;
-        s.waterReflectionTemporalBlend = settings.waterReflectionTemporalBlend;
-        s.waterReflectionTemporalStillInertia = settings.waterReflectionTemporalStillInertia;
-        s.waterReflectionSurfaceNormal = settings.waterReflectionSurfaceNormal;
-        s.waterReflectionNormalCascades = settings.waterReflectionNormalCascades;
-        s.waterReflectionNormalFilter = settings.waterReflectionNormalFilter;
-        s.waterReflectionPrefilter = settings.waterReflectionPrefilter;
-        s.reflectionResolution = renderer.GetReflectionTextureScale().x;
-        s.oceanReflectionResolution = renderer.GetOceanReflectionTextureScale().x;
-        s.reflectionGlossyScale = settings.reflectionGlossyScale;
-        s.sunMetalSpecInfluence = settings.sunMetalSpecInfluence;
-        s.reflectionSource = settings.reflectionSource;
-        s.rtAlphaMode = settings.rtAlphaMode;
-        s.rtAlphaMissKeep = settings.rtAlphaMissKeep;
-        s.rtWindBlas = settings.rtWindBlas;
-        s.rtWindBlasRadius = settings.rtWindBlasRadius;
-
-        s.lodEnabled = render::g_lodEnabled_game;
-        s.lodUeScreenSize = render::g_lodUeScreenSize_game;
-        s.lodPixelError = render::g_lodPixelError_game;
-        s.lodDistanceScale = render::g_lodDistanceScale_game;
-        s.lodBound0 = render::g_lodBound0_game;
-        s.lodBound1 = render::g_lodBound1_game;
-        s.lodBound2 = render::g_lodBound2_game;
-        s.lodTemporalLag = render::g_lodTemporalLag_game;
-        s.chunkLodDistance = render::g_chunkLodDist0_game;
-        s.chunkLodFactor = render::g_chunkLodDistFactor_game;
-
         s.shadowMode = render::g_shadowModeFromCli_game ? render::g_shadowModePersisted_game : render::g_shadowMode_game;
-        s.giIndirectShadows = render::g_giIndirectShadowsEnabled_game;
-        s.localShadowWindRange = render::g_localShadowWindRange_game;
-        s.localShadowMaxRes = render::g_localShadowMaxRes_game;
         s.csm = scene.CascadeConfig();
-        s.csmAtlasRes = render::g_csmAtlasRes_game;
-
-        s.sdsmPartitions = render::sdsm::g_partitions_game;
-        s.sdsmBorderTexels = render::sdsm::g_borderTexels_game;
-        s.sdsmDilation = render::sdsm::g_dilation_game;
-        s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere_game;
-        s.sdsmZMargin = render::sdsm::g_zMargin_game;
-        s.sdsmStabilityFrames = render::sdsm::g_stabilityFrames_game;
-        s.sdsmCacheFrames = render::sdsm::g_cacheFrames_game;
-        s.sdsmCacheDilation = render::sdsm::g_cacheDilation_game;
-        s.sdsmTexelSnap = render::sdsm::g_texelSnap_game;
-        s.sdsmSizeHysteresis = render::sdsm::g_sizeHysteresis_game;
-        s.sdsmEvsm = render::sdsm::g_evsm_game;
-        s.sdsmEvsmPos = render::sdsm::g_evsmPos_game;
-        s.sdsmEvsmNeg = render::sdsm::g_evsmNeg_game;
-        s.sdsmBlur = render::sdsm::g_evsmBlur_game;
-        s.sdsmBlurMaxTexels = render::sdsm::g_evsmBlurMaxTexels_game;
-
-        s.contactEnabled = render::contact::g_enabled_game;
-        s.contactLocalMode = render::contact::g_localMode_game;
-        s.contactTemporalDither = render::contact::g_temporalDither_game;
-        s.contactLengthInWorldSpace = render::contact::g_lengthInWorldSpace_game;
-        s.contactLength = render::contact::g_length_game;
-        s.contactIntensity = render::contact::g_intensity_game;
-        s.contactSteps = render::contact::g_steps_game;
-        s.contactMaxThickness = render::contact::g_maxThicknessFrac_game;
-        s.contactNormalOffset = render::contact::g_normalOffsetFrac_game;
-        s.contactGrazingFade = render::contact::g_grazingFadeNdotL_game;
-        s.contactMinDistance = render::contact::g_minDistanceM_game;
-        s.contactMaxDistance = render::contact::g_maxDistanceM_game;
-        s.contactFadeBand = render::contact::g_fadeBandM_game;
-
-        s.shadowLodBias = render::g_shadowLodBias_game;
-        s.shadowLodBiasNearTier = render::g_shadowLodBiasNearTier_game;
-        s.shadowLodTierStride = render::g_shadowLodTierStride_game;
-        s.vsmLodRefDistance = vsm::g_refDist_game;
-        s.vsmRequestDownscale = vsm::g_requestDownscale_game;
-        s.vsmLruFrames = vsm::g_lruThreshold_game;
-        s.vsmClipmapFirstLevel = vsm::g_clipmapFirstLevel_game;
-        s.vsmResolutionLodBiasDirectional = vsm::g_resolutionLodBiasDirectional_game;
-        s.vsmResolutionLodBiasLocal = vsm::g_resolutionLodBiasLocal_game;
-        s.smrtRayCount = vsm::g_smrtRayCount_game;
-        s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay_game;
-        s.localSmrtRayCount = vsm::g_localSmrtRayCount_game;
-        s.localSmrtSamplesPerRay = vsm::g_localSmrtSamplesPerRay_game;
-        s.smrtTemporalDither = vsm::g_smrtTemporalDither_game;
-        s.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount_game;
-        s.smrtSunAngleDeg = vsm::g_smrtSourceAngleDeg_game;
-        s.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale_game;
-        s.smrtRayLengthScale = vsm::g_smrtRayLengthScale_game;
-        s.vsmClipmapDepthBias = vsm::g_clipmapDepthBias_game;
-        s.vsmClipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay_game;
-        s.vsmClipmapDepthBiasFloorTexels = vsm::g_clipmapDepthBiasFloorTexels_game;
-        s.vsmClipmapNormalBias = vsm::g_clipmapNormalBias_game;
-        s.vsmLocalLateralTexels = vsm::g_localLateralTexels_game;
-        s.vsmLocalDepthPushTexels = vsm::g_localDepthPushTexels_game;
-        s.vsmResidentOnly = vsm::g_residentIterOnly_game;
-        s.vsmSingleDraw = vsm::g_pageDrawSingle_game;
-        s.vsmHzbCull = vsm::g_hzbCull_game;
-        s.vsmPageCaching = vsm::g_pageCaching_game;
-        s.vsmWindRange = vsm::g_windRange_game;
-        s.tessyEnabled = tessy::g_enabled_game;
-        s.tessyVsm = tessy::g_vsm_game;
-        s.tessyRaster = tessy::g_vsmMeshShader_game;
-        s.tessyAtlas = tessy::g_atlas_game;
-        s.tessyGBuffer = tessy::g_gbuffer_game;
-        s.tessySdsm = tessy::g_sdsm_game;
-        s.tessyLod = tessy::g_lod_game;
-        s.tessyLodPixelError = tessy::g_lodPixelError_game;
         if (managedAsOwn) { CaptureScalabilityOriginals(s); }
-        Sanitize(s);
+        SanitizeKept(s);
         return s;
     }
 
-    // One Apply per Developer Controls tab, so a tab's Reset touches only its own knobs.
-    void ApplyFrame(const GraphicsSettingsSnapshot& s)
+    // One tab, or one control (`control` != kNoControl), through the rows -- then the tab's kept-in-code part.
+    void ApplyEntries(const GraphicsSettingsSnapshot& s, PTab tab, GraphicsControl control, Renderer& renderer, Scene& scene,
+                      SceneRenderSettings& settings)
     {
-        render::g_noAsyncCompute_game = !s.asyncCompute;
-        render::g_vsync_game = s.vsync;
-        render::g_maxFps_game = render::ClampMaxFps(s.maxFps);
-        g_cameraMouseSmoothingMs = s.mouseSmoothingMs;
-        threading::g_renderThreadEnabled = s.renderThread; // the loop takes it at the next frame's start
-        threading::g_oneFrameThreadLag = s.oneFrameThreadLag;
-        threading::g_rhiThreadEnabled = s.rhiThread; // Renderer::BeginFrame takes it
-    }
-
-    void ApplyVisibility(const GraphicsSettingsSnapshot& s)
-    {
-        render::g_visChunkMask_game = s.visibilityChunkMask;
-        vis::g_occlusion_game.method = s.occlusionMethod;
-        vis::g_occlusion_game.queryLatency = s.occlusionQueryLatency;
-        vis::g_occlusion_game.indirectQueries = s.occlusionIndirectQueries;
-        render::g_indirectGBufferEnabled_game = s.indirectGBuffer;
-        render::g_gbufferHzbCullEnabled_game = s.gbufferHzbCull;
-        render::g_rasterBindless_game = s.rasterBindless; // the renderer's tick rebuilds the PSOs on a change
-    }
-
-    void ApplyUpscale(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
-    {
-        settings.doFxaa = s.fxaa;
-        renderer.SetDlssMode(s.dlssMode);
-        renderer.SetDlssActive(s.dlssEnabled && s.dlssMode != sl::DLSSMode::eOff);
-        if (!s.dlssEnabled || s.dlssMode == sl::DLSSMode::eOff)
+        settings::SettingContext ctx{ scene, settings };
+        const settings::SettingsRegistry& registry = settings::Registry();
+        if (tab == PTab::Vsm && control == kNoControl)
         {
-            renderer.SetRenderResolutionScale(s.renderScale);
+            // A `--shadow-mode=` boot override keeps the mode it set; the file's value is remembered
+            // so a save in that session writes the file's own mode back, not the override.
+            render::g_shadowModePersisted_game = s.shadowMode;
+            if (!render::g_shadowModeFromCli_game) { render::g_shadowMode_game = s.shadowMode; }
         }
+        // The UE SSR preset after its fields: each field's row marks the preset Custom, the preset's row sets its fields
+        // (a Custom one is the fields as they are -- not applied).
+        const auto applyOne = [&](std::size_t i) {
+            if (!registry.Apply(ctx, kEntries[i].setting, s.value[i]))
+            {
+                LOG_WARNING_ONCE(logging::LogCategory::App, "graphics settings: {} was not applied ({})", kEntries[i].setting,
+                                 kEntries[i].path);
+            }
+        };
+        std::size_t preset = kEntryCount;
+        for (std::size_t i = 0; i < kEntryCount; ++i)
+        {
+            const bool wanted = control == kNoControl ? kEntries[i].tab == tab : kEntries[i].control == control;
+            if (!wanted || !s.has[i]) { continue; }
+            if (std::strcmp(kEntries[i].setting, "ssr.ueQuality") == 0) { preset = i; continue; }
+            applyOne(i);
+        }
+        if (preset < kEntryCount &&
+            std::lround(s.value[preset]) != static_cast<long>(static_cast<std::uint32_t>(UeSsrQualityPreset::Custom)))
+        {
+            applyOne(preset);
+        }
+        if (tab == PTab::Upscale && control == kNoControl)
+        {
+            renderer.SetDlssMode(s.dlssMode);
+            renderer.SetDlssActive(s.dlssEnabled && s.dlssMode != sl::DLSSMode::eOff);
+            if (!s.dlssEnabled || s.dlssMode == sl::DLSSMode::eOff)
+            {
+                renderer.SetRenderResolutionScale(s.renderScale);
+            }
+        }
+        if (tab == PTab::Csm && control == kNoControl) { scene.CascadeConfig() = s.csm; }
     }
 
-    void ApplyFog(const GraphicsSettingsSnapshot& s)
+    void ApplyTab(const GraphicsSettingsSnapshot& s, PTab tab, Renderer& renderer, Scene& scene, SceneRenderSettings& settings)
     {
-        render::g_fogGridPixels_game = static_cast<unsigned>(std::clamp(s.fogGridPixels, 4, 64)); // the renderer rounds to a power of two
-        render::g_fogGridZ_game = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
-    }
-
-    void ApplySky(const GraphicsSettingsSnapshot& s)
-    {
-        render::g_cloudShadowUpdateFrames_game = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
-        render::g_cloudShadowBilinearWeather_game = s.cloudShadowBilinearWeather;
-        render::g_cloudShadowDetailMean_game = s.cloudShadowDetailMean;
-        render::g_cloudTraceMode_game = render::SanitizeCloudTraceMode(s.cloudTraceMode); // the renderer recreates at the frame boundary
-        render::g_cloudCaptureTexels_game = render::SanitizeCloudCaptureTexels(s.cloudCaptureTexels);
-    }
-
-    void ApplyStreaming(const GraphicsSettingsSnapshot& s)
-    {
-        streaming::g_enabled_game = s.streamingEnabled;
-        streaming::g_poolSizeMB_game = std::max(s.streamingPoolSizeMB, -1);
-        streaming::g_mipBias_game = std::clamp(s.streamingMipBias, 0, 8);
-        streaming::g_boost_game = std::clamp(s.streamingBoost, 0.1f, 8.0f);
-        streaming::g_hiddenScale_game = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
-        streaming::g_mipFade_game = s.streamingMipFade;
-        streaming::g_perTextureBias_game = s.streamingPerTextureBias;
-        render::g_textureAnisotropy_game = render::ClampAnisotropy(s.textureAnisotropy);
-    }
-
-    void ApplyGi(const GraphicsSettingsSnapshot& s, SceneRenderSettings& settings)
-    {
-        settings.giEnabled = s.giEnabled;
-        settings.giSpacing = s.giSpacing; // a new spacing starts the volume over (DdgiVolume::BeginFrame)
-        settings.giHysteresis = s.giHysteresis;
-        settings.giIntensity = s.giIntensity;
-        settings.giFarCascade = s.giFar;
-        settings.giFarSpacing = s.giFarSpacing;
-        settings.giUpdateDivisor = s.giDivisor;
-        settings.giFarDivisor = s.giFarDivisor;
-        settings.giRays = s.giRays;
-        settings.giFixedRayPeriod = s.giFixedRayPeriod;
-        settings.giSleepPeriod = s.giSleepPeriod;
-        settings.giRayDistance = s.giRayDistance;
-        settings.giInfiniteBounce = s.giInfiniteBounce;
-        settings.giBounceVisibility = s.giBounceVisibility;
-        settings.giSkyRay = s.giSkyRay;
-        settings.giLights = s.giLights;
-        settings.skyVisEnabled = s.skyVisEnabled;
-        settings.skyVisRays = s.skyVisRays;
-        settings.skyVisHistory = s.skyVisHistory;
-        settings.skyVisMaxDistance = s.skyVisMaxDistance;
-        settings.skyVisDiffuse = s.skyVisDiffuse;
-        settings.skyVisSpecular = s.skyVisSpecular;
-        settings.skyVisFilter = s.skyVisFilter;
-        settings.skyVisFogRays = s.skyVisFogRays;
-        settings.skyVisFilterRadius = s.skyVisFilterRadius;
-        settings.skyVisSeed = s.skyVisSeed;
-        settings.skyVisFallback = s.skyVisFallback;
-        settings.skyVisFallbackResolution = s.skyVisFallbackResolution; // re-made at Scene::ReconcileSkyOcclusion
-        settings.skyVisFallbackTexel = s.skyVisFallbackTexel;
-        settings.skyVisFallbackFade = s.skyVisFallbackFade;
-    }
-
-    void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
-    {
-        settings.ssrTechnique = s.ssrTechnique;
-        settings.ssrUe = s.ssrUe;
-        settings.ssrTemporal = s.reflectionTemporal;
-        settings.ssrTemporalBlendWeight = s.reflectionTemporalBlend;
-        settings.ssrTemporalClampExpand = s.reflectionTemporalStillInertia;
-        settings.waterReflectionTemporal = s.waterReflectionTemporal;
-        settings.waterReflectionTemporalBlend = s.waterReflectionTemporalBlend;
-        settings.waterReflectionTemporalStillInertia = s.waterReflectionTemporalStillInertia;
-        settings.waterReflectionSurfaceNormal = s.waterReflectionSurfaceNormal;
-        settings.waterReflectionNormalCascades = s.waterReflectionNormalCascades;
-        settings.waterReflectionNormalFilter = s.waterReflectionNormalFilter;
-        settings.waterReflectionPrefilter = s.waterReflectionPrefilter;
-        settings.reflectionGlossyScale = s.reflectionGlossyScale;
-        settings.sunMetalSpecInfluence = s.sunMetalSpecInfluence;
-        settings.reflectionSource = s.reflectionSource;
-        settings.rtAlphaMode = s.rtAlphaMode;
-        settings.rtAlphaMissKeep = s.rtAlphaMissKeep;
-        settings.rtWindBlas = s.rtWindBlas;
-        settings.rtWindBlasRadius = s.rtWindBlasRadius;
-
-        renderer.SetReflectionTextureScale(s.reflectionResolution);
-        renderer.SetOceanReflectionTextureScale(s.oceanReflectionResolution);
-    }
-
-    void ApplyLod(const GraphicsSettingsSnapshot& s)
-    {
-        render::g_lodEnabled_game = s.lodEnabled;
-        render::g_lodUeScreenSize_game = s.lodUeScreenSize;
-        render::g_lodPixelError_game = s.lodPixelError;
-        render::g_lodDistanceScale_game = s.lodDistanceScale;
-        render::g_lodBound0_game = s.lodBound0;
-        render::g_lodBound1_game = s.lodBound1;
-        render::g_lodBound2_game = s.lodBound2;
-        render::g_lodTemporalLag_game = s.lodTemporalLag;
-        render::g_chunkLodDist0_game = s.chunkLodDistance;
-        render::g_chunkLodDistFactor_game = s.chunkLodFactor;
-    }
-
-    void ApplySdsm(const GraphicsSettingsSnapshot& s)
-    {
-        render::sdsm::g_partitions_game = s.sdsmPartitions;
-        render::sdsm::g_borderTexels_game = s.sdsmBorderTexels;
-        render::sdsm::g_dilation_game = s.sdsmDilation;
-        render::sdsm::g_minScaleOverSphere_game = s.sdsmMinScaleOverSphere;
-        render::sdsm::g_zMargin_game = s.sdsmZMargin;
-        render::sdsm::g_stabilityFrames_game = s.sdsmStabilityFrames;
-        render::sdsm::g_cacheFrames_game = s.sdsmCacheFrames;
-        render::sdsm::g_cacheDilation_game = s.sdsmCacheDilation;
-        render::sdsm::g_texelSnap_game = s.sdsmTexelSnap;
-        render::sdsm::g_sizeHysteresis_game = s.sdsmSizeHysteresis;
-        render::sdsm::g_evsm_game = s.sdsmEvsm;
-        render::sdsm::g_evsmPos_game = s.sdsmEvsmPos;
-        render::sdsm::g_evsmNeg_game = s.sdsmEvsmNeg;
-        render::sdsm::g_evsmBlur_game = s.sdsmBlur;
-        render::sdsm::g_evsmBlurMaxTexels_game = s.sdsmBlurMaxTexels;
-    }
-
-    void ApplyContact(const GraphicsSettingsSnapshot& s)
-    {
-        render::contact::g_enabled_game = s.contactEnabled;
-        render::contact::g_localMode_game = s.contactLocalMode;
-        render::contact::g_temporalDither_game = s.contactTemporalDither;
-        render::contact::g_lengthInWorldSpace_game = s.contactLengthInWorldSpace;
-        render::contact::g_length_game = s.contactLength;
-        render::contact::g_intensity_game = s.contactIntensity;
-        render::contact::g_steps_game = s.contactSteps;
-        render::contact::g_maxThicknessFrac_game = s.contactMaxThickness;
-        render::contact::g_normalOffsetFrac_game = s.contactNormalOffset;
-        render::contact::g_grazingFadeNdotL_game = s.contactGrazingFade;
-        render::contact::g_minDistanceM_game = s.contactMinDistance;
-        render::contact::g_maxDistanceM_game = s.contactMaxDistance;
-        render::contact::g_fadeBandM_game = s.contactFadeBand;
-    }
-
-    void ApplyVsm(const GraphicsSettingsSnapshot& s)
-    {
-        // A `--shadow-mode=` boot override keeps the mode it set; the file's value is remembered
-        // so a save in that session writes the file's own mode back, not the override.
-        render::g_shadowModePersisted_game = s.shadowMode;
-        if (!render::g_shadowModeFromCli_game) { render::g_shadowMode_game = s.shadowMode; }
-        render::g_giIndirectShadowsEnabled_game = s.giIndirectShadows;
-        render::g_localShadowWindRange_game = s.localShadowWindRange;
-        render::g_localShadowMaxRes_game = s.localShadowMaxRes; // Scene::ReconcileShadowMode reallocates on a change
-        render::g_shadowLodBias_game = s.shadowLodBias;
-        render::g_shadowLodBiasNearTier_game = s.shadowLodBiasNearTier;
-        render::g_shadowLodTierStride_game = s.shadowLodTierStride;
-        vsm::g_refDist_game = s.vsmLodRefDistance;
-        vsm::g_requestDownscale_game = s.vsmRequestDownscale;
-        vsm::g_lruThreshold_game = s.vsmLruFrames;
-        vsm::g_clipmapFirstLevel_game = s.vsmClipmapFirstLevel;
-        vsm::g_resolutionLodBiasDirectional_game = s.vsmResolutionLodBiasDirectional;
-        vsm::g_resolutionLodBiasLocal_game = s.vsmResolutionLodBiasLocal;
-        vsm::g_smrtRayCount_game = s.smrtRayCount;
-        vsm::g_smrtSamplesPerRay_game = s.smrtSamplesPerRay;
-        vsm::g_localSmrtRayCount_game = s.localSmrtRayCount;
-        vsm::g_localSmrtSamplesPerRay_game = s.localSmrtSamplesPerRay;
-        vsm::g_smrtTemporalDither_game = s.smrtTemporalDither;
-        vsm::g_smrtAdaptiveRayCount_game = s.smrtAdaptiveRayCount;
-        vsm::g_smrtSourceAngleDeg_game = s.smrtSunAngleDeg;
-        vsm::g_smrtTexelDitherScale_game = s.smrtTexelDitherScale;
-        vsm::g_smrtRayLengthScale_game = s.smrtRayLengthScale;
-        vsm::g_clipmapDepthBias_game = s.vsmClipmapDepthBias;
-        vsm::g_clipmapDepthBiasDecay_game = s.vsmClipmapDepthBiasDecay;
-        vsm::g_clipmapDepthBiasFloorTexels_game = s.vsmClipmapDepthBiasFloorTexels;
-        vsm::g_clipmapNormalBias_game = s.vsmClipmapNormalBias;
-        vsm::g_localLateralTexels_game = s.vsmLocalLateralTexels;
-        vsm::g_localDepthPushTexels_game = s.vsmLocalDepthPushTexels;
-        vsm::g_residentIterOnly_game = s.vsmResidentOnly;
-        vsm::g_pageDrawSingle_game = s.vsmSingleDraw;
-        vsm::g_hzbCull_game = s.vsmHzbCull;
-        vsm::g_pageCaching_game = s.vsmPageCaching;
-        tessy::g_enabled_game = s.tessyEnabled;
-        tessy::g_vsm_game = s.tessyVsm;
-        tessy::g_vsmMeshShader_game = s.tessyRaster;
-        tessy::g_atlas_game = s.tessyAtlas;
-        tessy::g_gbuffer_game = s.tessyGBuffer;
-        tessy::g_sdsm_game = s.tessySdsm;
-        tessy::g_lod_game = s.tessyLod;
-        tessy::g_lodPixelError_game = s.tessyLodPixelError;
-        vsm::g_windRange_game = s.vsmWindRange;
+        ApplyEntries(s, tab, kNoControl, renderer, scene, settings);
     }
 
     void ApplyAll(const GraphicsSettingsSnapshot& s, Renderer& renderer, Scene& scene,
                   SceneRenderSettings& settings)
     {
-        ApplyFrame(s);
-        ApplyVisibility(s);
-        ApplyUpscale(s, renderer, settings);
-        ApplyReflections(s, renderer, settings);
-        ApplyFog(s);
-        ApplySky(s);
-        ApplyStreaming(s);
-        ApplyGi(s, settings);
-        ApplyLod(s);
-        ApplyContact(s);
-        ApplySdsm(s);
-        ApplyVsm(s);
-        scene.CascadeConfig() = s.csm;
-        // A RESOURCE size, so it is only recorded here; Scene::ReconcileShadowMode reallocates
-        // the atlas at GPU idle on the next frame that sees the change.
-        render::g_csmAtlasRes_game = s.csmAtlasRes;
+        for (PTab tab : { PTab::Frame, PTab::Visibility, PTab::Upscale, PTab::Reflections, PTab::Fog, PTab::Sky, PTab::Streaming,
+                          PTab::Gi, PTab::Lod, PTab::Contact, PTab::Sdsm, PTab::Vsm, PTab::Csm })
+        {
+            ApplyTab(s, tab, renderer, scene, settings);
+        }
+    }
+
+    // A path "a.b.c" or "a.b[i]" in the graphics JSON.
+    const json* FindPath(const json& root, const char* path)
+    {
+        const json* at = &root;
+        std::string p = path;
+        std::size_t pos = 0;
+        while (pos <= p.size())
+        {
+            const std::size_t dot = p.find('.', pos);
+            std::string key = p.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
+            int index = -1;
+            if (const std::size_t br = key.find('['); br != std::string::npos)
+            {
+                index = std::atoi(key.c_str() + br + 1);
+                key.resize(br);
+            }
+            if (!at->is_object()) { return nullptr; }
+            const auto it = at->find(key);
+            if (it == at->end()) { return nullptr; }
+            at = &*it;
+            if (index >= 0)
+            {
+                if (!at->is_array() || static_cast<std::size_t>(index) >= at->size()) { return nullptr; }
+                at = &(*at)[static_cast<std::size_t>(index)];
+            }
+            if (dot == std::string::npos) { break; }
+            pos = dot + 1;
+        }
+        return at;
+    }
+
+    void PutPath(json& root, const char* path, json value)
+    {
+        json* at = &root;
+        std::string p = path;
+        std::size_t pos = 0;
+        while (true)
+        {
+            const std::size_t dot = p.find('.', pos);
+            std::string key = p.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
+            int index = -1;
+            if (const std::size_t br = key.find('['); br != std::string::npos)
+            {
+                index = std::atoi(key.c_str() + br + 1);
+                key.resize(br);
+            }
+            json& next = (*at)[key];
+            if (index >= 0)
+            {
+                if (!next.is_array()) { next = json::array(); }
+                while (next.size() <= static_cast<std::size_t>(index)) { next.push_back(nullptr); }
+                if (dot == std::string::npos) { next[static_cast<std::size_t>(index)] = std::move(value); return; }
+                at = &next[static_cast<std::size_t>(index)];
+            }
+            else
+            {
+                if (dot == std::string::npos) { next = std::move(value); return; }
+                at = &next;
+            }
+            pos = dot + 1;
+        }
     }
 
     json ToJson(const GraphicsSettingsSnapshot& s)
     {
-        return json{
-            { "version", 1 },
-            { "scope", "Global runtime graphics quality. Scene look stays in level environment data." },
-            { "frame", {
-                { "vsync", s.vsync },
-                { "maxFps", s.maxFps },
-                { "mouseSmoothingMs", s.mouseSmoothingMs },
-                { "renderThread", s.renderThread },
-                { "oneFrameThreadLag", s.oneFrameThreadLag },
-                { "rhiThread", s.rhiThread }
-            } },
-            { "cloudShadow", {
-                { "updateFrames", s.cloudShadowUpdateFrames },
-                { "bilinearWeather", s.cloudShadowBilinearWeather },
-                { "detailMean", s.cloudShadowDetailMean }
-            } },
-            { "cloudTrace", {
-                { "mode", s.cloudTraceMode },
-                { "captureTexels", s.cloudCaptureTexels }
-            } },
-            { "performance", {
-                { "asyncCompute", s.asyncCompute },
-                { "gpuDrivenGBuffer", s.indirectGBuffer },
-                { "gbufferHzbCull", s.gbufferHzbCull },
-                { "rasterBindless", s.rasterBindless },
-                { "fogGridPixels", s.fogGridPixels },
-                { "fogGridZ", s.fogGridZ }
-            } },
-            { "streaming", {
-                { "enabled", s.streamingEnabled },
-                { "poolSizeMB", s.streamingPoolSizeMB },
-                { "mipBias", s.streamingMipBias },
-                { "boost", s.streamingBoost },
-                { "hiddenScale", s.streamingHiddenScale },
-                { "mipFade", s.streamingMipFade },
-                { "perTextureBias", s.streamingPerTextureBias },
-                { "anisotropy", s.textureAnisotropy }
-            } },
-            { "gi", {
-                { "enabled", s.giEnabled },
-                { "spacing", s.giSpacing },
-                { "hysteresis", s.giHysteresis },
-                { "intensity", s.giIntensity },
-                { "farCascade", s.giFar },
-                { "farSpacing", s.giFarSpacing },
-                { "divisor", s.giDivisor },
-                { "farDivisor", s.giFarDivisor },
-                { "rays", s.giRays },
-                { "fixedRayPeriod", s.giFixedRayPeriod },
-                { "sleepPeriod", s.giSleepPeriod },
-                { "rayDistance", s.giRayDistance },
-                { "infiniteBounce", s.giInfiniteBounce },
-                { "bounceVisibility", s.giBounceVisibility },
-                { "skyRay", s.giSkyRay },
-                { "lights", s.giLights }
-            } },
-            { "skyVis", {
-                { "enabled", s.skyVisEnabled },
-                { "rays", s.skyVisRays },
-                { "history", s.skyVisHistory },
-                { "maxDistance", s.skyVisMaxDistance },
-                { "diffuse", s.skyVisDiffuse },
-                { "specular", s.skyVisSpecular },
-                { "spatialFilter", s.skyVisFilter },
-                { "fogRays", s.skyVisFogRays },
-                { "filterRadius", s.skyVisFilterRadius },
-                { "seed", s.skyVisSeed },
-                { "fallback", s.skyVisFallback },
-                { "fallbackResolution", s.skyVisFallbackResolution },
-                { "fallbackTexel", s.skyVisFallbackTexel },
-                { "fallbackFade", s.skyVisFallbackFade }
-            } },
-            { "visibility", {
-                { "chunkMask", s.visibilityChunkMask },
-                { "occlusionMethod", s.occlusionMethod },
-                { "queryLatency", s.occlusionQueryLatency },
-                { "queryGpuDrivenObjects", s.occlusionIndirectQueries }
-            } },
-            { "antiAliasing", {
-                { "dlssEnabled", s.dlssEnabled },
-                { "dlssMode", DlssModeName(s.dlssMode) },
-                { "renderScale", s.renderScale },
-                { "fxaa", s.fxaa }
-            } },
-            { "reflections", {
-                { "source", ReflectionSourceName(s.reflectionSource) },
-                { "ssrTechnique", SsrTechniqueName(s.ssrTechnique) },
-                { "ueSsr", {
-                    { "preset", static_cast<std::uint32_t>(s.ssrUe.preset) },
-                    { "stepsPerRay", s.ssrUe.numSteps },
-                    { "raysPerPixel", s.ssrUe.numRays },
-                    { "glossyRays", s.ssrUe.glossyRays },
-                    { "useSurfaceRoughness", s.ssrUe.useSurfaceRoughness },
-                    { "roughnessOverride", s.ssrUe.roughnessOverride },
-                    { "intensity", s.ssrUe.intensity },
-                    { "maxRoughness", s.ssrUe.maxRoughness }
-                } },
-                { "temporal", s.reflectionTemporal },
-                { "temporalBlend", s.reflectionTemporalBlend },
-                { "temporalStillInertia", s.reflectionTemporalStillInertia },
-                { "waterTemporal", s.waterReflectionTemporal },
-                { "waterTemporalBlend", s.waterReflectionTemporalBlend },
-                { "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia },
-                { "waterSurfaceNormal", s.waterReflectionSurfaceNormal },
-                { "waterNormalCascades", s.waterReflectionNormalCascades },
-                { "waterNormalFilter", s.waterReflectionNormalFilter },
-                { "waterPrefilter", s.waterReflectionPrefilter },
-                { "resolution", s.reflectionResolution },
-                { "oceanResolution", s.oceanReflectionResolution },
-                { "glossyBlur", s.reflectionGlossyScale },
-                { "sunMetalSpec", s.sunMetalSpecInfluence },
-                { "rtFoliageAlphaMode", s.rtAlphaMode },
-                { "rtFoliageFill", s.rtAlphaMissKeep },
-                { "rtWindSway", s.rtWindBlas },
-                { "rtWindRadius", s.rtWindBlasRadius }
-            } },
-            { "lod", {
-                { "enabled", s.lodEnabled },
-                { "ueScreenSize", s.lodUeScreenSize },
-                { "uePixelError", s.lodPixelError },
-                { "distanceScale", s.lodDistanceScale },
-                { "regularMeshRatios", { s.lodBound0, s.lodBound1, s.lodBound2 } },
-                { "temporalLag", s.lodTemporalLag },
-                { "chunkDistance", s.chunkLodDistance },
-                { "chunkFactor", s.chunkLodFactor }
-            } },
-            { "shadows", {
-                { "mode", ShadowModeName(s.shadowMode) },
-                { "gpuInstancedCasters", s.giIndirectShadows },
-                { "localLightWindRange", s.localShadowWindRange },
-                { "localLightMaxResolution", s.localShadowMaxRes },
-                { "contact", {
-                    { "enabled", s.contactEnabled },
-                    { "localLightMode", s.contactLocalMode },
-                    { "temporalDither", s.contactTemporalDither },
-                    { "lengthInWorldSpace", s.contactLengthInWorldSpace },
-                    { "length", s.contactLength },
-                    { "intensity", s.contactIntensity },
-                    { "steps", s.contactSteps },
-                    { "maxThickness", s.contactMaxThickness },
-                    { "normalOffset", s.contactNormalOffset },
-                    { "grazingFade", s.contactGrazingFade },
-                    { "minDistance", s.contactMinDistance },
-                    { "maxDistance", s.contactMaxDistance },
-                    { "fadeBand", s.contactFadeBand }
-                } },
-                { "legacyCsm", {
-                    { "maxDistance", s.csm.maxDistance },
-                    { "autoSplits", s.csm.useUeSplitDistribution },
-                    { "distributionExponent", s.csm.cascadeDistributionExponent },
-                    { "splitDistances", s.csm.sliceDistances },
-                    { "overlapTexels", s.csm.overlapInTexels },
-                    { "zPadding", s.csm.zPadding },
-                    { "casterReach", s.csm.casterReachWS },
-                    { "scissorOptim", s.csm.scissorOptim },
-                    { "scissorPadTexels", s.csm.scissorPadTexels },
-                    { "accurateCasterCull", s.csm.accurateCasterCull },
-                    { "hzbCull", s.csm.hzbCull },
-                    { "pancakeCasters", s.csm.pancakeCasters },
-                    { "pancakeSlack", s.csm.pancakeSlackWS },
-                    { "depthBiasTexels", s.csm.depthBiasInTexels },
-                    { "slopeScale", s.csm.slopeScale },
-                    { "maxSlope", s.csm.maxSlope },
-                    { "normalBiasTexels", s.csm.normalBiasInTexels },
-                    { "blendFraction", s.csm.blendFraction },
-                    { "distanceFadeFraction", s.csm.distanceFadeFraction },
-                    { "filterMode", s.csm.filterMode },
-                    { "filterSharpen", s.csm.shadowFilterSharpen },
-                    { "receiverBias", s.csm.csmReceiverBias },
-                    { "pcfOverBlurCorrection", s.csm.pcfOverBlurCorrection },
-                    { "atlasResolution", s.csmAtlasRes }
-                } },
-                { "sdsm", {
-                    { "partitions", s.sdsmPartitions },
-                    { "borderTexels", s.sdsmBorderTexels },
-                    { "dilation", s.sdsmDilation },
-                    { "minScaleOverSphere", s.sdsmMinScaleOverSphere },
-                    { "zMargin", s.sdsmZMargin },
-                    { "stabilityFrames", s.sdsmStabilityFrames },
-                    { "cacheFrames", s.sdsmCacheFrames },
-                    { "cacheDilation", s.sdsmCacheDilation },
-                    { "texelSnap", s.sdsmTexelSnap },
-                    { "sizeHysteresis", s.sdsmSizeHysteresis },
-                    { "evsm", s.sdsmEvsm },
-                    { "evsmPositiveExponent", s.sdsmEvsmPos },
-                    { "evsmNegativeExponent", s.sdsmEvsmNeg },
-                    { "evsmBlur", s.sdsmBlur },
-                    { "evsmBlurMaxTexels", s.sdsmBlurMaxTexels }
-                } },
-                { "vsm", {
-                    { "shadowLodBias", s.shadowLodBias },
-                    { "biasNearestTier", s.shadowLodBiasNearTier },
-                    { "shadowTiersPerLod", s.shadowLodTierStride },
-                    { "lodRefDistance", s.vsmLodRefDistance },
-                    { "requestDownscale", s.vsmRequestDownscale },
-                    { "lruFrames", s.vsmLruFrames },
-                    { "clipmapFirstLevel", s.vsmClipmapFirstLevel },
-                    { "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional },
-                    { "resolutionLodBiasLocal", s.vsmResolutionLodBiasLocal },
-                    { "smrtRayCount", s.smrtRayCount },
-                    { "smrtSamplesPerRay", s.smrtSamplesPerRay },
-                    { "localSmrtRayCount", s.localSmrtRayCount },
-                    { "localSmrtSamplesPerRay", s.localSmrtSamplesPerRay },
-                    { "smrtTemporalDither", s.smrtTemporalDither },
-                    { "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount },
-                    { "smrtSunAngleDeg", s.smrtSunAngleDeg },
-                    { "smrtTexelDither", s.smrtTexelDitherScale },
-                    { "smrtRayLengthScale", s.smrtRayLengthScale },
-                    { "clipmapDepthBias", s.vsmClipmapDepthBias },
-                    { "depthBiasDecay", s.vsmClipmapDepthBiasDecay },
-                    { "depthBiasFloorTexels", s.vsmClipmapDepthBiasFloorTexels },
-                    { "clipmapNormalBias", s.vsmClipmapNormalBias },
-                    { "localLateralBiasTexels", s.vsmLocalLateralTexels },
-                    { "localDepthPushTexels", s.vsmLocalDepthPushTexels },
-                    { "residentOnly", s.vsmResidentOnly },
-                    { "singleDraw", s.vsmSingleDraw },
-                    { "hzbCull", s.vsmHzbCull },
-                    { "pageCaching", s.vsmPageCaching },
-                    { "windRange", s.vsmWindRange },
-                    { "tessyEnabled", s.tessyEnabled },
-                    { "tessy", s.tessyVsm },
-                    { "tessyRaster", s.tessyRaster },
-                    { "tessyAtlas", s.tessyAtlas },
-                    { "tessyGBuffer", s.tessyGBuffer },
-                    { "tessySdsm", s.tessySdsm },
-                    { "tessyLod", s.tessyLod },
-                    { "tessyLodPixelError", s.tessyLodPixelError }
-                } }
-            } }
-        };
+        json root = json::object();
+        root["version"] = 1;
+        root["scope"] = "Global runtime graphics quality. Scene look stays in level environment data.";
+        for (std::size_t i = 0; i < kEntryCount; ++i)
+        {
+            if (!s.has[i]) { continue; }
+            const float v = s.value[i];
+            json value;
+            switch (kEntries[i].kind)
+            {
+            case PKind::Bool: value = v != 0.0f; break;
+            case PKind::Int: value = static_cast<int>(std::lround(v)); break;
+            case PKind::Uint: value = static_cast<std::uint32_t>(std::max(0L, std::lround(v))); break;
+            case PKind::Float: value = v; break;
+            case PKind::ReflectionSource: value = ReflectionSourceName(static_cast<ReflectionSource>(std::lround(v))); break;
+            case PKind::SsrTechnique: value = SsrTechniqueName(static_cast<SsrTechnique>(std::lround(v))); break;
+            }
+            PutPath(root, kEntries[i].path, std::move(value));
+        }
+        PutPath(root, "antiAliasing.dlssEnabled", s.dlssEnabled);
+        PutPath(root, "antiAliasing.dlssMode", DlssModeName(s.dlssMode));
+        PutPath(root, "antiAliasing.renderScale", s.renderScale);
+        PutPath(root, "shadows.mode", ShadowModeName(s.shadowMode));
+        json& csm = root["shadows"]["legacyCsm"];
+        csm["maxDistance"] = s.csm.maxDistance;
+        csm["autoSplits"] = s.csm.useUeSplitDistribution;
+        csm["distributionExponent"] = s.csm.cascadeDistributionExponent;
+        csm["splitDistances"] = s.csm.sliceDistances;
+        csm["overlapTexels"] = s.csm.overlapInTexels;
+        csm["zPadding"] = s.csm.zPadding;
+        csm["casterReach"] = s.csm.casterReachWS;
+        csm["scissorOptim"] = s.csm.scissorOptim;
+        csm["scissorPadTexels"] = s.csm.scissorPadTexels;
+        csm["accurateCasterCull"] = s.csm.accurateCasterCull;
+        csm["hzbCull"] = s.csm.hzbCull;
+        csm["pancakeCasters"] = s.csm.pancakeCasters;
+        csm["pancakeSlack"] = s.csm.pancakeSlackWS;
+        csm["depthBiasTexels"] = s.csm.depthBiasInTexels;
+        csm["slopeScale"] = s.csm.slopeScale;
+        csm["maxSlope"] = s.csm.maxSlope;
+        csm["normalBiasTexels"] = s.csm.normalBiasInTexels;
+        csm["blendFraction"] = s.csm.blendFraction;
+        csm["distanceFadeFraction"] = s.csm.distanceFadeFraction;
+        csm["filterMode"] = s.csm.filterMode;
+        csm["filterSharpen"] = s.csm.shadowFilterSharpen;
+        csm["receiverBias"] = s.csm.csmReceiverBias;
+        csm["pcfOverBlurCorrection"] = s.csm.pcfOverBlurCorrection;
+        return root;
     }
 
     GraphicsSettingsSnapshot FromJson(const json& root)
     {
-        GraphicsSettingsSnapshot s{};
-        const json& performance = Section(root, "performance");
-        const json& visibility = Section(root, "visibility");
+        GraphicsSettingsSnapshot s = CompiledDefaults();
+        for (std::size_t i = 0; i < kEntryCount; ++i)
+        {
+            const json* j = FindPath(root, kEntries[i].path);
+            if (j == nullptr) { continue; }
+            float v = 0.0f;
+            bool ok = false;
+            switch (kEntries[i].kind)
+            {
+            case PKind::Bool: ok = j->is_boolean(); if (ok) { v = j->get<bool>() ? 1.0f : 0.0f; } break;
+            case PKind::Int:
+            case PKind::Uint: ok = j->is_number_integer() || j->is_number_unsigned(); if (ok) { v = static_cast<float>(j->get<double>()); } break;
+            case PKind::Float: ok = j->is_number(); if (ok) { v = j->get<float>(); } break;
+            case PKind::ReflectionSource:
+                ok = j->is_string();
+                if (ok)
+                {
+                    const ReflectionSource r = ParseReflectionSource(*j, ReflectionSource{});
+                    ok = j->get<std::string>() == ReflectionSourceName(r); // a name, not a word the parser fell back on
+                    v = static_cast<float>(static_cast<int>(r));
+                }
+                break;
+            case PKind::SsrTechnique:
+                ok = j->is_string();
+                if (ok)
+                {
+                    const SsrTechnique r = ParseSsrTechnique(*j, SsrTechnique{});
+                    ok = j->get<std::string>() == SsrTechniqueName(r);
+                    v = static_cast<float>(static_cast<int>(r));
+                }
+                break;
+            }
+            if (ok && std::isfinite(v)) { s.value[i] = v; s.has[i] = true; } // else the defaults' (a wrong type: §6)
+        }
         const json& aa = Section(root, "antiAliasing");
-        const json& reflections = Section(root, "reflections");
-        const json& ue = Section(reflections, "ueSsr");
-        const json& lod = Section(root, "lod");
         const json& shadows = Section(root, "shadows");
-        const json& contact = Section(shadows, "contact");
         const json& csm = Section(shadows, "legacyCsm");
-        const json& sdsmSettings = Section(shadows, "sdsm");
-        const json& vsmSettings = Section(shadows, "vsm");
-
-        const json& frame = Section(root, "frame");
-        Read(frame, "vsync", s.vsync);
-        Read(frame, "maxFps", s.maxFps);
-        Read(frame, "mouseSmoothingMs", s.mouseSmoothingMs);
-        Read(frame, "renderThread", s.renderThread);
-        Read(frame, "oneFrameThreadLag", s.oneFrameThreadLag);
-        Read(frame, "rhiThread", s.rhiThread);
-        const json& cloudShadow = Section(root, "cloudShadow");
-        Read(cloudShadow, "updateFrames", s.cloudShadowUpdateFrames);
-        Read(cloudShadow, "bilinearWeather", s.cloudShadowBilinearWeather);
-        Read(cloudShadow, "detailMean", s.cloudShadowDetailMean);
-        const json& cloudTrace = Section(root, "cloudTrace");
-        Read(cloudTrace, "mode", s.cloudTraceMode);
-        Read(cloudTrace, "captureTexels", s.cloudCaptureTexels);
-        Read(performance, "asyncCompute", s.asyncCompute);
-        Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
-        Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
-        Read(performance, "rasterBindless", s.rasterBindless);
-        Read(performance, "fogGridPixels", s.fogGridPixels);
-        Read(performance, "fogGridZ", s.fogGridZ);
-        const json& streamingSec = Section(root, "streaming");
-        Read(streamingSec, "enabled", s.streamingEnabled);
-        Read(streamingSec, "poolSizeMB", s.streamingPoolSizeMB);
-        Read(streamingSec, "mipBias", s.streamingMipBias);
-        Read(streamingSec, "boost", s.streamingBoost);
-        Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
-        Read(streamingSec, "mipFade", s.streamingMipFade);
-        Read(streamingSec, "perTextureBias", s.streamingPerTextureBias);
-        Read(streamingSec, "anisotropy", s.textureAnisotropy);
-        const json& gi = Section(root, "gi");
-        Read(gi, "enabled", s.giEnabled);
-        Read(gi, "spacing", s.giSpacing);
-        Read(gi, "hysteresis", s.giHysteresis);
-        Read(gi, "intensity", s.giIntensity);
-        Read(gi, "farCascade", s.giFar);
-        Read(gi, "farSpacing", s.giFarSpacing);
-        Read(gi, "divisor", s.giDivisor);
-        Read(gi, "farDivisor", s.giFarDivisor);
-        Read(gi, "rays", s.giRays);
-        Read(gi, "fixedRayPeriod", s.giFixedRayPeriod);
-        Read(gi, "sleepPeriod", s.giSleepPeriod);
-        Read(gi, "rayDistance", s.giRayDistance);
-        Read(gi, "infiniteBounce", s.giInfiniteBounce);
-        Read(gi, "bounceVisibility", s.giBounceVisibility);
-        Read(gi, "skyRay", s.giSkyRay);
-        Read(gi, "lights", s.giLights);
-        const json& skyVis = Section(root, "skyVis");
-        Read(skyVis, "enabled", s.skyVisEnabled);
-        Read(skyVis, "rays", s.skyVisRays);
-        Read(skyVis, "history", s.skyVisHistory);
-        Read(skyVis, "maxDistance", s.skyVisMaxDistance);
-        Read(skyVis, "diffuse", s.skyVisDiffuse);
-        Read(skyVis, "specular", s.skyVisSpecular);
-        Read(skyVis, "spatialFilter", s.skyVisFilter);
-        Read(skyVis, "fogRays", s.skyVisFogRays);
-        Read(skyVis, "filterRadius", s.skyVisFilterRadius);
-        Read(skyVis, "seed", s.skyVisSeed);
-        Read(skyVis, "fallback", s.skyVisFallback);
-        Read(skyVis, "fallbackResolution", s.skyVisFallbackResolution);
-        Read(skyVis, "fallbackTexel", s.skyVisFallbackTexel);
-        Read(skyVis, "fallbackFade", s.skyVisFallbackFade);
-        Read(visibility, "chunkMask", s.visibilityChunkMask);
-        Read(visibility, "occlusionMethod", s.occlusionMethod);
-        Read(visibility, "queryLatency", s.occlusionQueryLatency);
-        Read(visibility, "queryGpuDrivenObjects", s.occlusionIndirectQueries);
         Read(aa, "dlssEnabled", s.dlssEnabled);
         if (const auto it = aa.find("dlssMode"); it != aa.end())
         {
             s.dlssMode = ParseDlssMode(*it, s.dlssMode);
         }
         Read(aa, "renderScale", s.renderScale);
-        Read(aa, "fxaa", s.fxaa);
-
-        if (const auto it = reflections.find("source"); it != reflections.end())
-        {
-            s.reflectionSource = ParseReflectionSource(*it, s.reflectionSource);
-        }
-        if (const auto it = reflections.find("ssrTechnique"); it != reflections.end())
-        {
-            s.ssrTechnique = ParseSsrTechnique(*it, s.ssrTechnique);
-        }
-        std::uint32_t preset = static_cast<std::uint32_t>(s.ssrUe.preset);
-        Read(ue, "preset", preset);
-        if (preset < static_cast<std::uint32_t>(UeSsrQualityPreset::Count))
-        {
-            s.ssrUe.preset = static_cast<UeSsrQualityPreset>(preset);
-        }
-        Read(ue, "stepsPerRay", s.ssrUe.numSteps);
-        Read(ue, "raysPerPixel", s.ssrUe.numRays);
-        Read(ue, "glossyRays", s.ssrUe.glossyRays);
-        Read(ue, "useSurfaceRoughness", s.ssrUe.useSurfaceRoughness);
-        Read(ue, "roughnessOverride", s.ssrUe.roughnessOverride);
-        Read(ue, "intensity", s.ssrUe.intensity);
-        Read(ue, "maxRoughness", s.ssrUe.maxRoughness);
-        Read(reflections, "temporal", s.reflectionTemporal);
-        Read(reflections, "temporalBlend", s.reflectionTemporalBlend);
-        Read(reflections, "temporalStillInertia", s.reflectionTemporalStillInertia);
-        Read(reflections, "waterTemporal", s.waterReflectionTemporal);
-        Read(reflections, "waterTemporalBlend", s.waterReflectionTemporalBlend);
-        Read(reflections, "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia);
-        Read(reflections, "waterSurfaceNormal", s.waterReflectionSurfaceNormal);
-        Read(reflections, "waterNormalCascades", s.waterReflectionNormalCascades);
-        Read(reflections, "waterNormalFilter", s.waterReflectionNormalFilter);
-        Read(reflections, "waterPrefilter", s.waterReflectionPrefilter);
-        Read(reflections, "resolution", s.reflectionResolution);
-        Read(reflections, "oceanResolution", s.oceanReflectionResolution);
-        Read(reflections, "glossyBlur", s.reflectionGlossyScale);
-        Read(reflections, "sunMetalSpec", s.sunMetalSpecInfluence);
-        Read(reflections, "rtFoliageAlphaMode", s.rtAlphaMode);
-        Read(reflections, "rtFoliageFill", s.rtAlphaMissKeep);
-        Read(reflections, "rtWindSway", s.rtWindBlas);
-        Read(reflections, "rtWindRadius", s.rtWindBlasRadius);
-
-        Read(lod, "enabled", s.lodEnabled);
-        Read(lod, "ueScreenSize", s.lodUeScreenSize);
-        // UE's PixelError again (2026-11-11), under a key of its own: "screenPixelError" held 1 px of THIS screen, the rule of
-        // 2026-10-24 .. 11-11, and read as UE's 1080p pixels it would put every LOD 8x farther. Both old keys are ignored.
-        Read(lod, "uePixelError", s.lodPixelError);
-        Read(lod, "distanceScale", s.lodDistanceScale);
-        const auto ratios = lod.find("regularMeshRatios");
-        if (ratios != lod.end() && ratios->is_array() && ratios->size() >= 3)
-        {
-            if ((*ratios)[0].is_number()) { s.lodBound0 = (*ratios)[0].get<float>(); }
-            if ((*ratios)[1].is_number()) { s.lodBound1 = (*ratios)[1].get<float>(); }
-            if ((*ratios)[2].is_number()) { s.lodBound2 = (*ratios)[2].get<float>(); }
-        }
-        Read(lod, "temporalLag", s.lodTemporalLag); // the old spatial "crossfadeBand" is gone (2026-10-23)
-        Read(lod, "chunkDistance", s.chunkLodDistance);
-        Read(lod, "chunkFactor", s.chunkLodFactor);
-
         if (const auto it = shadows.find("mode"); it != shadows.end())
         {
             s.shadowMode = ParseShadowMode(*it, s.shadowMode);
         }
-        Read(shadows, "gpuInstancedCasters", s.giIndirectShadows);
-        Read(shadows, "localLightWindRange", s.localShadowWindRange);
-        Read(shadows, "localLightMaxResolution", s.localShadowMaxRes);
-        Read(contact, "enabled", s.contactEnabled);
-        Read(contact, "localLightMode", s.contactLocalMode);
-        Read(contact, "temporalDither", s.contactTemporalDither);
-        Read(contact, "lengthInWorldSpace", s.contactLengthInWorldSpace);
-        Read(contact, "length", s.contactLength);
-        Read(contact, "intensity", s.contactIntensity);
-        Read(contact, "steps", s.contactSteps);
-        Read(contact, "maxThickness", s.contactMaxThickness);
-        Read(contact, "normalOffset", s.contactNormalOffset);
-        Read(contact, "grazingFade", s.contactGrazingFade);
-        Read(contact, "minDistance", s.contactMinDistance);
-        Read(contact, "maxDistance", s.contactMaxDistance);
-        Read(contact, "fadeBand", s.contactFadeBand);
-
         Read(csm, "maxDistance", s.csm.maxDistance);
         Read(csm, "autoSplits", s.csm.useUeSplitDistribution);
         Read(csm, "distributionExponent", s.csm.cascadeDistributionExponent);
@@ -1425,65 +727,10 @@ namespace
         Read(csm, "filterSharpen", s.csm.shadowFilterSharpen);
         Read(csm, "receiverBias", s.csm.csmReceiverBias);
         Read(csm, "pcfOverBlurCorrection", s.csm.pcfOverBlurCorrection);
-        Read(csm, "atlasResolution", s.csmAtlasRes);
-
-        Read(sdsmSettings, "partitions", s.sdsmPartitions);
-        Read(sdsmSettings, "borderTexels", s.sdsmBorderTexels);
-        Read(sdsmSettings, "dilation", s.sdsmDilation);
-        Read(sdsmSettings, "minScaleOverSphere", s.sdsmMinScaleOverSphere);
-        Read(sdsmSettings, "zMargin", s.sdsmZMargin);
-        Read(sdsmSettings, "stabilityFrames", s.sdsmStabilityFrames);
-        Read(sdsmSettings, "cacheFrames", s.sdsmCacheFrames);
-        Read(sdsmSettings, "cacheDilation", s.sdsmCacheDilation);
-        Read(sdsmSettings, "texelSnap", s.sdsmTexelSnap);
-        Read(sdsmSettings, "sizeHysteresis", s.sdsmSizeHysteresis);
-        Read(sdsmSettings, "evsm", s.sdsmEvsm);
-        Read(sdsmSettings, "evsmPositiveExponent", s.sdsmEvsmPos);
-        Read(sdsmSettings, "evsmNegativeExponent", s.sdsmEvsmNeg);
-        Read(sdsmSettings, "evsmBlur", s.sdsmBlur);
-        Read(sdsmSettings, "evsmBlurMaxTexels", s.sdsmBlurMaxTexels);
-
-        Read(vsmSettings, "shadowLodBias", s.shadowLodBias);
-        Read(vsmSettings, "biasNearestTier", s.shadowLodBiasNearTier);
-        Read(vsmSettings, "shadowTiersPerLod", s.shadowLodTierStride);
-        Read(vsmSettings, "lodRefDistance", s.vsmLodRefDistance);
-        Read(vsmSettings, "requestDownscale", s.vsmRequestDownscale);
-        Read(vsmSettings, "lruFrames", s.vsmLruFrames);
-        Read(vsmSettings, "clipmapFirstLevel", s.vsmClipmapFirstLevel);
-        Read(vsmSettings, "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
-        Read(vsmSettings, "resolutionLodBiasLocal", s.vsmResolutionLodBiasLocal);
-        Read(vsmSettings, "smrtRayCount", s.smrtRayCount);
-        Read(vsmSettings, "smrtSamplesPerRay", s.smrtSamplesPerRay);
-        Read(vsmSettings, "localSmrtRayCount", s.localSmrtRayCount);
-        Read(vsmSettings, "localSmrtSamplesPerRay", s.localSmrtSamplesPerRay);
-        Read(vsmSettings, "smrtTemporalDither", s.smrtTemporalDither);
-        Read(vsmSettings, "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount);
-        Read(vsmSettings, "smrtSunAngleDeg", s.smrtSunAngleDeg);
-        Read(vsmSettings, "smrtTexelDither", s.smrtTexelDitherScale);
-        Read(vsmSettings, "smrtRayLengthScale", s.smrtRayLengthScale);
-        Read(vsmSettings, "clipmapDepthBias", s.vsmClipmapDepthBias);
-        Read(vsmSettings, "depthBiasDecay", s.vsmClipmapDepthBiasDecay);
-        Read(vsmSettings, "depthBiasFloorTexels", s.vsmClipmapDepthBiasFloorTexels);
-        Read(vsmSettings, "clipmapNormalBias", s.vsmClipmapNormalBias);
-        Read(vsmSettings, "localLateralBiasTexels", s.vsmLocalLateralTexels);
-        Read(vsmSettings, "localDepthPushTexels", s.vsmLocalDepthPushTexels);
-        Read(vsmSettings, "residentOnly", s.vsmResidentOnly);
-        Read(vsmSettings, "singleDraw", s.vsmSingleDraw);
-        Read(vsmSettings, "hzbCull", s.vsmHzbCull);
-        Read(vsmSettings, "pageCaching", s.vsmPageCaching);
-        Read(vsmSettings, "windRange", s.vsmWindRange);
-        Read(vsmSettings, "tessyEnabled", s.tessyEnabled);
-        Read(vsmSettings, "tessy", s.tessyVsm);
-        Read(vsmSettings, "tessyRaster", s.tessyRaster);
-        Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
-        Read(vsmSettings, "tessyGBuffer", s.tessyGBuffer);
-        Read(vsmSettings, "tessySdsm", s.tessySdsm);
-        Read(vsmSettings, "tessyLod", s.tessyLod);
-        Read(vsmSettings, "tessyLodPixelError", s.tessyLodPixelError);
-
-        Sanitize(s);
+        SanitizeKept(s);
         return s;
     }
+
 
     // The settings file this used to be (docs/scalability_plan.md §6.4): read ONCE, when user_settings.json has no graphics
     // section yet, to move it there, and never written again. A dev build's is the repo root's full snapshot, a packaged
@@ -1670,6 +917,17 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
                                          SceneRenderSettings& settings)
 {
     initialized_ = true;
+    {
+        // The table's knobs as they are before the file; the kept-in-code parts as the old struct had them.
+        GraphicsSettingsSnapshot compiled = Capture(renderer, scene, settings, /*managedAsOwn=*/false);
+        const GraphicsSettingsSnapshot initializers{};
+        compiled.dlssEnabled = initializers.dlssEnabled;
+        compiled.dlssMode = initializers.dlssMode;
+        compiled.renderScale = initializers.renderScale;
+        compiled.shadowMode = initializers.shadowMode;
+        compiled.csm = initializers.csm;
+        CompiledDefaults() = compiled;
+    }
     GraphicsSettingsSnapshot loaded{};
     std::string error;
     bool found = false;
@@ -1696,6 +954,32 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
     }
     projectCsm_ = scene.CascadeConfig();
     savePending_ = false;
+}
+
+namespace
+{
+    void FlattenJson(const json& j, const std::string& path, std::vector<std::string>& lines)
+    {
+        if (j.is_object())
+        {
+            for (auto it = j.begin(); it != j.end(); ++it) { FlattenJson(it.value(), path.empty() ? it.key() : path + "." + it.key(), lines); }
+            return;
+        }
+        if (j.is_array())
+        {
+            for (std::size_t i = 0; i < j.size(); ++i) { FlattenJson(j[i], path + "[" + std::to_string(i) + "]", lines); }
+            return;
+        }
+        lines.push_back(path + " " + j.dump());
+    }
+}
+
+void GraphicsSettingsManager::DescribeFile(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings,
+                                           const char* prefix, std::vector<std::string>& lines) const
+{
+    std::vector<std::string> flat;
+    FlattenJson(ToJson(Capture(renderer, scene, settings)), "", flat);
+    for (const std::string& l : flat) { lines.push_back(prefix + l); }
 }
 
 void GraphicsSettingsManager::ApplySceneSettings(Scene& scene) const
@@ -1849,78 +1133,44 @@ const char* ScalabilityKnobOf(GraphicsControl control)
     }
 }
 
+bool GraphicsSettingsManager::ResetSetting(const std::string& setting, Renderer& renderer, Scene& scene,
+                                           SceneRenderSettings& settings)
+{
+    for (std::size_t i = 0; i < kEntryCount; ++i)
+    {
+        if (kEntries[i].control != kNoControl && setting == kEntries[i].setting)
+        {
+            return ResetControl(kEntries[i].control, renderer, scene, settings);
+        }
+    }
+    for (int c = 0; c <= static_cast<int>(GraphicsControl::SkyVisFallbackFade); ++c)
+    {
+        const char* knob = ScalabilityKnobOf(static_cast<GraphicsControl>(c));
+        if (knob != nullptr && setting == knob)
+        {
+            return ResetControl(static_cast<GraphicsControl>(c), renderer, scene, settings);
+        }
+    }
+    LOG_ERROR(logging::LogCategory::App, "graphics settings: no control's Reset moves {}", setting);
+    return false;
+}
+
 bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& renderer,
                                            Scene& scene, SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
+    // SMRT's on/off is its ray count (0 = off): the same knob as the rays' control.
+    if (control == GraphicsControl::VsmSmrtEnabled) { control = GraphicsControl::VsmSmrtRays; }
     GraphicsSettingsSnapshot current = Capture(renderer, scene, settings, /*managedAsOwn=*/false);
     const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
-
+    // The kept-in-code controls (the DLSS trio, the shadow mode, the CSM fit): their field from the defaults.
+    PTab tab = PTab::Vsm;
+    bool found = false;
     switch (control)
     {
-    case GraphicsControl::AsyncCompute:                   current.asyncCompute = defaults.asyncCompute; break;
-    case GraphicsControl::VSync:                          current.vsync = defaults.vsync; break;
-    case GraphicsControl::MaxFps:                         current.maxFps = defaults.maxFps; break;
-    case GraphicsControl::MouseSmoothing:                 current.mouseSmoothingMs = defaults.mouseSmoothingMs; break;
-    case GraphicsControl::RenderThread:                   current.renderThread = defaults.renderThread; break;
-    case GraphicsControl::OneFrameThreadLag:              current.oneFrameThreadLag = defaults.oneFrameThreadLag; break;
-    case GraphicsControl::RhiThread:                      current.rhiThread = defaults.rhiThread; break;
-    case GraphicsControl::VisibilityChunkMask:             current.visibilityChunkMask = defaults.visibilityChunkMask; break;
-    case GraphicsControl::OcclusionMethod:                 current.occlusionMethod = defaults.occlusionMethod; break;
-    case GraphicsControl::OcclusionQueryLatency:           current.occlusionQueryLatency = defaults.occlusionQueryLatency; break;
-    case GraphicsControl::OcclusionIndirectQueries:        current.occlusionIndirectQueries = defaults.occlusionIndirectQueries; break;
     case GraphicsControl::DlssEnabled:                    current.dlssEnabled = defaults.dlssEnabled; break;
     case GraphicsControl::DlssMode:                       current.dlssMode = defaults.dlssMode; break;
-    case GraphicsControl::Fxaa:                           current.fxaa = defaults.fxaa; break;
-    case GraphicsControl::SsrTechnique:                   current.ssrTechnique = defaults.ssrTechnique; break;
-    case GraphicsControl::UeSsrQuality:                   current.ssrUe = defaults.ssrUe; break;
-    case GraphicsControl::UeSsrSteps:
-        current.ssrUe.numSteps = defaults.ssrUe.numSteps;
-        current.ssrUe.preset = UeSsrQualityPreset::Custom;
-        break;
-    case GraphicsControl::UeSsrRays:
-        current.ssrUe.numRays = defaults.ssrUe.numRays;
-        current.ssrUe.preset = UeSsrQualityPreset::Custom;
-        break;
-    case GraphicsControl::UeSsrGlossyRays:
-        current.ssrUe.glossyRays = defaults.ssrUe.glossyRays;
-        current.ssrUe.preset = UeSsrQualityPreset::Custom;
-        break;
-    case GraphicsControl::UeSsrUseSurfaceRoughness:       current.ssrUe.useSurfaceRoughness = defaults.ssrUe.useSurfaceRoughness; break;
-    case GraphicsControl::UeSsrRoughnessOverride:         current.ssrUe.roughnessOverride = defaults.ssrUe.roughnessOverride; break;
-    case GraphicsControl::UeSsrIntensity:                 current.ssrUe.intensity = defaults.ssrUe.intensity; break;
-    case GraphicsControl::UeSsrMaxRoughness:              current.ssrUe.maxRoughness = defaults.ssrUe.maxRoughness; break;
-    case GraphicsControl::ReflectionTemporal:             current.reflectionTemporal = defaults.reflectionTemporal; break;
-    case GraphicsControl::ReflectionTemporalBlend:        current.reflectionTemporalBlend = defaults.reflectionTemporalBlend; break;
-    case GraphicsControl::ReflectionTemporalStillInertia: current.reflectionTemporalStillInertia = defaults.reflectionTemporalStillInertia; break;
-    case GraphicsControl::WaterReflectionTemporal:        current.waterReflectionTemporal = defaults.waterReflectionTemporal; break;
-    case GraphicsControl::WaterReflectionTemporalBlend:   current.waterReflectionTemporalBlend = defaults.waterReflectionTemporalBlend; break;
-    case GraphicsControl::WaterReflectionTemporalStillInertia:
-        current.waterReflectionTemporalStillInertia = defaults.waterReflectionTemporalStillInertia; break;
-    case GraphicsControl::WaterReflectionSurfaceNormal:   current.waterReflectionSurfaceNormal = defaults.waterReflectionSurfaceNormal; break;
-    case GraphicsControl::WaterReflectionNormalCascades:  current.waterReflectionNormalCascades = defaults.waterReflectionNormalCascades; break;
-    case GraphicsControl::WaterReflectionNormalFilter:    current.waterReflectionNormalFilter = defaults.waterReflectionNormalFilter; break;
-    case GraphicsControl::WaterReflectionPrefilter:       current.waterReflectionPrefilter = defaults.waterReflectionPrefilter; break;
-    case GraphicsControl::ReflectionResolution:           current.reflectionResolution = defaults.reflectionResolution; break;
-    case GraphicsControl::ReflectionGlossyScale:          current.reflectionGlossyScale = defaults.reflectionGlossyScale; break;
-    case GraphicsControl::SunMetalSpecInfluence:          current.sunMetalSpecInfluence = defaults.sunMetalSpecInfluence; break;
-    case GraphicsControl::OceanReflectionResolution:      current.oceanReflectionResolution = defaults.oceanReflectionResolution; break;
-    case GraphicsControl::ReflectionSource:               current.reflectionSource = defaults.reflectionSource; break;
-    case GraphicsControl::RtAlphaMode:                    current.rtAlphaMode = defaults.rtAlphaMode; break;
-    case GraphicsControl::RtAlphaMissKeep:                current.rtAlphaMissKeep = defaults.rtAlphaMissKeep; break;
-    case GraphicsControl::RtWindBlas:                     current.rtWindBlas = defaults.rtWindBlas; break;
-    case GraphicsControl::RtWindBlasRadius:               current.rtWindBlasRadius = defaults.rtWindBlasRadius; break;
     case GraphicsControl::RenderScale:                    current.renderScale = defaults.renderScale; break;
-    case GraphicsControl::LodEnabled:                     current.lodEnabled = defaults.lodEnabled; break;
-    case GraphicsControl::LodUeScreenSize:                current.lodUeScreenSize = defaults.lodUeScreenSize; break;
-    case GraphicsControl::LodPixelError:                  current.lodPixelError = defaults.lodPixelError; break;
-    case GraphicsControl::LodDistanceScale:               current.lodDistanceScale = defaults.lodDistanceScale; break;
-    case GraphicsControl::LodBound0:                      current.lodBound0 = defaults.lodBound0; break;
-    case GraphicsControl::LodBound1:                      current.lodBound1 = defaults.lodBound1; break;
-    case GraphicsControl::LodBound2:                      current.lodBound2 = defaults.lodBound2; break;
-    case GraphicsControl::LodTemporalLag:                 current.lodTemporalLag = defaults.lodTemporalLag; break;
-    case GraphicsControl::ChunkLodDistance:               current.chunkLodDistance = defaults.chunkLodDistance; break;
-    case GraphicsControl::ChunkLodFactor:                 current.chunkLodFactor = defaults.chunkLodFactor; break;
     case GraphicsControl::ShadowMode:                     current.shadowMode = defaults.shadowMode; break;
     case GraphicsControl::CsmMaxDistance:                 current.csm.maxDistance = defaults.csm.maxDistance; break;
     case GraphicsControl::CsmAutoSplits:                  current.csm.useUeSplitDistribution = defaults.csm.useUeSplitDistribution; break;
@@ -1945,184 +1195,42 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::CsmSharpen:                     current.csm.shadowFilterSharpen = defaults.csm.shadowFilterSharpen; break;
     case GraphicsControl::CsmReceiverBias:                current.csm.csmReceiverBias = defaults.csm.csmReceiverBias; break;
     case GraphicsControl::CsmOverBlur:                    current.csm.pcfOverBlurCorrection = defaults.csm.pcfOverBlurCorrection; break;
-    case GraphicsControl::CsmAtlasRes:                    current.csmAtlasRes = defaults.csmAtlasRes; break;
-    case GraphicsControl::SdsmPartitions:                 current.sdsmPartitions = defaults.sdsmPartitions; break;
-    case GraphicsControl::SdsmBorder:                     current.sdsmBorderTexels = defaults.sdsmBorderTexels; break;
-    case GraphicsControl::SdsmDilation:                   current.sdsmDilation = defaults.sdsmDilation; break;
-    case GraphicsControl::SdsmMinScale:                   current.sdsmMinScaleOverSphere = defaults.sdsmMinScaleOverSphere; break;
-    case GraphicsControl::SdsmZMargin:                    current.sdsmZMargin = defaults.sdsmZMargin; break;
-    case GraphicsControl::SdsmStability:                  current.sdsmStabilityFrames = defaults.sdsmStabilityFrames; break;
-    case GraphicsControl::SdsmCacheFrames:                current.sdsmCacheFrames = defaults.sdsmCacheFrames; break;
-    case GraphicsControl::SdsmCacheDilation:              current.sdsmCacheDilation = defaults.sdsmCacheDilation; break;
-    case GraphicsControl::SdsmTexelSnap:                  current.sdsmTexelSnap = defaults.sdsmTexelSnap; break;
-    case GraphicsControl::SdsmSizeHysteresis:             current.sdsmSizeHysteresis = defaults.sdsmSizeHysteresis; break;
-    case GraphicsControl::SdsmEvsm:                       current.sdsmEvsm = defaults.sdsmEvsm; break;
-    case GraphicsControl::SdsmEvsmPos:                    current.sdsmEvsmPos = defaults.sdsmEvsmPos; break;
-    case GraphicsControl::SdsmEvsmNeg:                    current.sdsmEvsmNeg = defaults.sdsmEvsmNeg; break;
-    case GraphicsControl::SdsmBlur:                       current.sdsmBlur = defaults.sdsmBlur; break;
-    case GraphicsControl::SdsmBlurMax:                    current.sdsmBlurMaxTexels = defaults.sdsmBlurMaxTexels; break;
-    case GraphicsControl::ContactEnabled:                 current.contactEnabled = defaults.contactEnabled; break;
-    case GraphicsControl::ContactLocalMode:               current.contactLocalMode = defaults.contactLocalMode; break;
-    case GraphicsControl::ContactTemporal:                current.contactTemporalDither = defaults.contactTemporalDither; break;
-    case GraphicsControl::ContactLengthWorldSpace:        current.contactLengthInWorldSpace = defaults.contactLengthInWorldSpace; break;
-    case GraphicsControl::ContactLength:                  current.contactLength = defaults.contactLength; break;
-    case GraphicsControl::ContactIntensity:               current.contactIntensity = defaults.contactIntensity; break;
-    case GraphicsControl::ContactSteps:                   current.contactSteps = defaults.contactSteps; break;
-    case GraphicsControl::ContactThickness:               current.contactMaxThickness = defaults.contactMaxThickness; break;
-    case GraphicsControl::ContactNormalOffset:            current.contactNormalOffset = defaults.contactNormalOffset; break;
-    case GraphicsControl::ContactGrazingFade:              current.contactGrazingFade = defaults.contactGrazingFade; break;
-    case GraphicsControl::ContactMinDistance:             current.contactMinDistance = defaults.contactMinDistance; break;
-    case GraphicsControl::ContactMaxDistance:             current.contactMaxDistance = defaults.contactMaxDistance; break;
-    case GraphicsControl::ContactFadeBand:                current.contactFadeBand = defaults.contactFadeBand; break;
-    case GraphicsControl::GiIndirectShadows:              current.giIndirectShadows = defaults.giIndirectShadows; break;
-    case GraphicsControl::LocalShadowWindRange:           current.localShadowWindRange = defaults.localShadowWindRange; break;
-    case GraphicsControl::IndirectGBuffer:                 current.indirectGBuffer = defaults.indirectGBuffer; break;
-    case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
-    case GraphicsControl::RasterBindless:                 current.rasterBindless = defaults.rasterBindless; break;
-    case GraphicsControl::FogGridPixels:                  current.fogGridPixels = defaults.fogGridPixels; break;
-    case GraphicsControl::FogGridZ:                       current.fogGridZ = defaults.fogGridZ; break;
-    case GraphicsControl::CloudShadowUpdateFrames:        current.cloudShadowUpdateFrames = defaults.cloudShadowUpdateFrames; break;
-    case GraphicsControl::CloudShadowBilinearWeather:     current.cloudShadowBilinearWeather = defaults.cloudShadowBilinearWeather; break;
-    case GraphicsControl::CloudShadowDetailMean:          current.cloudShadowDetailMean = defaults.cloudShadowDetailMean; break;
-    case GraphicsControl::CloudTraceMode:                 current.cloudTraceMode = defaults.cloudTraceMode; break;
-    case GraphicsControl::CloudCaptureTexels:             current.cloudCaptureTexels = defaults.cloudCaptureTexels; break;
-    case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
-    case GraphicsControl::StreamingPoolSizeMB:            current.streamingPoolSizeMB = defaults.streamingPoolSizeMB; break;
-    case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
-    case GraphicsControl::StreamingAnisotropy:            current.textureAnisotropy = defaults.textureAnisotropy; break;
-    case GraphicsControl::StreamingBoost:                 current.streamingBoost = defaults.streamingBoost; break;
-    case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
-    case GraphicsControl::StreamingMipFade:               current.streamingMipFade = defaults.streamingMipFade; break;
-    case GraphicsControl::StreamingPerTextureBias:        current.streamingPerTextureBias = defaults.streamingPerTextureBias; break;
-    case GraphicsControl::GiEnabled:                      current.giEnabled = defaults.giEnabled; break;
-    case GraphicsControl::GiSpacing:                      current.giSpacing = defaults.giSpacing; break;
-    case GraphicsControl::GiHysteresis:                   current.giHysteresis = defaults.giHysteresis; break;
-    case GraphicsControl::GiIntensity:                    current.giIntensity = defaults.giIntensity; break;
-    case GraphicsControl::GiFar:                          current.giFar = defaults.giFar; break;
-    case GraphicsControl::GiFarSpacing:                   current.giFarSpacing = defaults.giFarSpacing; break;
-    case GraphicsControl::GiDivisor:                      current.giDivisor = defaults.giDivisor; break;
-    case GraphicsControl::GiFarDivisor:                   current.giFarDivisor = defaults.giFarDivisor; break;
-    case GraphicsControl::GiRays:                         current.giRays = defaults.giRays; break;
-    case GraphicsControl::GiFixedRayPeriod:               current.giFixedRayPeriod = defaults.giFixedRayPeriod; break;
-    case GraphicsControl::GiSleepPeriod:                  current.giSleepPeriod = defaults.giSleepPeriod; break;
-    case GraphicsControl::GiRayDistance:                  current.giRayDistance = defaults.giRayDistance; break;
-    case GraphicsControl::GiInfiniteBounce:               current.giInfiniteBounce = defaults.giInfiniteBounce; break;
-    case GraphicsControl::GiBounceVisibility:             current.giBounceVisibility = defaults.giBounceVisibility; break;
-    case GraphicsControl::GiSkyRay:                       current.giSkyRay = defaults.giSkyRay; break;
-    case GraphicsControl::GiLights:                       current.giLights = defaults.giLights; break;
-    case GraphicsControl::SkyVisEnabled:                  current.skyVisEnabled = defaults.skyVisEnabled; break;
-    case GraphicsControl::SkyVisRays:                     current.skyVisRays = defaults.skyVisRays; break;
-    case GraphicsControl::SkyVisHistory:                  current.skyVisHistory = defaults.skyVisHistory; break;
-    case GraphicsControl::SkyVisMaxDistance:              current.skyVisMaxDistance = defaults.skyVisMaxDistance; break;
-    case GraphicsControl::SkyVisDiffuse:                  current.skyVisDiffuse = defaults.skyVisDiffuse; break;
-    case GraphicsControl::SkyVisSpecular:                 current.skyVisSpecular = defaults.skyVisSpecular; break;
-    case GraphicsControl::SkyVisFilter:                   current.skyVisFilter = defaults.skyVisFilter; break;
-    case GraphicsControl::SkyVisFogRays:                  current.skyVisFogRays = defaults.skyVisFogRays; break;
-    case GraphicsControl::SkyVisFilterRadius:             current.skyVisFilterRadius = defaults.skyVisFilterRadius; break;
-    case GraphicsControl::SkyVisSeed:                     current.skyVisSeed = defaults.skyVisSeed; break;
-    case GraphicsControl::SkyVisFallback:                 current.skyVisFallback = defaults.skyVisFallback; break;
-    case GraphicsControl::SkyVisFallbackResolution:       current.skyVisFallbackResolution = defaults.skyVisFallbackResolution; break;
-    case GraphicsControl::SkyVisFallbackTexel:            current.skyVisFallbackTexel = defaults.skyVisFallbackTexel; break;
-    case GraphicsControl::SkyVisFallbackFade:             current.skyVisFallbackFade = defaults.skyVisFallbackFade; break;
-    case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
-    case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
-    case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
-    case GraphicsControl::VsmRefDistance:                 current.vsmLodRefDistance = defaults.vsmLodRefDistance; break;
-    case GraphicsControl::VsmRequestDownscale:            current.vsmRequestDownscale = defaults.vsmRequestDownscale; break;
-    case GraphicsControl::VsmLru:                         current.vsmLruFrames = defaults.vsmLruFrames; break;
-    case GraphicsControl::VsmClipmapFirstLevel:           current.vsmClipmapFirstLevel = defaults.vsmClipmapFirstLevel; break;
-    case GraphicsControl::VsmResolutionLodBiasDirectional: current.vsmResolutionLodBiasDirectional = defaults.vsmResolutionLodBiasDirectional; break;
-    case GraphicsControl::VsmSmrtEnabled:
-    case GraphicsControl::VsmSmrtRays:                    current.smrtRayCount = defaults.smrtRayCount; break;
-    case GraphicsControl::VsmSmrtSamples:                 current.smrtSamplesPerRay = defaults.smrtSamplesPerRay; break;
-    case GraphicsControl::VsmLocalSmrtRays:               current.localSmrtRayCount = defaults.localSmrtRayCount; break;
-    case GraphicsControl::VsmLocalSmrtSamples:            current.localSmrtSamplesPerRay = defaults.localSmrtSamplesPerRay; break;
-    case GraphicsControl::VsmSmrtTemporal:                current.smrtTemporalDither = defaults.smrtTemporalDither; break;
-    case GraphicsControl::VsmSmrtAdaptive:                current.smrtAdaptiveRayCount = defaults.smrtAdaptiveRayCount; break;
-    case GraphicsControl::VsmSmrtSunAngle:                current.smrtSunAngleDeg = defaults.smrtSunAngleDeg; break;
-    case GraphicsControl::VsmSmrtTexelDither:             current.smrtTexelDitherScale = defaults.smrtTexelDitherScale; break;
-    case GraphicsControl::VsmSmrtRayLength:               current.smrtRayLengthScale = defaults.smrtRayLengthScale; break;
-    case GraphicsControl::VsmDepthBias:                   current.vsmClipmapDepthBias = defaults.vsmClipmapDepthBias; break;
-    case GraphicsControl::VsmDepthBiasDecay:              current.vsmClipmapDepthBiasDecay = defaults.vsmClipmapDepthBiasDecay; break;
-    case GraphicsControl::VsmDepthBiasFloor:              current.vsmClipmapDepthBiasFloorTexels = defaults.vsmClipmapDepthBiasFloorTexels; break;
-    case GraphicsControl::VsmNormalBias:                  current.vsmClipmapNormalBias = defaults.vsmClipmapNormalBias; break;
-    case GraphicsControl::VsmLocalLateralBias:            current.vsmLocalLateralTexels = defaults.vsmLocalLateralTexels; break;
-    case GraphicsControl::VsmLocalDepthPush:              current.vsmLocalDepthPushTexels = defaults.vsmLocalDepthPushTexels; break;
-    case GraphicsControl::VsmResidentOnly:                current.vsmResidentOnly = defaults.vsmResidentOnly; break;
-    case GraphicsControl::VsmSingleDraw:                  current.vsmSingleDraw = defaults.vsmSingleDraw; break;
-    case GraphicsControl::VsmHzbCull:                     current.vsmHzbCull = defaults.vsmHzbCull; break;
-    case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
-    case GraphicsControl::VsmWindRange:                   current.vsmWindRange = defaults.vsmWindRange; break;
-    case GraphicsControl::TessyEnabled:                   current.tessyEnabled = defaults.tessyEnabled; break;
-    case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
-    case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
-    case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;
-    case GraphicsControl::TessyGBuffer:                   current.tessyGBuffer = defaults.tessyGBuffer; break;
-    case GraphicsControl::TessySdsm:                      current.tessySdsm = defaults.tessySdsm; break;
-    case GraphicsControl::TessyLod:                       current.tessyLod = defaults.tessyLod; break;
-    case GraphicsControl::TessyLodPixelError:             current.tessyLodPixelError = defaults.tessyLodPixelError; break;
+    default: break;
     }
-
-    Sanitize(current);
-    const auto value = static_cast<unsigned>(control);
-    if (value <= static_cast<unsigned>(GraphicsControl::RhiThread))
+    if (control == GraphicsControl::DlssEnabled || control == GraphicsControl::DlssMode || control == GraphicsControl::RenderScale)
     {
-        ApplyFrame(current);
+        tab = PTab::Upscale;
+        found = true;
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::RasterBindless))
+    else if (control == GraphicsControl::ShadowMode)
     {
-        ApplyVisibility(current);
+        tab = PTab::Vsm;
+        found = true;
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::RenderScale))
+    else if (static_cast<unsigned>(control) >= static_cast<unsigned>(GraphicsControl::CsmMaxDistance) &&
+             static_cast<unsigned>(control) <= static_cast<unsigned>(GraphicsControl::CsmReceiverBias))
     {
-        ApplyUpscale(current, renderer, settings);
+        tab = PTab::Csm;
+        found = true;
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::RtWindBlasRadius))
+    // The table's: the control's knobs back to the defaults (UeSsrQuality: the preset and every field it sets), then the
+    // whole tab applied with the live values for the rest (as a tab's Apply always did).
+    for (std::size_t i = 0; i < kEntryCount; ++i)
     {
-        ApplyReflections(current, renderer, settings);
+        const bool ueField = control == GraphicsControl::UeSsrQuality && std::strncmp(kEntries[i].setting, "ssr.ue", 6) == 0;
+        if (kEntries[i].control != control && !ueField) { continue; }
+        current.value[i] = defaults.value[i];
+        current.has[i] = defaults.has[i];
+        tab = kEntries[i].tab;
+        found = true;
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::FogGridZ))
+    if (!found)
     {
-        ApplyFog(current);
+        LOG_WARNING(logging::LogCategory::App, "graphics settings: Reset of control {} moved nothing", static_cast<int>(control));
+        return false;
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::CloudCaptureTexels))
-    {
-        ApplySky(current);
-    }
-    else if (value <= static_cast<unsigned>(GraphicsControl::ChunkLodFactor))
-    {
-        ApplyLod(current);
-    }
-    else if (value >= static_cast<unsigned>(GraphicsControl::CsmMaxDistance) &&
-             value <= static_cast<unsigned>(GraphicsControl::CsmAtlasRes))
-    {
-        scene.CascadeConfig() = current.csm;
-        render::g_csmAtlasRes_game = current.csmAtlasRes;
-    }
-    else if (value >= static_cast<unsigned>(GraphicsControl::SdsmPartitions) &&
-             value <= static_cast<unsigned>(GraphicsControl::SdsmBlurMax))
-    {
-        ApplySdsm(current);
-    }
-    else if (value >= static_cast<unsigned>(GraphicsControl::ContactEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::ContactFadeBand))
-    {
-        ApplyContact(current);
-    }
-    else if (value >= static_cast<unsigned>(GraphicsControl::StreamingEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::StreamingAnisotropy))
-    {
-        ApplyStreaming(current);
-    }
-    else if (value >= static_cast<unsigned>(GraphicsControl::GiEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::SkyVisFallbackFade))
-    {
-        ApplyGi(current, settings);
-    }
-    else
-    {
-        ApplyVsm(current);
-    }
+    ApplyTab(current, tab, renderer, scene, settings);
+    if (tab == PTab::Csm) { projectCsm_ = scene.CascadeConfig(); }
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2130,7 +1238,7 @@ bool GraphicsSettingsManager::ResetUpscale(Renderer& renderer, const Scene& scen
                                            SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyUpscale(DefaultSnapshot(), renderer, settings);
+    ApplyTab(DefaultSnapshot(), PTab::Upscale, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2138,7 +1246,7 @@ bool GraphicsSettingsManager::ResetVisibility(Renderer& renderer, const Scene& s
                                               const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyVisibility(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Visibility, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2146,7 +1254,7 @@ bool GraphicsSettingsManager::ResetReflections(Renderer& renderer, const Scene& 
                                                SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyReflections(DefaultSnapshot(), renderer, settings);
+    ApplyTab(DefaultSnapshot(), PTab::Reflections, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2154,7 +1262,7 @@ bool GraphicsSettingsManager::ResetFog(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyFog(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Fog, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2162,7 +1270,7 @@ bool GraphicsSettingsManager::ResetLod(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyLod(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Lod, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2170,14 +1278,14 @@ bool GraphicsSettingsManager::ResetStreaming(Renderer& renderer, const Scene& sc
                                              const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyStreaming(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Streaming, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyGi(DefaultSnapshot(), settings);
+    ApplyTab(DefaultSnapshot(), PTab::Gi, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2194,7 +1302,7 @@ bool GraphicsSettingsManager::ResetContactShadows(Renderer& renderer, const Scen
                                                    const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyContact(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Contact, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }
 
@@ -2202,6 +1310,6 @@ bool GraphicsSettingsManager::ResetVsm(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
     const std::map<std::string, float> managedBefore = settings::TheScalability().ManagedValues();
-    ApplyVsm(DefaultSnapshot());
+    ApplyTab(DefaultSnapshot(), PTab::Vsm, renderer, const_cast<Scene&>(scene), const_cast<SceneRenderSettings&>(settings));
     return FinishReset(managedBefore, renderer, scene, settings);
 }

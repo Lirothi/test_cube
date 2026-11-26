@@ -43,6 +43,7 @@ void Sweep(const char* cmd);
 
 // harness
 void SettingsDump(const char* cmd);
+void GraphicsResetAtDump(const char* cmd);
 void BootDump(const char* cmd);
 void ScalabilityCheck(const char* cmd);
 void Intent(const char* cmd);

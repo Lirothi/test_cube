@@ -240,6 +240,9 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="sources/core/settings/SettingsSeries.cpp">
+      <Filter>sources\core\settings</Filter>
+    </ClCompile>
     <ClCompile Include="sources/pch.cpp">
       <Filter>sources</Filter>
     </ClCompile>
@@ -1109,6 +1112,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sources/core/settings/SettingsSeries.h">
+      <Filter>sources\core\settings</Filter>
+    </ClInclude>
     <ClInclude Include="sources/pch.h">
       <Filter>sources</Filter>
     </ClInclude>
@@ -2186,6 +2192,24 @@
     <None Include="shaders\shared\lighting_slots.h">
       <Filter>shaders\shared</Filter>
     </None>
+    <None Include="shaders\shared\cloud.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\editor_preview.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\editor_preview_lines.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\night_sky.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\per_view.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\sky_atmosphere.h">
+      <Filter>shaders\shared</Filter>
+    </None>
     <None Include="shaders\shared\camera_hzb.h">
       <Filter>shaders\shared</Filter>
     </None>
@@ -2241,6 +2265,9 @@
       <Filter>shaders\shared</Filter>
     </None>
     <None Include="shaders\shared\shadow_cull.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\tessy_atlas_cull.h">
       <Filter>shaders\shared</Filter>
     </None>
     <None Include="shaders\shared\sky_lut_debug.h">

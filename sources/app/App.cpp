@@ -69,6 +69,7 @@ BootOptions& Boot()
 #include "app/settings/Scalability.h"       // sg.* (docs/scalability_plan.md)
 #include "app/settings/SettingContext.h"    // R2.1: what a settings registry row reaches
 #include "core/settings/SettingsRegistry.h" // R2.1: the names --set takes, one row each
+#include "core/settings/SettingsSeries.h" // MCP set_settings / reset_settings (R2.n)
 #include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
 #include <fstream>
 #if WITH_EDITOR
@@ -1006,25 +1007,10 @@ namespace
         bool Apply(const std::string& name, float value) override
         {
             // The value before the first change of a name, for reset_settings (architecture plan R2.n): a project-wide
-            // switch the document does not hold no longer stays as last set. An action (race.start) has none to keep.
-            const settings::SettingDesc* row = settings::Registry().Find(name);
-            const bool action = row && (row->flags & settings::SettingAction);
-            const auto noted = [&](const std::string& n) {
-                const auto is = [&](const Noted& b) { return b.name == n; };
-                return std::any_of(before_.begin(), before_.end(), is) || std::any_of(unreadable_.begin(), unreadable_.end(), is);
-            };
-            const bool wasPinned = settings::TheScalability().Pins().count(name) != 0; // a boot --set pin stays
-            float was = 0.0f;
-            const bool readable = !action && !noted(name) && ReadSweepValue(scene_, settings_, name, was);
-            const bool known = ApplySweepValue(scene_, settings_, name, value);
-            if (known)
-            {
-                LOG_INFO(logging::LogCategory::Editor, "MCP set_settings {} = {}", name, value);
-                settings::TheScalability().Pin(name); // what MCP set, the graphics levels leave alone (§3.3)
-                if (readable) { before_.push_back({ name, was, wasPinned }); }
-                else if (!action && !noted(name)) { unreadable_.push_back({ name, 0.0f, wasPinned }); }
-            }
-            return known;
+            // switch the document does not hold no longer stays as last set (core/settings/SettingsSeries).
+            const bool applied = series_.Set(SeriesHost(), name, value);
+            if (applied) { LOG_INFO(logging::LogCategory::Editor, "MCP set_settings {} = {}", name, value); }
+            return applied;
         }
         bool Read(const std::string& name, float& out) override { return ReadSweepValue(scene_, settings_, name, out); }
         std::vector<std::string> Names(const std::string& prefix) override
@@ -1049,38 +1035,8 @@ namespace
         }
         std::string Restore() override
         {
-            // Newest first, so a name set twice ends at its first value; the pins go with it (§3.3: the levels take it).
-            // The count is of names, each once, whose old value was taken back (a refusal is named instead).
-            std::vector<std::string> putBack;
-            std::vector<std::string> refused;
-            for (auto it = before_.rbegin(); it != before_.rend(); ++it)
-            {
-                const bool ok = ApplySweepValue(scene_, settings_, it->name, it->value);
-                if (!it->wasPinned) { settings::TheScalability().Unpin(it->name); }
-                std::vector<std::string>& list = ok ? putBack : refused;
-                if (std::find(list.begin(), list.end(), it->name) == list.end()) { list.push_back(it->name); }
-            }
-            for (const Noted& n : unreadable_)
-            {
-                if (!n.wasPinned) { settings::TheScalability().Unpin(n.name); }
-            }
-            std::string text = "Put back " + std::to_string(putBack.size()) + " name(s) set_settings changed.";
-            if (!refused.empty())
-            {
-                text += " Refused their old value:";
-                for (const std::string& n : refused) { text += " " + n; }
-                text += ".";
-            }
-            if (!unreadable_.empty())
-            {
-                // No reader, or nothing to read it from when it was set (the ocean's colours on a level without one).
-                text += " Not readable when set, they stay as set:";
-                for (const Noted& n : unreadable_) { text += " " + n.name; }
-                text += ".";
-            }
+            const std::string text = series_.Restore(SeriesHost());
             LOG_INFO(logging::LogCategory::Editor, "MCP reset_settings: {}", text);
-            before_.clear();
-            unreadable_.clear();
             return text;
         }
         void ResetExposure() override { renderer_.Exposure().RequestReset(); }
@@ -1369,19 +1325,33 @@ namespace
             return out;
         }
     private:
-        // What set_settings changed since the last reset_settings: the value before its first change (or none: no reader)
-        // and whether the graphics levels' pin on it was there already (a boot --set's stays).
-        struct Noted
+        // set_settings / reset_settings through the scene: what a series changed, and the scalability pins before it.
+        settings::SettingsSeries::Host SeriesHost()
         {
-            std::string name;
-            float value = 0.0f;
-            bool wasPinned = false;
-        };
+            settings::SettingsSeries::Host h;
+            h.read = [this](const std::string& n, float& out) { return ReadSweepValue(scene_, settings_, n, out); };
+            h.apply = [this](const std::string& n, float v) { return ApplySweepValue(scene_, settings_, n, v); };
+            h.isAction = [](const std::string& n) {
+                const settings::SettingDesc* row = settings::Registry().Find(n);
+                return row != nullptr && (row->flags & settings::SettingAction) != 0u;
+            };
+            h.rewritesKnobs = [](const std::string& n) { return n.rfind("sg.", 0) == 0; };
+            h.knobs = [] {
+                std::vector<std::string> out;
+                for (const settings::ScalabilityKnob& k : settings::ScalabilityKnobs()) { out.emplace_back(k.name); }
+                return out;
+            };
+            h.pins = [] { return settings::TheScalability().Pins(); };
+            h.pin = [](const std::string& n, bool on) {
+                if (on) { settings::TheScalability().Pin(n); }
+                else { settings::TheScalability().Unpin(n); }
+            };
+            return h;
+        }
         Scene& scene_;
         SceneRenderSettings& settings_;
         Renderer& renderer_;
-        std::vector<Noted> before_;
-        std::vector<Noted> unreadable_;
+        settings::SettingsSeries series_;
     };
 }
 #endif
@@ -1867,7 +1837,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         harness::RtAuditHarness rtAuditHarness;
         harness::IntentHarness intentHarness;
         harness::SettingsDumpHarness settingsDumpHarness(
-            [](Scene& s, const SceneRenderSettings& rs, const std::string& name, float& out) { return ReadSweepValue(s, rs, name, out); });
+            [](Scene& s, const SceneRenderSettings& rs, const std::string& name, float& out) { return ReadSweepValue(s, rs, name, out); },
+            [this](harness::FrameContext& ctx, bool reset, std::vector<std::string>& lines) {
+                GraphicsSettingsManager& g = appController_.GraphicsSettings();
+                if (reset) // writes user_settings.json: a gate's copy
+                {
+                    const std::string& one = Boot().harness.graphicsResetSetting;
+                    if (one.empty()) { g.ResetAll(ctx.renderer, ctx.scene, ctx.settings); }
+                    else { g.ResetSetting(one, ctx.renderer, ctx.scene, ctx.settings); }
+                }
+                g.DescribeFile(ctx.renderer, ctx.scene, ctx.settings, reset ? "graphicsReset:" : "graphics:", lines);
+            });
         std::unique_ptr<harness::Harness> sceneStressHarness = harness::MakeSceneStressHarness(hWnd_, renderer, scene, levelManager);
         // R3.4: the run's harnesses, one list for each of afterFrame's three places, in the order they always ran there;
         // each asked whether its switch is on. Before the renderer's requests: a scalability step's dlss.mode is taken
@@ -2199,8 +2179,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
         logInputLag(" (the rest of the run)");
         // The stress harness holds the device's InfoQueue and its DRED file: gone before the GPU teardown, as its driver
-        // always was (R3.3e: released after Renderer::Shutdown, the process died at its exit). Its list's pointer is not
-        // used after the loop.
+        // always was (R3.3e). (The access violation its runs had at exit was not this reference but the OTA Streamline
+        // plugins, Renderer::InitD3D12.) Its list's pointer is not used after the loop.
         sceneStressHarness.reset();
 
         timeEndPeriod(1);

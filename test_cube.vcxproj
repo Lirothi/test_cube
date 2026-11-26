@@ -522,6 +522,7 @@
     </ClCompile>
     <ClCompile Include="sources/core/vfs/Vfs.cpp" />
     <ClCompile Include="sources/core/settings/SettingsRegistry.cpp" />
+    <ClCompile Include="sources/core/settings/SettingsSeries.cpp" />
     <ClCompile Include="sources/core/vfs/VfsTools.cpp" />
     <ClCompile Include="sources/core/logging/Log.cpp" />
     <ClCompile Include="sources/core/logging/LogQueue.cpp" />
@@ -849,6 +850,7 @@
     <ClInclude Include="sources/core/vfs/PakCrypto.h" />
     <ClInclude Include="sources/core/vfs/Vfs.h" />
     <ClInclude Include="sources/core/settings/SettingsRegistry.h" />
+    <ClInclude Include="sources/core/settings/SettingsSeries.h" />
     <ClInclude Include="sources/core/vfs/VfsMounts.h" />
     <ClInclude Include="sources/core/logging/Log.h" />
     <ClInclude Include="sources/core/logging/LogCategory.h" />
@@ -1051,6 +1053,12 @@
     <None Include="shaders\water_composite_cs.hlsl" />
     <None Include="shaders\shared\shader_types.h" />
     <None Include="shaders\shared\lighting_slots.h" />
+    <None Include="shaders\shared\cloud.h" />
+    <None Include="shaders\shared\editor_preview.h" />
+    <None Include="shaders\shared\editor_preview_lines.h" />
+    <None Include="shaders\shared\night_sky.h" />
+    <None Include="shaders\shared\per_view.h" />
+    <None Include="shaders\shared\sky_atmosphere.h" />
     <None Include="shaders\shared\camera_hzb.h" />
     <None Include="shaders\shared\cascade_hzb.h" />
     <None Include="shaders\shared\compose_slots.h" />
@@ -1070,6 +1078,7 @@
     <None Include="shaders\shared\reflection_pyramid.h" />
     <None Include="shaders\shared\rt_reflect.h" />
     <None Include="shaders\shared\shadow_cull.h" />
+    <None Include="shaders\shared\tessy_atlas_cull.h" />
     <None Include="shaders\shared\sky_lut_debug.h" />
     <None Include="shaders\shared\sky_occlusion.h" />
     <None Include="shaders\shared\sky_visibility.h" />

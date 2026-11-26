@@ -3,10 +3,11 @@
 // most of it. Each segment is a screen-space quad (an instance, six vertices), its edge smoothed over a pixel: a D3D line
 // is one pixel wide and aliased. Compiled at runtime as vs_5_0 / ps_5_0 (EditorPreviewRenderer).
 
+#include "shared/shader_types.h"
+#include "shared/editor_preview_lines.h" // LinesCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer LinesCB : register(b0)
 {
-    row_major float4x4 gViewProj; // mesh space -> clip, the picture's own
-    float4 gViewport;             // xy = the target's size in pixels
+    EDITOR_PREVIEW_LINES_FIELDS
 };
 
 // How far a behind-the-mesh line shows, of its full alpha.

@@ -46,9 +46,9 @@ bool SetSkyScale(SettingContext& c, std::string_view setting, float value)
 {
     auto& s = c.scene.SkyAtmosphereRef();
     const SkyAtmosphereParameters earth{};
-    float rayleigh = SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint);
-    float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
-    float ozone = SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
+    float rayleigh = SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint);
+    float mie = SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint);
+    float ozone = SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint);
     const float v = std::clamp(value, 0.0f, 10.0f);
     (setting == "sky.rayleighScale" ? rayleigh : setting == "sky.mieScale" ? mie : ozone) = v;
     SetSkyMedium(s, rayleigh, mie, ozone);
@@ -59,9 +59,9 @@ float SkyScale(SettingContext& c, std::string_view name)
 {
     const SkyAtmosphereSettings& s = c.scene.SkyAtmosphereRef();
     const SkyAtmosphereParameters earth{};
-    return name == "sky.rayleighScale" ? SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint)
-         : name == "sky.mieScale" ? SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint)
-                                  : SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
+    return name == "sky.rayleighScale" ? SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint)
+         : name == "sky.mieScale" ? SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint)
+                                  : SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint);
 }
 const SettingDesc kSkyRows[] = {
     // P4: the SCENE-side brightness knobs, so a sweep can measure them against the camera-side
@@ -125,10 +125,10 @@ const SettingDesc kSkyRows[] = {
                {
                    auto& s = c.scene.SkyAtmosphereRef();
                    const SkyAtmosphereParameters earth{};
-                   const float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
+                   const float mie = SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint);
                    s.mieAbsorptionScale = value < 0.0f ? -1.0f : std::min(value, 10.0f);
-                   SetSkyMedium(s, SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint), mie,
-                                SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint));
+                   SetSkyMedium(s, SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint), mie,
+                                SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint));
                    return true;
                },
                [](SettingContext& c, float& out) { out = static_cast<float>(c.scene.SkyAtmosphereRef().mieAbsorptionScale); return true; }),
@@ -137,18 +137,18 @@ const SettingDesc kSkyRows[] = {
                [](SettingContext& c, float value) { c.scene.SkyAtmosphereRef().heightFogContribution = std::clamp(value, 0.0f, 10.0f); return true; },
                [](SettingContext& c, float& out) { out = AsFloat(c.scene.SkyAtmosphereRef().heightFogContribution); return true; }),
     TC_SETTING("sky.mieAnisotropy", Float, SettingLevelOwned,
-               [](SettingContext& c, float value) { c.scene.SkyAtmosphereRef().parameters.mieScattering[3] = std::clamp(value, 0.0f, 0.999f); return true; },
-               [](SettingContext& c, float& out) { out = AsFloat(c.scene.SkyAtmosphereRef().parameters.mieScattering[3]); return true; }),
+               [](SettingContext& c, float value) { c.scene.SkyAtmosphereRef().parameters.MieScattering[3] = std::clamp(value, 0.0f, 0.999f); return true; },
+               [](SettingContext& c, float& out) { out = AsFloat(c.scene.SkyAtmosphereRef().parameters.MieScattering[3]); return true; }),
     TC_SETTING("sky.multiScatteringFactor", Float, SettingLevelOwned,
-               [](SettingContext& c, float value) { c.scene.SkyAtmosphereRef().parameters.groundAlbedo[3] = std::clamp(value, 0.0f, 10.0f); return true; },
-               [](SettingContext& c, float& out) { out = AsFloat(c.scene.SkyAtmosphereRef().parameters.groundAlbedo[3]); return true; }),
+               [](SettingContext& c, float value) { c.scene.SkyAtmosphereRef().parameters.GroundAlbedo[3] = std::clamp(value, 0.0f, 10.0f); return true; },
+               [](SettingContext& c, float& out) { out = AsFloat(c.scene.SkyAtmosphereRef().parameters.GroundAlbedo[3]); return true; }),
     TC_SETTING("sky.groundAlbedo", Float, SettingTransient,
                [](SettingContext& c, float value)
                {
-                   for (unsigned i = 0; i < 3; ++i) c.scene.SkyAtmosphereRef().parameters.groundAlbedo[i] = std::clamp(value, 0.0f, 1.0f);
+                   for (unsigned i = 0; i < 3; ++i) c.scene.SkyAtmosphereRef().parameters.GroundAlbedo[i] = std::clamp(value, 0.0f, 1.0f);
                    return true;
                },
-               [](SettingContext& c, float& out) { out = static_cast<float>(c.scene.SkyAtmosphereRef().parameters.groundAlbedo[0]); return true; }),
+               [](SettingContext& c, float& out) { out = static_cast<float>(c.scene.SkyAtmosphereRef().parameters.GroundAlbedo[0]); return true; }),
     // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), headless.
     TC_SETTING("lightShafts.enabled", Float, SettingLevelOwned | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { c.scene.SunLightRef().SetLightShaftsEnabled(value != 0.0f); return true; },

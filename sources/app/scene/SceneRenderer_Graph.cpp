@@ -64,47 +64,47 @@ namespace
     {
         SkyViewFrameData skyView{};
         const auto& a = skySettings.parameters;
-        skyView.planet[0] = a.radii[0] + std::max(0.001f, heightMetres / kMetresPerKm);
-        skyView.planet[1] = a.radii[0]; skyView.planet[2] = a.radii[1];
-        skyView.illuminance[3] = skySettings.luminanceScale;
-        skyView.exposure[0] = preExposure;
-        skyView.exposure[1] = skySettings.skyLuminanceFactor; // UE SkyLuminanceFactor: the sky pixel, its capture, the distant light
-        skyView.sunDirection[3] = sunRadius;
+        skyView.SkyPlanet[0] = a.AtmosphereRadii[0] + std::max(0.001f, heightMetres / kMetresPerKm);
+        skyView.SkyPlanet[1] = a.AtmosphereRadii[0]; skyView.SkyPlanet[2] = a.AtmosphereRadii[1];
+        skyView.SkyIlluminance[3] = skySettings.luminanceScale;
+        skyView.SkyExposure[0] = preExposure;
+        skyView.SkyExposure[1] = skySettings.skyLuminanceFactor; // UE SkyLuminanceFactor: the sky pixel, its capture, the distant light
+        skyView.SkySunDirection[3] = sunRadius;
         if (light)
         {
             const auto d = -light->GetDirection();
             const float invLength = 1.0f / std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
-            skyView.sunDirection[0] = d.x * invLength;
-            skyView.sunDirection[1] = d.z * invLength;
-            skyView.sunDirection[2] = d.y * invLength;
+            skyView.SkySunDirection[0] = d.x * invLength;
+            skyView.SkySunDirection[1] = d.z * invLength;
+            skyView.SkySunDirection[2] = d.y * invLength;
             // OUTER SPACE, not the attenuated colour: these LUTs integrate the extinction
             // themselves, so the attenuated one would count the atmosphere twice.
             const auto color = light->GetOuterSpaceIlluminance();
-            skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
+            skyView.SkyIlluminance[0] = color.x; skyView.SkyIlluminance[1] = color.y; skyView.SkyIlluminance[2] = color.z;
         }
         // Time-of-day plan N1: the moon, the atmosphere's second light, in the same local frame (x, z, y).
         if (moon.present)
         {
-            skyView.light1Direction[0] = moon.toward[0];
-            skyView.light1Direction[1] = moon.toward[2];
-            skyView.light1Direction[2] = moon.toward[1];
-            skyView.light1Direction[3] = moon.halfApexRad;
+            skyView.SkyLight1Direction[0] = moon.toward[0];
+            skyView.SkyLight1Direction[1] = moon.toward[2];
+            skyView.SkyLight1Direction[2] = moon.toward[1];
+            skyView.SkyLight1Direction[3] = moon.halfApexRad;
             for (int c = 0; c < 3; ++c)
             {
-                skyView.light1Illuminance[c] = moon.illuminance[c];
-                skyView.moonDisc[c] = moon.fullIlluminance[c];
+                skyView.SkyLight1Illuminance[c] = moon.illuminance[c];
+                skyView.SkyMoonDisc[c] = moon.fullIlluminance[c];
             }
-            skyView.light1Illuminance[3] = moon.earthshine;
-            skyView.moonDisc[3] = moon.phaseAngleRad;
-            skyView.moonDisc2[0] = moon.litScale;
-            skyView.moonDisc2[2] = moon.discAdaptation; // N4: the eye's adaptation to the disc
-            skyView.moonDisc2[3] = moon.limbAngle;      // N4: the bright limb's position angle
+            skyView.SkyLight1Illuminance[3] = moon.earthshine;
+            skyView.SkyMoonDisc[3] = moon.phaseAngleRad;
+            skyView.SkyMoonDisc2[0] = moon.litScale;
+            skyView.SkyMoonDisc2[2] = moon.discAdaptation; // N4: the eye's adaptation to the disc
+            skyView.SkyMoonDisc2[3] = moon.limbAngle;      // N4: the bright limb's position angle
         }
         // Time-of-day plan N2: the night sky's light as a whole, for the distant light.
         if (night.present)
         {
-            for (int c = 0; c < 3; ++c) { skyView.nightGlow[c] = night.airglow[c]; }
-            skyView.nightGlow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
+            for (int c = 0; c < 3; ++c) { skyView.SkyNightGlow[c] = night.airglow[c]; }
+            skyView.SkyNightGlow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
         }
         return skyView;
     }
@@ -115,18 +115,18 @@ namespace
     {
         NightSkyFrameData data{};
         if (!night.present) { return data; }
-        for (int c = 0; c < 3; ++c) { data.glow[c] = night.airglow[c]; }
-        data.glow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
-        data.layers[0] = night.stars;
-        data.layers[1] = mapReady ? night.milkyWay : 0.0f;
-        data.layers[2] = night.twinkle;
-        data.layers[3] = night.timeSeconds;
-        float* rows[3] = {data.row0, data.row1, data.row2};
+        for (int c = 0; c < 3; ++c) { data.nightGlow[c] = night.airglow[c]; }
+        data.nightGlow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
+        data.nightLayers[0] = night.stars;
+        data.nightLayers[1] = mapReady ? night.milkyWay : 0.0f;
+        data.nightLayers[2] = night.twinkle;
+        data.nightLayers[3] = night.timeSeconds;
+        float* rows[3] = {data.nightRow0, data.nightRow1, data.nightRow2};
         for (int r = 0; r < 3; ++r)
         {
             for (int c = 0; c < 3; ++c) { rows[r][c] = night.worldToEquatorial[r * 3 + c]; }
         }
-        data.row0[3] = 1.0f;
+        data.nightRow0[3] = 1.0f;
         return data;
     }
 }
@@ -146,7 +146,7 @@ VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) 
     const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
     in.projZ33 = projNoJitter.m._33;
     in.projZ43 = projNoJitter.m._43;
-    in.planetRadiusKm = frame_->settings.skyAtmosphere.parameters.radii[0];
+    in.planetRadiusKm = frame_->settings.skyAtmosphere.parameters.AtmosphereRadii[0];
     // TIME-OF-DAY PLAN N3: THE CLOUDS' LIGHT. The sun while it can still reach the layer's top -- which
     // it does for minutes after it has set at the ground: the earth's shadow climbs, covering heights
     // below R (1 / cos d - 1) at a depression d (the layer's top, ~3.5 km, until ~1.9 degrees) -- then the
@@ -173,7 +173,7 @@ VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) 
             const float sunElevationDeg = std::asin(std::clamp(-sun->GetDirection().y, -1.0f, 1.0f)) * 57.2957795f;
             if (!moonLightsGround || sunElevationDeg > -reachDeg) { cloudLight = sun; in.lightBody = 0u; }
             in.perSampleTransmittance = true;
-            in.atmosphereTopKm = sky.parameters.radii[1];
+            in.atmosphereTopKm = sky.parameters.AtmosphereRadii[1];
             in.transmittanceResource = skyAtmosphere_.TransmittanceResource();
             in.transmittanceSrv = skyAtmosphere_.TransmittanceSrv();
             in.sunIlluminance = cloudLight->GetOuterSpaceIlluminance();
@@ -1574,7 +1574,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                                frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight,
                                frame_->skyMoon, frame_->nightSky);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, gb.pGbufDone, gb.pSkyLuts);
-    skyView.planet[3] = pSkyView != gb.pGbufDone ? 1.0f : 0.0f;
+    skyView.SkyPlanet[3] = pSkyView != gb.pGbufDone ? 1.0f : 0.0f;
     // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
     // between the camera and everything it hazes -- the ground, the water, the deck's own underside --
     // is lit by what comes through the deck, not by the sun: without this a closed deck kept a bright
@@ -1583,7 +1583,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     {
         const float scale = CloudAirSunScale(frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f);
         // Both lights: the deck shades the air from the moon as from the sun.
-        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; aerialView.light1Illuminance[c] *= scale; }
+        for (int c = 0; c < 3; ++c) { aerialView.SkyIlluminance[c] *= scale; aerialView.SkyLight1Illuminance[c] *= scale; }
     }
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,
         *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
@@ -1929,11 +1929,11 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // The two views go to graphPass_ (too big for the builder's closure).
     SkyViewFrameData& drawView = graphPass_.skyDrawView;
     drawView = skyView;
-    const bool moonTexture = skyView.planet[3] != 0 && skyView.light1Direction[3] > 0.0f && skyAtmosphere_.MoonReady();
-    drawView.moonDisc2[1] = moonTexture ? 1.0f : 0.0f;
+    const bool moonTexture = skyView.SkyPlanet[3] != 0 && skyView.SkyLight1Direction[3] > 0.0f && skyAtmosphere_.MoonReady();
+    drawView.SkyMoonDisc2[1] = moonTexture ? 1.0f : 0.0f;
     // N2: so is the Milky Way's map.
     graphPass_.skyNightView = MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady());
-    const bool nightMap = skyView.planet[3] != 0 && graphPass_.skyNightView.layers[1] > 0.0f;
+    const bool nightMap = skyView.SkyPlanet[3] != 0 && graphPass_.skyNightView.nightLayers[1] > 0.0f;
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, skyDeps, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
@@ -1943,7 +1943,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             const SkyViewFrameData& drawView = graphPass_.skyDrawView;
             const NightSkyFrameData& nightView = graphPass_.skyNightView;
             ctx.UseDeclared();
-            if (drawView.planet[3] != 0)
+            if (drawView.SkyPlanet[3] != 0)
             {
                 ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
@@ -1955,7 +1955,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             frame_->skybox->SetNightSky(nightView, nightMap ? skyAtmosphere_.NightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
             // N4: the moon's glow, drawn with its disc (none over an HDRI sky or with no moon).
             const SkyMoonFrame& moon = frame_->skyMoon;
-            const bool glow = drawView.planet[3] != 0 && moon.present;
+            const bool glow = drawView.SkyPlanet[3] != 0 && moon.present;
             frame_->skybox->SetMoonGlow(glow ? moon.glow : 0.0f, glow ? moon.glowRadiusRad : 0.0f);
             // Ultra Dynamic Sky's sky material over the atmosphere (procedural sky only; skybox.hlsl applies it there).
             frame_->skybox->SetUdsSky(frame_->udsSky);

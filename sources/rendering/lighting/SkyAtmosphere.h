@@ -218,8 +218,10 @@ private:
     {
         SkyAtmosphereParameters atmosphere;
         SkyViewFrameData sky;
-        Math::mat4 invView, invProj;
-        Math::float4 start;
+        // shaders/shared/sky_atmosphere.h's SKY_AERIAL tail (architecture plan R5.3).
+        using float4 = shader_shared::float4;
+        using float4x4 = shader_shared::float4x4;
+        SKY_AERIAL_FIELDS
     };
     AerialConstants aerialConstants_{};
     // BuildView's inputs (256 B), the same way: written by BuildView, read by its body this frame.

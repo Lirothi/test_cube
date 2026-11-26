@@ -128,7 +128,16 @@ const SettingDesc kShadowRows[] = {
     // and is a RESOURCE size, not per-scene tuning); applied at GPU idle by
     // Scene::ReconcileShadowMode, so setting it here is safe at any time.
     TC_SETTING("csm.atlasRes", Float, SettingPersistent | SettingScalable | SettingCostIdleGpu,
-               [](SettingContext&, float value) { render::g_csmAtlasRes_game = static_cast<unsigned>(std::clamp(value, static_cast<float>(render::kCsmAtlasResMin), static_cast<float>(render::kCsmAtlasResMax))); return true; },
+               [](SettingContext&, float value)
+               {
+                   // Powers of two only: the 2x2 tile split and the gutter arithmetic assume an even edge (the graphics
+                   // file's load did this before R2.n; the row is the one place now).
+                   const float r = std::clamp(value, static_cast<float>(render::kCsmAtlasResMin), static_cast<float>(render::kCsmAtlasResMax));
+                   unsigned p = render::kCsmAtlasResMin;
+                   while (static_cast<float>(p * 2u) <= r) { p *= 2u; }
+                   render::g_csmAtlasRes_game = p;
+                   return true;
+               },
                [](SettingContext&, float& out) { out = static_cast<float>(static_cast<std::uint64_t>(render::g_csmAtlasRes_game)); return true; }),
     // S15 (SDSM). Process globals, so no `scene` -- they must survive a level switch and be
     // settable before any Scene exists, exactly like the mode switch itself.
@@ -236,7 +245,7 @@ const SettingDesc kShadowRows[] = {
                [](SettingContext&, float& out) { out = AsFloat(render::g_localShadowCacheWind_game); return true; }),
     // The lamps' shadows sway only within this many metres of the camera (< 0 = everywhere).
     TC_SETTING("shadow.localWindRange", Float, SettingPersistent | SettingScalable | SettingCostNextFrame,
-               [](SettingContext&, float value) { render::g_localShadowWindRange_game = std::min(value, 100000.0f); return true; },
+               [](SettingContext&, float value) { value = std::isfinite(value) ? std::clamp(value, -1.0f, 2000.0f) : 30.0f; render::g_localShadowWindRange_game = std::min(value, 100000.0f); return true; },
                [](SettingContext&, float& out) { out = static_cast<float>(render::g_localShadowWindRange_game); return true; }),
     // S7
     TC_SETTING("shadow.localDirectRead", Bool, SettingTransient,

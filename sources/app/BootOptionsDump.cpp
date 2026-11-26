@@ -120,6 +120,8 @@ bool WriteBootDump(const std::string& path)
     line("harness.scalabilityCheck", Bool(h.scalabilityCheck));
     line("harness.scalabilityCheckExit", Num(h.scalabilityCheckExit));
     line("harness.settingsDumpPath", h.settingsDumpPath);
+    line("harness.graphicsResetAtDump", Bool(h.graphicsResetAtDump));
+    line("harness.graphicsResetSetting", h.graphicsResetSetting);
     line("harness.sceneStress", Bool(h.sceneStress));
     line("harness.sceneStressIterations", Num(h.sceneStressIterations));
     line("harness.sceneStressGbv", Bool(h.sceneStressGbv));

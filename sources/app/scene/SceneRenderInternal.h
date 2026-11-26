@@ -9,6 +9,7 @@
 // `inline` (a header included by more than one TU would otherwise multiply-define them).
 
 #include "shaders/shared/shader_types.h" // R5.3: the HLSL type names for C++
+#include "shaders/shared/per_view.h" // PerViewCB's fields, once (R5.3)
 #include "shaders/shared/glass_view.h"   // ...and GlassView's fields, once
 #include <cmath>
 #include <algorithm>
@@ -135,39 +136,19 @@ namespace scene_internal
 
     // Matches gbuffer_common.hlsli `cbuffer PerView : register(b1)`. The depth-only
     // shadow shaders consume only viewProj (the other two are left identity/unused).
+    // The wind tail (bytes 192..223) is the shadow VS's too (shadow_indirect_csm.hlsl, the same list). The shadow-depth
+    // bias (224..239) is zero on every path but Pass_CSM -- ApplyShadowDepthBias early-outs on all-zero. NOT at 240 as
+    // the plan drafted: 224 is taken only in the VSM PAGE slot (gWindFade), and the VSM_PAGE permutation declares no
+    // `cbuffer PerView` at all -- two independent layouts, nothing here to keep in step with byte 224 there. 240: the
+    // G-buffer's view only (gbLightToward: GB1.a, FinalizeGBuffer / SunGeometricTerminator); the shadow views leave it 0.
     struct PerViewCB
     {
-        mat4 viewProj;
-        mat4 viewProjNoJitter;
-        mat4 prevViewProjNoJitter;
-        // W3: global wind, consumed by the gbuffer VS (W4) and — since W5 — by the shadow VS too
-        // (shadow_indirect_csm.hlsl declares the same tail at offset 192). Layout matches the HLSL
-        // `cbuffer PerView` in gbuffer_common.hlsli: time, prevTime, float2 windDirXZ, then
-        // swayAmp, swayFreq, gustMul, prevGustMul.
-        float windTime = 0.0f;
-        float windPrevTime = 0.0f;
-        float windDirX = 1.0f;
-        float windDirZ = 0.0f;
-        float windSwayAmp = 0.0f;
-        float windSwayFreq = 0.0f;
-        float windGustMul = 1.0f;
-        float windPrevGustMul = 1.0f;
-        // S6: the shadow-depth pass's bias parameters, at bytes 224..239. Zero on every path but
-        // Pass_CSM -- ApplyShadowDepthBias early-outs on all-zero, so this tail costs the gbuffer
-        // and the VSM paths nothing.
-        //
-        // NOTE, deliberately NOT at 240 as the plan drafted: 224 is occupied only in the VSM PAGE
-        // slot (gWindFade), and the VSM_PAGE shader permutation declares no `cbuffer PerView` at
-        // all -- it reads its per-view data out of that slot instead. So this CB and that slot are
-        // two independent layouts, and there is nothing here to keep in step with byte 224 there.
-        float shadowConstBias = 0.0f;   // 224
-        float shadowSlopeBias = 0.0f;   // 228
-        float shadowMaxSlope  = 0.0f;   // 232
-        float shadowClampNear = 0.0f;   // 236 (S7 pancaking; plumbed here, still unused)
-        // 240: the G-buffer's view only -- the frame's directional light, xyz TOWARD it, w = 1 when set: GB1.a says
-        // whether the visible side's vertex normal faces it (gbuffer_common.hlsli FinalizeGBuffer, lighting_cs
-        // SunGeometricTerminator). The shadow views leave it 0 and no shadow shader reads it.
-        float gbLightToward[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        // shaders/shared/per_view.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float2 = shader_shared::float2;
+        using float4 = shader_shared::FloatArray<4>; // gbLightToward[i]
+        using float4x4 = shader_shared::float4x4;
+        PER_VIEW_FIELDS
+        PER_VIEW_GBUFFER_FIELDS
     };
     static_assert(sizeof(PerViewCB) == 256, "PerViewCB must match the gbuffer/shadow HLSL layout");
     // S15: what SDSM's analyze pass writes per partition, in this very layout, straight into a
@@ -220,8 +201,8 @@ namespace scene_internal
         if (!wind) { return; } // no wind state -> defaults (swayAmp 0 => WindOffset returns 0)
         vc.windTime = wind->time;
         vc.windPrevTime = wind->prevTime;
-        vc.windDirX = wind->windDirXZ.x;
-        vc.windDirZ = wind->windDirXZ.y;
+        vc.windDirXZ.x = wind->windDirXZ.x;
+        vc.windDirXZ.y = wind->windDirXZ.y;
         vc.windSwayAmp = wind->swayAmplitude;
         vc.windSwayFreq = wind->swayFrequency;
         vc.windGustMul = wind->gustMul;

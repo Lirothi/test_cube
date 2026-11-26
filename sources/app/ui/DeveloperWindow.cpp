@@ -303,6 +303,14 @@ bool DeveloperWindow::DrawSettingsTab(Scene& scene, SceneRenderSettings& setting
     static int drawnFrame = -2;
     static std::string held; // the row whose edit is in progress, and its value (see the Int / Float widgets)
     static float heldValue = 0.0f;
+    // The rows' values, read every 30 frames (a value changed elsewhere shows within half a second): a row's reader
+    // reaches whatever its name does, so reading waits for the render half's frame -- on those frames only, and before
+    // an edit is applied; the other frames draw from here (AGENTS.md: a panel waits only where it reaches them).
+    static std::vector<float> cachedValue;
+    static std::vector<std::uint8_t> cachedReadable;
+    static std::vector<int> cachedGeneration;
+    static int generation = 0;
+    static int generationFrame = 0;
     const bool opened = ImGui::GetFrameCount() != drawnFrame + 1;
     drawnFrame = ImGui::GetFrameCount();
     const settings::SettingsRegistry& registry = settings::Registry();
@@ -319,7 +327,23 @@ bool DeveloperWindow::DrawSettingsTab(Scene& scene, SceneRenderSettings& setting
             for (const std::string& k : keys) { entries.push_back({ std::string(f.prefix) + k, f.type, f.flags }); }
         }
         std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.name < b.name; });
+        cachedValue.assign(entries.size(), 0.0f);
+        cachedReadable.assign(entries.size(), 0u);
+        cachedGeneration.assign(entries.size(), -1);
     }
+    if (opened || ImGui::GetFrameCount() - generationFrame >= 30)
+    {
+        ++generation;
+        generationFrame = ImGui::GetFrameCount();
+    }
+    bool waited = false;
+    const auto reachRender = [&waited] {
+        if (!waited)
+        {
+            threading::WaitRenderForGame("DeveloperWindow::DrawSettingsTab (rows)");
+            waited = true;
+        }
+    };
     ImGui::TextWrapped("Every --set name (%zu), through the settings registry (app/settings/*SettingRows.cpp): what --set, "
                        "--sweep and MCP set_settings write. Transient unless tagged P (saved with the graphics, as an edit "
                        "in the other tabs).", entries.size());
@@ -350,32 +374,46 @@ bool DeveloperWindow::DrawSettingsTab(Scene& scene, SceneRenderSettings& setting
         {
             for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
             {
-                const Entry& e = entries[static_cast<std::size_t>(shown[static_cast<std::size_t>(row)])];
+                const std::size_t index = static_cast<std::size_t>(shown[static_cast<std::size_t>(row)]);
+                const Entry& e = entries[index];
+                if (cachedGeneration[index] != generation)
+                {
+                    reachRender();
+                    float read = 0.0f;
+                    cachedReadable[index] = registry.Read(ctx, e.name, read) ? 1u : 0u;
+                    cachedValue[index] = read;
+                    cachedGeneration[index] = generation;
+                }
+                const auto apply = [&](float v) {
+                    reachRender();
+                    cachedGeneration[index] = -1; // read back next frame: the row may clamp it
+                    return registry.Apply(ctx, e.name, v);
+                };
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(e.name.c_str());
                 ImGui::TableNextColumn();
                 ImGui::PushID(e.name.c_str());
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                float value = 0.0f;
-                const bool readable = registry.Read(ctx, e.name, value);
+                float value = cachedValue[index];
+                const bool readable = cachedReadable[index] != 0u;
                 bool changed = false;
                 if (e.flags & settings::SettingAction)
                 {
-                    if (ImGui::SmallButton("Run")) { changed = registry.Apply(ctx, e.name, 1.0f); }
+                    if (ImGui::SmallButton("Run")) { changed = apply(1.0f); }
                 }
                 else if (!readable)
                 {
                     // No reader (each boat's own vessel.*, what a script injects): only a value to send.
                     if (ImGui::InputFloat("##send", &value, 0.0f, 0.0f, "%g", ImGuiInputTextFlags_EnterReturnsTrue))
                     {
-                        changed = registry.Apply(ctx, e.name, value);
+                        changed = apply(value);
                     }
                 }
                 else if (e.type == settings::SettingType::Bool)
                 {
                     bool on = value != 0.0f;
-                    if (ImGui::Checkbox("##v", &on)) { changed = registry.Apply(ctx, e.name, on ? 1.0f : 0.0f); }
+                    if (ImGui::Checkbox("##v", &on)) { changed = apply(on ? 1.0f : 0.0f); }
                 }
                 else
                 {
@@ -405,13 +443,13 @@ bool DeveloperWindow::DrawSettingsTab(Scene& scene, SceneRenderSettings& setting
                     {
                         held = e.name;
                         heldValue = value;
-                        if (live) { changed = registry.Apply(ctx, e.name, value); }
+                        if (live) { changed = apply(value); }
                     }
                     if (held == e.name && ImGui::IsItemDeactivated())
                     {
                         if (!live && ImGui::IsItemDeactivatedAfterEdit())
                         {
-                            changed = registry.Apply(ctx, e.name, heldValue);
+                            changed = apply(heldValue);
                         }
                         held.clear();
                     }
@@ -944,7 +982,6 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         {
         case Tab::Visibility: case Tab::Sky: case Tab::Debug: case Tab::Csm: case Tab::Vsm: case Tab::Tessy:
         case Tab::Streaming: case Tab::Memory:
-        case Tab::Settings: // a row reaches whatever its name does
             threading::WaitRenderForGame("DeveloperWindow::Draw (render-half tab)");
             break;
         default:

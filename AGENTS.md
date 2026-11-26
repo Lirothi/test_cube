@@ -106,6 +106,9 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   `WaitForPreviousFrame` (each counted by caller: `gpu idle waits:` every 5 s, scope `Renderer: GPU idle wait`).
 - A GPU copy is done by its frame NUMBER (`Renderer::IsFrameNumberComplete`), never by its slot.
 - An ExecuteIndirect count buffer holds the exact count, never ~0 (NVIDIA then draws nothing).
+- DLSS's feature at new sizes is released by us at the resize's GPU idle (`DlssHandler::ReleaseFeatureIfResized`):
+  Streamline's own recreate defers the old one to a lambda that `slShutdown` runs after unloading `sl.dlss`
+  (0xC0000005 at the exit of any run that ended within three frames of a resize).
 - A bit-packed request or mark buffer does `InterlockedOr` only while the bit is clear.
 - Mesh-shader PSOs stay out of the disk PSO cache (the runtime refuses them back).
 - A task's exception means its `TaskSystem::FailurePolicy`, set by its creator and inherited by tasks created inside
@@ -193,7 +196,8 @@ without the editor.
 
 `logs/session_<date>_<time>_<pid>_<cfg>.log`, the newest named in `logs/latest.txt`; a line is `time LEVEL [category]
 frame message (File:line)`. No `session end: clean shutdown` footer = no clean exit. Dev builds write minidumps to
-`logs/crashes` (not under a debugger). `--log-level=`, `--log-category=<name>:<level>`, `--log-sync` (for a crash that
+`logs/crashes` (not under a debugger). A Debug `assert` without a debugger: `[FATAL] CRT assert: Assertion failed: ...`,
+then `crash: abort()`, exit 3, no window (stderr lands as `stderr:` lines). `--log-level=`, `--log-category=<name>:<level>`, `--log-sync` (for a crash that
 loses its last lines), `--log-file=`.
 
 ## Local model server (llama-server, ~38 GB)

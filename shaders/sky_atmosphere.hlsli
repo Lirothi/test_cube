@@ -10,32 +10,17 @@ static const float PlanetRadiusOffset = 0.001f; // SkyAtmosphereCommon.ush:24 (1
 
 // SKY_CB_EXTERNAL: the includer declares these fields itself, appended to its own cbuffer (the
 // cloud capture, cloud_common.hlsli CLOUD_WITH_SKY_CB); the names must match this block.
+#include "shared/shader_types.h"
+#include "shared/sky_atmosphere.h" // SkyAtmosphereCB's fields, once for HLSL and C++ (architecture plan R5.3)
 #ifndef SKY_CB_EXTERNAL
 cbuffer SkyAtmosphereCB : register(b0)
 {
-    float4 AtmosphereRadii; // bottom, top, Rayleigh/Mie density exponential scales
-    float4 RayleighScattering;
-    float4 MieScattering; // w: g (isotropic in B1, used by B2)
-    float4 MieAbsorption;
-    float4 AbsorptionExtinction; // w: ozone layer split altitude
-    float4 AbsorptionDensity; // ascending linear/constant, descending linear/constant
-    float4 GroundAlbedo; // w: multi-scattering factor
+    SKY_ATMOSPHERE_FIELDS
 #ifdef SKY_VIEW
-    float4 SkySunDirection;
-    float4 SkyIlluminance;
-    float4 SkyExposure;
-    float4 SkyPlanet;
-    // Time-of-day plan N1: light 1, the moon (SkyViewFrameData). Zero illuminance = no second light.
-    float4 SkyLight1Direction;   // w: disc angular radius (0 in the captures)
-    float4 SkyLight1Illuminance; // outer-space RGB lux as lit now; w: earthshine fraction of the full disc
-    float4 SkyMoonDisc;          // the FULL moon's outer-space RGB lux; w: phase angle (rad)
-    float4 SkyMoonDisc2;         // x: the disc's lit scale; y: 1 = albedo/normal texture ready
-    float4 SkyNightGlow;         // N2: rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean
+    SKY_VIEW_FIELDS
 #endif
 #ifdef SKY_AERIAL
-    float4x4 AerialInvView;
-    float4x4 AerialInvProj;
-    float4 AerialStart; // x: froxel far-plane view depth in km, y: view-distance scale (UE AerialPespectiveViewDistanceScale)
+    SKY_AERIAL_FIELDS
 #endif
 };
 #endif // SKY_CB_EXTERNAL

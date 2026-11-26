@@ -60,6 +60,11 @@ private:
 
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;
+
+public:
+    GraphicsSettingsManager& GraphicsSettings() { return graphicsSettings_; } // --settings-dump's graphics lines
+
+private:
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
     // The level's time of day for the HUD line, copied when the build is scheduled: the build runs
     // beside Scene::Tick, which advances the clock. < 0 = the level has no time of day.

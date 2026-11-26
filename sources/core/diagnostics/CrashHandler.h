@@ -33,6 +33,9 @@ namespace crash
     void NoteDeviceRemoved(unsigned reason);
     // std::terminate's handler is per thread in the MSVC CRT: a thread of ours calls this when it starts.
     void InstallThisThread();
+    // Run on the aborting thread before abort()'s report (SIGABRT): Debug's stderr pipe empties into the log there, so an
+    // `assert`'s text -- written to stderr just before its abort() -- precedes the crash line (app/BootLogSession.h).
+    void SetAbortHook(void (*hook)());
     // A frame task's exception, first chance (TaskSystem::RunTask's SEH filter, before the stack unwinds to its catch):
     // the throw site's frames go to the log (module+offset, named by tools/symbolize.py) and a minidump is written with
     // the exception's context. The report that follows (InvariantFailure, abort) names that dump instead of writing one

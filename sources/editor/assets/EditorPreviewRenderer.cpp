@@ -22,6 +22,9 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/Mesh.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/editor_preview.h" // PreviewConstants: the fields, once (R5.3)
+#include "shaders/shared/editor_preview_lines.h" // PreviewLinesConstants, likewise
 
 #pragma comment(lib, "d3dcompiler.lib")
 
@@ -59,37 +62,10 @@ namespace
     // Matches the PreviewCB cbuffer in shaders/editor_preview.hlsl (16-byte packed).
     struct PreviewConstants
     {
-        dx::XMFLOAT4X4 mvp;
-        dx::XMFLOAT4X4 model;
-        dx::XMFLOAT4 lightDir;
-        dx::XMFLOAT4 eyePosition;
-        dx::XMFLOAT4 baseColor;
-        dx::XMFLOAT4 metalRoughAlpha; // xy = MR, z = alpha cutoff, w = MR multiply
-        dx::XMFLOAT4 texOffsScale;
-        dx::XMFLOAT4 texFlags; // xyz = use albedo/MR/normal, w = normal strength
-        dx::XMFLOAT4 materialFlags; // x = glTF MR, y = normal RG, z = double-sided, w = albedo exists
-        dx::XMFLOAT4 surfaceParams; // rgb = subsurface color, w = transmission strength
-        dx::XMFLOAT4 surfaceFlags; // x = shading model ID, y = albedo power, z = normal weight
-        dx::XMFLOAT4 terrainTiling; // x = zone size, y = rotation radians, z = scale variance, w = blend
-        dx::XMFLOAT4 terrainEdgeParams; // x = edge breakup, y = edge detail, zw reserved
-        dx::XMFLOAT4 ambient;
-        dx::XMFLOAT4 environmentParams; // x = available, y = exposure, z = max mip, w reserved
-        dx::XMFLOAT4 debugParams; // x = normal length, yzw = diagnostic line color
-        dx::XMFLOAT4 markerParams; // x = light marker, yzw = marker color
-        dx::XMFLOAT4 skyboxRight;
-        dx::XMFLOAT4 skyboxUp;
-        dx::XMFLOAT4 skyboxForward;
-        dx::XMFLOAT4 skyboxParams; // xy = horizontal/vertical tan half-FOV, z = exposure
-        // ---- the renderer's lighting; mirrors the appended block of PreviewCB ----
-        dx::XMFLOAT4 physical;        // x = on, y = specular mips, z = sky intensity, w = sky fill
-        dx::XMFLOAT4 sunIlluminance;  // rgb = lux, w = flat ambient
-        dx::XMFLOAT4 groundAlbedo;    // rgb, w = irradiance present
-        dx::XMFLOAT4 sunParams;       // x = sun half-apex, y = light's legacy exposure
-        dx::XMFLOAT4 camera;          // x = exposure multiplier, y = tone curve
-        dx::XMFLOAT4 grade;           // saturation, contrast, gamma, gain
-        dx::XMFLOAT4 gradeOffsetAgx;  // x = offset, yzw = AgX slope, power, saturation
-        dx::XMFLOAT4 film;            // slope, toe, shoulder, black clip
-        dx::XMFLOAT4 filmWhiteClip;   // x = white clip
+        // shaders/shared/editor_preview.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float4 = DirectX::XMFLOAT4;
+        using float4x4 = DirectX::XMFLOAT4X4;
+        EDITOR_PREVIEW_FIELDS
     };
     static_assert(sizeof(PreviewConstants) % 16 == 0, "PreviewConstants mirrors a cbuffer.");
     static_assert(kPreviewConstantStride % D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT == 0,
@@ -100,8 +76,10 @@ namespace
     // shaders/editor_preview_lines.hlsl's cbuffer, and its instance: one segment.
     struct PreviewLinesConstants
     {
-        dx::XMFLOAT4X4 viewProj;
-        dx::XMFLOAT4 viewport; // xy = pixels
+        // shaders/shared/editor_preview_lines.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float4 = DirectX::XMFLOAT4;
+        using float4x4 = DirectX::XMFLOAT4X4;
+        EDITOR_PREVIEW_LINES_FIELDS
     };
     static_assert(sizeof(PreviewLinesConstants) <= kPreviewConstantStride, "Must fit one aligned preview CB region.");
     struct PreviewLineSegment
@@ -915,23 +893,23 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         {
             return;   // zero: the shader's legacy path
         }
-        cb.physical = dx::XMFLOAT4{ 1.0f, static_cast<float>(physical->specularMips),
+        cb.gPhysical = dx::XMFLOAT4{ 1.0f, static_cast<float>(physical->specularMips),
             std::max(0.0f, physical->skyIntensity), std::max(0.0f, physical->skyFill) };
-        cb.sunIlluminance = dx::XMFLOAT4{ physical->sunIlluminance.x,
+        cb.gSunIlluminance = dx::XMFLOAT4{ physical->sunIlluminance.x,
             physical->sunIlluminance.y, physical->sunIlluminance.z,
             std::max(0.0f, physical->flatAmbient) };
-        cb.groundAlbedo = dx::XMFLOAT4{ physical->groundAlbedo.x, physical->groundAlbedo.y,
+        cb.gGroundAlbedo = dx::XMFLOAT4{ physical->groundAlbedo.x, physical->groundAlbedo.y,
             physical->groundAlbedo.z, physical->irradiance.ptr != 0 ? 1.0f : 0.0f };
-        cb.sunParams = dx::XMFLOAT4{ physical->sunHalfApex, physical->lightExposure, physical->sunSoftRadius, 0.0f };
-        cb.camera = dx::XMFLOAT4{ physical->exposure, static_cast<float>(physical->toneCurve),
+        cb.gSunParams = dx::XMFLOAT4{ physical->sunHalfApex, physical->lightExposure, physical->sunSoftRadius, 0.0f };
+        cb.gCamera = dx::XMFLOAT4{ physical->exposure, static_cast<float>(physical->toneCurve),
             0.0f, 0.0f };
-        cb.grade = dx::XMFLOAT4{ physical->gradeSaturation, physical->gradeContrast,
+        cb.gGrade = dx::XMFLOAT4{ physical->gradeSaturation, physical->gradeContrast,
             physical->gradeGamma, physical->gradeGain };
-        cb.gradeOffsetAgx = dx::XMFLOAT4{ physical->gradeOffset, physical->agxSlope,
+        cb.gGradeOffsetAgx = dx::XMFLOAT4{ physical->gradeOffset, physical->agxSlope,
             physical->agxPower, physical->agxSaturation };
-        cb.film = dx::XMFLOAT4{ physical->filmSlope, physical->filmToe, physical->filmShoulder,
+        cb.gFilm = dx::XMFLOAT4{ physical->filmSlope, physical->filmToe, physical->filmShoulder,
             physical->filmBlackClip };
-        cb.filmWhiteClip = dx::XMFLOAT4{ physical->filmWhiteClip, 0.0f, 0.0f, 0.0f };
+        cb.gFilmWhiteClip = dx::XMFLOAT4{ physical->filmWhiteClip, 0.0f, 0.0f, 0.0f };
     };
 
     if (hasEnvironment)
@@ -941,11 +919,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         writeEnvironmentSrv(descriptorBase);
 
         PreviewConstants skyboxConstants{};
-        dx::XMStoreFloat4(&skyboxConstants.skyboxRight, right);
-        dx::XMStoreFloat4(&skyboxConstants.skyboxUp, cameraUp);
-        dx::XMStoreFloat4(&skyboxConstants.skyboxForward, dx::XMVectorNegate(offset));
+        dx::XMStoreFloat4(&skyboxConstants.gSkyboxRight, right);
+        dx::XMStoreFloat4(&skyboxConstants.gSkyboxUp, cameraUp);
+        dx::XMStoreFloat4(&skyboxConstants.gSkyboxForward, dx::XMVectorNegate(offset));
         const float tanHalfFov = std::tan(fovY * 0.5f);
-        skyboxConstants.skyboxParams = dx::XMFLOAT4{
+        skyboxConstants.gSkyboxParams = dx::XMFLOAT4{
             tanHalfFov * aspect,
             tanHalfFov,
             std::max(0.0f, environmentExposure),
@@ -1065,11 +1043,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         writeEnvironmentSrv(descriptorBase);
 
         PreviewConstants cb{};
-        dx::XMStoreFloat4x4(&cb.mvp, mvp);
-        dx::XMStoreFloat4x4(&cb.model, dx::XMMatrixIdentity());
-        dx::XMStoreFloat4(&cb.lightDir, lightDirection);
-        cb.lightDir.w = std::max(0.0f, light.exposure);
-        dx::XMStoreFloat4(&cb.eyePosition, framedEye);
+        dx::XMStoreFloat4x4(&cb.gMVP, mvp);
+        dx::XMStoreFloat4x4(&cb.gModel, dx::XMMatrixIdentity());
+        dx::XMStoreFloat4(&cb.gLightDir, lightDirection);
+        cb.gLightDir.w = std::max(0.0f, light.exposure);
+        dx::XMStoreFloat4(&cb.gEyePosition, framedEye);
         if (material)
         {
             const MaterialParams& params = material->fromGltf
@@ -1077,44 +1055,44 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                 : material->hasPresetParams
                     ? material->presetParams
                     : MaterialParams{};
-            cb.baseColor = dx::XMFLOAT4{ params.baseColor.x, params.baseColor.y,
+            cb.gBaseColor = dx::XMFLOAT4{ params.baseColor.x, params.baseColor.y,
                 params.baseColor.z, params.baseColor.w };
-            cb.metalRoughAlpha = dx::XMFLOAT4{
+            cb.gMetalRoughAlpha = dx::XMFLOAT4{
                 params.metalRough.x,
                 params.metalRough.y,
                 material->alphaMask ? material->alphaCutoff : -1.0f,
                 params.mrMultiply };
-            cb.texOffsScale = texOffsScaleOverride
+            cb.gTexOffsScale = texOffsScaleOverride
                 ? dx::XMFLOAT4{ texOffsScaleOverride->x, texOffsScaleOverride->y,
                                 texOffsScaleOverride->z, texOffsScaleOverride->w }
                 : dx::XMFLOAT4{ params.texOffsScale.x, params.texOffsScale.y,
                                 params.texOffsScale.z, params.texOffsScale.w };
-            cb.texFlags = dx::XMFLOAT4{
+            cb.gTexFlags = dx::XMFLOAT4{
                 textures[0] && params.texFlags.x > 0.5f ? 1.0f : 0.0f,
                 textures[1] && params.texFlags.y > 0.5f ? 1.0f : 0.0f,
                 textures[2] && params.texFlags.z > 0.5f ? 1.0f : 0.0f,
                 params.texFlags.w };
-            cb.materialFlags = dx::XMFLOAT4{
+            cb.gMaterialFlags = dx::XMFLOAT4{
                 material->mrLayoutGltf ? 1.0f : 0.0f,
                 material->normalIsRG ? 1.0f : 0.0f,
                 material->doubleSided ? 1.0f : 0.0f,
                 textures[0] ? 1.0f : 0.0f };
-            cb.surfaceParams = dx::XMFLOAT4{
+            cb.gSurfaceParams = dx::XMFLOAT4{
                 material->surfaceParams.subsurfaceColor.x,
                 material->surfaceParams.subsurfaceColor.y,
                 material->surfaceParams.subsurfaceColor.z,
                 material->surfaceParams.transmissionStrength };
-            cb.surfaceFlags = dx::XMFLOAT4{
+            cb.gSurfaceFlags = dx::XMFLOAT4{
                 static_cast<float>(material->shadingModel),
                 material->surfaceParams.transmissionAlbedoPower,
                 material->surfaceParams.transmissionNormalWeight,
                 0.0f };
-            cb.terrainTiling = dx::XMFLOAT4{
+            cb.gTerrainTiling = dx::XMFLOAT4{
                 material->surfaceParams.terrainZoneSize,
                 material->surfaceParams.terrainRotationDegrees * (dx::XM_PI / 180.0f),
                 material->surfaceParams.terrainScaleVariation,
                 material->surfaceParams.terrainBlend };
-            cb.terrainEdgeParams = dx::XMFLOAT4{
+            cb.gTerrainEdgeParams = dx::XMFLOAT4{
                 material->surfaceParams.terrainEdgeBreakup,
                 material->surfaceParams.terrainEdgeDetail,
                 0.0f,
@@ -1122,26 +1100,26 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         }
         else
         {
-            cb.baseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 1.0f };
-            cb.metalRoughAlpha = dx::XMFLOAT4{ 0.0f, 0.35f, -1.0f, 0.0f };
-            cb.texOffsScale = texOffsScaleOverride
+            cb.gBaseColor = dx::XMFLOAT4{ 0.82f, 0.82f, 0.82f, 1.0f };
+            cb.gMetalRoughAlpha = dx::XMFLOAT4{ 0.0f, 0.35f, -1.0f, 0.0f };
+            cb.gTexOffsScale = texOffsScaleOverride
                 ? dx::XMFLOAT4{ texOffsScaleOverride->x, texOffsScaleOverride->y,
                                 texOffsScaleOverride->z, texOffsScaleOverride->w }
                 : dx::XMFLOAT4{ 0.0f, 0.0f, 1.0f, 1.0f };
-            cb.texFlags = dx::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 1.0f };
-            cb.materialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
-            cb.surfaceParams = dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 0.0f };
-            cb.surfaceFlags = dx::XMFLOAT4{
+            cb.gTexFlags = dx::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 1.0f };
+            cb.gMaterialFlags = dx::XMFLOAT4{ 0.0f, 1.0f, 0.0f, 0.0f };
+            cb.gSurfaceParams = dx::XMFLOAT4{ 1.0f, 1.0f, 1.0f, 0.0f };
+            cb.gSurfaceFlags = dx::XMFLOAT4{
                 static_cast<float>(ShadingModel::DefaultLit),
                 MaterialSurfaceParams{}.transmissionAlbedoPower,
                 MaterialSurfaceParams{}.transmissionNormalWeight,
                 0.0f };
-            cb.terrainTiling = dx::XMFLOAT4{
+            cb.gTerrainTiling = dx::XMFLOAT4{
                 MaterialSurfaceParams{}.terrainZoneSize,
                 MaterialSurfaceParams{}.terrainRotationDegrees * (dx::XM_PI / 180.0f),
                 MaterialSurfaceParams{}.terrainScaleVariation,
                 MaterialSurfaceParams{}.terrainBlend };
-            cb.terrainEdgeParams = dx::XMFLOAT4{
+            cb.gTerrainEdgeParams = dx::XMFLOAT4{
                 MaterialSurfaceParams{}.terrainEdgeBreakup,
                 MaterialSurfaceParams{}.terrainEdgeDetail,
                 0.0f,
@@ -1156,9 +1134,9 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
                                   static_cast<int>(draw) == highlightSubmeshOrdinal;
         if (slotMatch || ordinalMatch)
         {
-            cb.surfaceFlags.w = 1.0f;
+            cb.gSurfaceFlags.w = 1.0f;
         }
-        cb.ambient = dx::XMFLOAT4{
+        cb.gAmbient = dx::XMFLOAT4{
             std::max(0.0f, light.color.x),
             std::max(0.0f, light.color.y),
             std::max(0.0f, light.color.z),
@@ -1169,13 +1147,13 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         const std::uint32_t skyMips = physical
             ? std::max(physical->skyMips, 1u)
             : (hasEnvironment ? std::max(environment->GetMips(), 1u) : 1u);
-        cb.environmentParams = dx::XMFLOAT4{
+        cb.gEnvironmentParams = dx::XMFLOAT4{
             hasEnvironment ? 1.0f : 0.0f,
             std::max(0.0f, environmentExposure),
             hasEnvironment ? static_cast<float>(skyMips - 1u) : 0.0f,
             0.0f };
         fillPhysical(cb);
-        cb.debugParams = dx::XMFLOAT4{
+        cb.gDebugParams = dx::XMFLOAT4{
             radius * 0.05f, 0.15f, 0.85f, 1.0f };
         std::memcpy(frame.constantBufferMapped +
             static_cast<std::size_t>(slot) * kPreviewConstantStride, &cb, sizeof(cb));
@@ -1235,11 +1213,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             dx::XMMatrixMultiply(markerWorld, framedView), proj);
 
         PreviewConstants markerConstants{};
-        dx::XMStoreFloat4x4(&markerConstants.mvp, markerMvp);
-        dx::XMStoreFloat4x4(&markerConstants.model, markerWorld);
-        dx::XMStoreFloat4(&markerConstants.lightDir, lightDirection);
-        dx::XMStoreFloat4(&markerConstants.eyePosition, framedEye);
-        markerConstants.markerParams = dx::XMFLOAT4{
+        dx::XMStoreFloat4x4(&markerConstants.gMVP, markerMvp);
+        dx::XMStoreFloat4x4(&markerConstants.gModel, markerWorld);
+        dx::XMStoreFloat4(&markerConstants.gLightDir, lightDirection);
+        dx::XMStoreFloat4(&markerConstants.gEyePosition, framedEye);
+        markerConstants.gMarkerParams = dx::XMFLOAT4{
             1.0f,
             std::clamp(light.color.x, 0.0f, 1.0f),
             std::clamp(light.color.y, 0.0f, 1.0f),
@@ -1336,8 +1314,8 @@ void EditorPreviewRenderer::RecordLines(ID3D12Device* device, ID3D12GraphicsComm
     add(lines.selected, 2.0f, dx::XMFLOAT4(1.0f, 0.61f, 0.045f, 1.0f));   // sRGB 255 205 60
 
     PreviewLinesConstants constants{};
-    constants.viewProj = lastViewProj_.m;
-    constants.viewport = dx::XMFLOAT4(static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f);
+    constants.gViewProj = lastViewProj_.m;
+    constants.gViewport = dx::XMFLOAT4(static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f);
     std::memcpy(frame.constantBufferMapped + static_cast<std::size_t>(kPreviewLinesSlot) * kPreviewConstantStride, &constants, sizeof(constants));
 
     D3D12_VERTEX_BUFFER_VIEW view{};

@@ -33,6 +33,7 @@ constexpr Switch kSwitches[] = {
     { "--set", "=<name>:<value>[;<name>:<value>...]", "pin settings for the run, by the --sweep / MCP set_settings names", false },
     { "--profdump", "=<path>", "after the warmup, write the profiler overlay rows to a file and quit", false, &parse::ProfDump },
     { "--settings-dump", "=<path>", "after the warmup, write every readable setting as `name value` and quit (R2)", false, &parse::SettingsDump },
+    { "--graphics-reset-at-dump", "[=<setting>]", "with --settings-dump: then Reset all graphics, or that setting's control (WRITES user_settings.json), and dump the file again (R2.n)", false, &parse::GraphicsResetAtDump },
     { "--boot-dump", "=<path>", "write every boot option the command line set as `group.field=value` and quit before the app (R3.2b)", false, &parse::BootDump },
     { "--trace", "=<frames>", "after the warmup, capture a profiler trace of that many frames into traces/ and quit", false, &parse::Trace },
     { "--window", "=<w>x<h>", "a borderless window whose client area is exactly w x h", true, &parse::Window },

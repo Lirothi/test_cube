@@ -1190,20 +1190,20 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         {
             const bool lutReady = frame_->skybox != nullptr && skyAtmosphere_.ViewSrv().ptr != 0;
             const SkyViewFrameData& sv = lutReady ? frame_->skybox->SkyViewFrame() : SkyViewFrameData{};
-            constants.skyViewPlanet = float4(sv.planet[0], sv.planet[1],
-                (lutReady && sv.planet[3] != 0.0f) ? 1.0f : 0.0f,
-                sv.exposure[0] > 0.0f ? 1.0f / sv.exposure[0] : 1.0f);
+            constants.skyViewPlanet = float4(sv.SkyPlanet[0], sv.SkyPlanet[1],
+                (lutReady && sv.SkyPlanet[3] != 0.0f) ? 1.0f : 0.0f,
+                sv.SkyExposure[0] > 0.0f ? 1.0f / sv.SkyExposure[0] : 1.0f);
             // THE SUN'S DISC, drawn here pre-exposed (compose_cs.hlsl SunDiscRaw), from the same frame data
             // the sky pass used to draw it from. UE GetLightDiskLuminance: outer-space illuminance over the
             // disc's solid angle, 2 pi (1 - cos half-apex) -- written 4 pi sin^2(r/2), no cancellation.
-            const bool disc = lutReady && sv.planet[3] != 0.0f && sv.sunDirection[3] > 0.0f &&
+            const bool disc = lutReady && sv.SkyPlanet[3] != 0.0f && sv.SkySunDirection[3] > 0.0f &&
                               skyAtmosphere_.TransmittanceSrv().ptr != 0;
-            const float halfApex = sv.sunDirection[3];
+            const float halfApex = sv.SkySunDirection[3];
             const float solidAngle = 4.0f * 3.14159265f * std::sin(0.5f * halfApex) * std::sin(0.5f * halfApex);
             const float invSolid = solidAngle > 0.0f ? 1.0f / solidAngle : 0.0f;
-            constants.sunDiscDir = float4(sv.sunDirection[0], sv.sunDirection[1], sv.sunDirection[2], disc ? halfApex : 0.0f);
-            constants.sunDiscLuminance = float4(sv.illuminance[0] * invSolid, sv.illuminance[1] * invSolid,
-                                                sv.illuminance[2] * invSolid, sv.planet[2]);
+            constants.sunDiscDir = float4(sv.SkySunDirection[0], sv.SkySunDirection[1], sv.SkySunDirection[2], disc ? halfApex : 0.0f);
+            constants.sunDiscLuminance = float4(sv.SkyIlluminance[0] * invSolid, sv.SkyIlluminance[1] * invSolid,
+                                                sv.SkyIlluminance[2] * invSolid, sv.SkyPlanet[2]);
         }
         D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
         if (frame_->ocean)

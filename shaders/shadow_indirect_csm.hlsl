@@ -393,24 +393,11 @@ void PagePlace(uint page, float4 hLocal, out float4 H, out float4 CD)
 // CSM/spot/point paths get it from SceneRenderer::BuildShadowViewCB, and the VSM per-page path from
 // the 256-byte PageProj slot the setup CS writes (vsm_page_setup_cs.hlsl stores it at po+192).
 // viewProjNoJitter/prevViewProjNoJitter stay unread here (undefined in the VSM slot).
+#include "shared/shader_types.h"
+#include "shared/per_view.h" // PerView's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer PerView : register(b1)
 {
-    float4x4 viewProj;
-    float4x4 viewProjNoJitter;
-    float4x4 prevViewProjNoJitter;
-    float  windTime;      // 192
-    float  windPrevTime;  // 196 (unused: depth-only, no motion vectors)
-    float2 windDirXZ;     // 200
-    float  windSwayAmp;   // 208
-    float  windSwayFreq;  // 212
-    float  windGustMul;   // 216
-    float  windPrevGustMul; // 220 (unused: depth-only, but kept layout-identical to gbuffer)
-    // S6: shadow-depth bias params, 224..239. Zero everywhere except a Legacy CSM cascade with
-    // `depthBiasAtWrite` on; ApplyShadowDepthBias early-outs on zero.
-    float  shadowConstBias;   // 224
-    float  shadowSlopeBias;   // 228
-    float  shadowMaxSlope;    // 232
-    float  shadowClampNear;   // 236 (S7)
+    PER_VIEW_FIELDS
 };
 
 // S15 (SDSM) NEEDS NO PERMUTATION HERE, and that is deliberate. Its projection and bias ARE GPU

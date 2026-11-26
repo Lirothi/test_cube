@@ -53,20 +53,20 @@ bool NearlySameView(const SkyViewFrameData& now, const SkyViewFrameData& key)
     if (!render::g_skyKeyTolerance) return std::memcmp(&now, &key, sizeof(now)) == 0;
     for (int c = 0; c < 3; ++c)
     {
-        const float total = std::max(std::fabs(now.illuminance[c]) + std::fabs(now.light1Illuminance[c]),
-                                     std::fabs(key.illuminance[c]) + std::fabs(key.light1Illuminance[c]));
-        const float change = std::fabs(now.illuminance[c] - key.illuminance[c]) +
-                             std::fabs(now.light1Illuminance[c] - key.light1Illuminance[c]);
+        const float total = std::max(std::fabs(now.SkyIlluminance[c]) + std::fabs(now.SkyLight1Illuminance[c]),
+                                     std::fabs(key.SkyIlluminance[c]) + std::fabs(key.SkyLight1Illuminance[c]));
+        const float change = std::fabs(now.SkyIlluminance[c] - key.SkyIlluminance[c]) +
+                             std::fabs(now.SkyLight1Illuminance[c] - key.SkyLight1Illuminance[c]);
         if (change > kKeyLightShare * total) return false;
     }
-    if (!SameDirection(now.sunDirection, key.sunDirection) || !SameDirection(now.light1Direction, key.light1Direction))
+    if (!SameDirection(now.SkySunDirection, key.SkySunDirection) || !SameDirection(now.SkyLight1Direction, key.SkyLight1Direction))
         return false;
     // Everything else exactly: the moving fields copied over from the key, then the bytes compared.
     SkyViewFrameData rest = now;
     for (int c = 0; c < 3; ++c)
     {
-        rest.sunDirection[c] = key.sunDirection[c]; rest.light1Direction[c] = key.light1Direction[c];
-        rest.illuminance[c] = key.illuminance[c]; rest.light1Illuminance[c] = key.light1Illuminance[c];
+        rest.SkySunDirection[c] = key.SkySunDirection[c]; rest.SkyLight1Direction[c] = key.SkyLight1Direction[c];
+        rest.SkyIlluminance[c] = key.SkyIlluminance[c]; rest.SkyLight1Illuminance[c] = key.SkyLight1Illuminance[c];
     }
     return std::memcmp(&rest, &key, sizeof(rest)) == 0;
 }
@@ -76,12 +76,12 @@ bool NearlySameView(const SkyViewFrameData& now, const SkyViewFrameData& key)
 bool NearlySameNight(const NightSkyFrameData& now, const NightSkyFrameData& key)
 {
     // Not drawn (all zero by day, row0.w = 0): exactly, or a zero row would read as a turn every frame.
-    if (!render::g_skyKeyTolerance || now.row0[3] == 0.0f || key.row0[3] == 0.0f)
+    if (!render::g_skyKeyTolerance || now.nightRow0[3] == 0.0f || key.nightRow0[3] == 0.0f)
         return std::memcmp(&now, &key, sizeof(now)) == 0;
-    if (!SameDirection(now.row0, key.row0) || !SameDirection(now.row1, key.row1) || !SameDirection(now.row2, key.row2))
+    if (!SameDirection(now.nightRow0, key.nightRow0) || !SameDirection(now.nightRow1, key.nightRow1) || !SameDirection(now.nightRow2, key.nightRow2))
         return false;
     NightSkyFrameData rest = now;
-    for (int c = 0; c < 3; ++c) { rest.row0[c] = key.row0[c]; rest.row1[c] = key.row1[c]; rest.row2[c] = key.row2[c]; }
+    for (int c = 0; c < 3; ++c) { rest.nightRow0[c] = key.nightRow0[c]; rest.nightRow1[c] = key.nightRow1[c]; rest.nightRow2[c] = key.nightRow2[c]; }
     return std::memcmp(&rest, &key, sizeof(rest)) == 0;
 }
 
@@ -467,15 +467,15 @@ void SkyAtmosphere::ValidateReadback(UINT slot)
     // Multi: usf:1156-1268 default two vertical rays, 15 samples, five orders.
     // Use the GPU T LUT for the second reference, so a failure names the wrong stage.
     const auto& a = pendingParameters_[slot];
-    const double bottom = a.radii[0], top = a.radii[1];
+    const double bottom = a.AtmosphereRadii[0], top = a.AtmosphereRadii[1];
     const double H = std::sqrt(top * top - bottom * bottom);
     const auto medium = [&](double height, UINT ch, double& scattering, double& extinction) {
         const double h = std::max(0.0, height - bottom);
-        const double ray = std::exp(a.radii[2] * h), mie = std::exp(a.radii[3] * h);
-        const double ozone = std::clamp(h < a.ozone[3] ? a.ozoneDensity[0]*h + a.ozoneDensity[1]
-            : a.ozoneDensity[2]*h + a.ozoneDensity[3], 0.0, 1.0);
-        scattering = ray*a.rayleigh[ch] + mie*a.mieScattering[ch];
-        extinction = scattering + mie*a.mieAbsorption[ch] + ozone*a.ozone[ch];
+        const double ray = std::exp(a.AtmosphereRadii[2] * h), mie = std::exp(a.AtmosphereRadii[3] * h);
+        const double ozone = std::clamp(h < a.AbsorptionExtinction[3] ? a.AbsorptionDensity[0]*h + a.AbsorptionDensity[1]
+            : a.AbsorptionDensity[2]*h + a.AbsorptionDensity[3], 0.0, 1.0);
+        scattering = ray*a.RayleighScattering[ch] + mie*a.MieScattering[ch];
+        extinction = scattering + mie*a.MieAbsorption[ch] + ozone*a.AbsorptionExtinction[ch];
     };
     const auto sampleT = [&](double height, double mu, UINT ch) {
         const double rho = std::sqrt(std::max(0.0, height*height - bottom*bottom));
@@ -533,10 +533,10 @@ void SkyAtmosphere::ValidateReadback(UINT slot)
                         L[ray] += throughput*(S-S*tr)/std::max(extinction,1.e-9);
                         throughput *= tr;
                     }
-                    if (ray == 1) L[ray] += sampleT(bottom,mu,ch)*throughput*std::max(0.0,mu)*a.groundAlbedo[ch]/3.14159265358979323846;
+                    if (ray == 1) L[ray] += sampleT(bottom,mu,ch)*throughput*std::max(0.0,mu)*a.GroundAlbedo[ch]/3.14159265358979323846;
                 }
                 const double R = .5*(r[0]+r[1]), R2 = R*R;
-                const double reference = .5*(L[0]+L[1])*(1+R+R2+R*R2+R2*R2)*a.groundAlbedo[3];
+                const double reference = .5*(L[0]+L[1])*(1+R+R2+R*R2+R2*R2)*a.GroundAlbedo[3];
                 maxErrorMS = std::max(maxErrorMS, std::abs(read(1,x,y,ch)-reference));
             }
         }
@@ -643,16 +643,16 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     }
     // One global probe at sea level, independent of viewer position/yaw and auto exposure.
     // SkyView storage uses a fixed exposure; the capture decodes it into absolute radiance.
-    view.planet[0] = settings.parameters.radii[0] + 0.001f;
-    view.planet[3] = 1;
-    view.sunDirection[3] = 0; // no solar disk in reflection captures (UE usf:314-317)
+    view.SkyPlanet[0] = settings.parameters.AtmosphereRadii[0] + 0.001f;
+    view.SkyPlanet[3] = 1;
+    view.SkySunDirection[3] = 0; // no solar disk in reflection captures (UE usf:314-317)
     // ...nor a lunar one (N1): the disc's fields go too, so the moon's phase alone cannot dirty the cube.
-    view.light1Direction[3] = 0;
-    view.light1Illuminance[3] = 0;
-    std::fill(std::begin(view.moonDisc), std::end(view.moonDisc), 0.0f);
-    std::fill(std::begin(view.moonDisc2), std::end(view.moonDisc2), 0.0f);
-    view.exposure[0] = 1.0f / 1024.0f;
-    view.exposure[1] = 1.0f; // the sky-only PICTURE factor never reaches the probes (and must not rebuild them)
+    view.SkyLight1Direction[3] = 0;
+    view.SkyLight1Illuminance[3] = 0;
+    std::fill(std::begin(view.SkyMoonDisc), std::end(view.SkyMoonDisc), 0.0f);
+    std::fill(std::begin(view.SkyMoonDisc2), std::end(view.SkyMoonDisc2), 0.0f);
+    view.SkyExposure[0] = 1.0f / 1024.0f;
+    view.SkyExposure[1] = 1.0f; // the sky-only PICTURE factor never reaches the probes (and must not rebuild them)
     const auto params = settings.parameters;
     // Plan C4: the overlay (the clouds) rebuilds the environment on its own schedule -- and once
     // more when it appears or disappears, so no cube keeps clouds that are gone or lacks new ones.
@@ -660,8 +660,8 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     // N2: the night sky as the picture holds it -- no twinkle (its clock and amount zeroed, so a still
     // sky does not rebuild every frame), the Milky Way only once its map exists.
     NightSkyFrameData night = nightIn;
-    night.layers[2] = night.layers[3] = 0.0f;
-    if (!nightReady_ || !night_.Get()) night.layers[1] = 0.0f;
+    night.nightLayers[2] = night.nightLayers[3] = 0.0f;
+    if (!nightReady_ || !night_.Get()) night.nightLayers[1] = 0.0f;
     // P1: the moving bodies and their light within a tolerance of the last capture's (NearlySameView).
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
         || !NearlySameView(view, environmentKey_)
@@ -687,7 +687,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     // the record body: it is a pure function of `params` + `view`, which are exactly the two things
     // the `dirty` test above keys on, so it changes once per rebuild and never per dispatch.
     // (It also cannot be solved in there -- the record lambda does not capture `settings`.)
-    const float sinElevation = std::clamp(view.sunDirection[2], -1.0f, 1.0f);
+    const float sinElevation = std::clamp(view.SkySunDirection[2], -1.0f, 1.0f);
     float sunTransmittance[3] = {1.0f, 1.0f, 1.0f};
     SkyTransmittanceTowardSun(params, std::asin(sinElevation), sunTransmittance);
     // The overlay's clouds can take the sun off the ground (an overcast deck, SkyEnvironmentOverlay).
@@ -696,19 +696,19 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     // w = the radiance cube's coarsest mip (1x1 per face), the sky's sphere average, which the
     // shader adds as the sky's half of the same ground irradiance.
     // N1: the moon lights the same ground, through its own air and the same deck.
-    const float moonSinElevation = std::clamp(view.light1Direction[2], -1.0f, 1.0f);
+    const float moonSinElevation = std::clamp(view.SkyLight1Direction[2], -1.0f, 1.0f);
     float moonTransmittance[3] = {0.0f, 0.0f, 0.0f};
-    if (view.light1Illuminance[0] > 0.0f || view.light1Illuminance[1] > 0.0f || view.light1Illuminance[2] > 0.0f)
+    if (view.SkyLight1Illuminance[0] > 0.0f || view.SkyLight1Illuminance[1] > 0.0f || view.SkyLight1Illuminance[2] > 0.0f)
     {
         SkyTransmittanceTowardSun(params, std::asin(moonSinElevation), moonTransmittance);
     }
     const float moonCosine = std::max(0.0f, moonSinElevation) * (overlayActive ? std::clamp(overlay->groundSunScale, 0.0f, 1.0f) : 1.0f);
     pass.groundSun = {
-        (view.illuminance[0] * sunTransmittance[0] * groundCosine + view.light1Illuminance[0] * moonTransmittance[0] * moonCosine) * kInvPi,
-        (view.illuminance[1] * sunTransmittance[1] * groundCosine + view.light1Illuminance[1] * moonTransmittance[1] * moonCosine) * kInvPi,
-        (view.illuminance[2] * sunTransmittance[2] * groundCosine + view.light1Illuminance[2] * moonTransmittance[2] * moonCosine) * kInvPi,
+        (view.SkyIlluminance[0] * sunTransmittance[0] * groundCosine + view.SkyLight1Illuminance[0] * moonTransmittance[0] * moonCosine) * kInvPi,
+        (view.SkyIlluminance[1] * sunTransmittance[1] * groundCosine + view.SkyLight1Illuminance[1] * moonTransmittance[1] * moonCosine) * kInvPi,
+        (view.SkyIlluminance[2] * sunTransmittance[2] * groundCosine + view.SkyLight1Illuminance[2] * moonTransmittance[2] * moonCosine) * kInvPi,
         7.0f};
-    pass.groundAlbedo = {params.groundAlbedo[0], params.groundAlbedo[1], params.groundAlbedo[2]};
+    pass.groundAlbedo = {params.GroundAlbedo[0], params.GroundAlbedo[1], params.GroundAlbedo[2]};
     pass.params = params;
     pass.view = view;
     pass.night = night;
@@ -725,7 +725,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(environmentView_.Get(), kRest);
             ctx.Use(environment_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            const bool nightMap = night.layers[1] > 0.0f;
+            const bool nightMap = night.nightLayers[1] > 0.0f;
             if (nightMap) ctx.Use(night_.Get(), kRest);
             for (auto* r : ov.reads) { if (r) ctx.Use(r, kRest); } // the overlay's inputs, read beside the capture
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -769,13 +769,13 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                         // taps) against the map's 360 / 2048): log2(512 / (size x taps)), within its chain.
                         const float nightMip = std::clamp(std::log2(512.0f / static_cast<float>(size * taps)), 0.0f,
                                                           static_cast<float>(kNightMips - 1u));
-                        std::array<float, 72> capture{view.planet[0], view.planet[1], 1024.0f,
-                            static_cast<float>(size), static_cast<float>(taps), view.planet[2], nightMip, 0.0f,
-                            night.glow[0], night.glow[1], night.glow[2], night.glow[3],
-                            night.layers[0], night.layers[1], night.layers[2], night.layers[3],
-                            night.row0[0], night.row0[1], night.row0[2], night.row0[3],
-                            night.row1[0], night.row1[1], night.row1[2], night.row1[3],
-                            night.row2[0], night.row2[1], night.row2[2], night.row2[3]};
+                        std::array<float, 72> capture{view.SkyPlanet[0], view.SkyPlanet[1], 1024.0f,
+                            static_cast<float>(size), static_cast<float>(taps), view.SkyPlanet[2], nightMip, 0.0f,
+                            night.nightGlow[0], night.nightGlow[1], night.nightGlow[2], night.nightGlow[3],
+                            night.nightLayers[0], night.nightLayers[1], night.nightLayers[2], night.nightLayers[3],
+                            night.nightRow0[0], night.nightRow0[1], night.nightRow0[2], night.nightRow0[3],
+                            night.nightRow1[0], night.nightRow1[1], night.nightRow1[2], night.nightRow1[3],
+                            night.nightRow2[0], night.nightRow2[1], night.nightRow2[2], night.nightRow2[3]};
                         // The distant height fog's rows and Ultra Dynamic Sky's layer (sky_ibl_capture_cs.hlsl's cbuffer tail).
                         const std::array<const std::array<float, 4>*, 11> fogRows{&pass.fog.params0, &pass.fog.params1,
                             &pass.fog.params2, &pass.fog.inscatter, &pass.fog.sunColor, &pass.fog.sunDir,
@@ -1062,13 +1062,13 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
     // the probe of the same sky at sea level) -- measured 2026-09-11 as 0.5 % of pixels, a control that lied.
     distantActive_ = settings.mode && !failed_ && !distantFailed_ && distantMaterial_;
     if (!distantActive_) return after;
-    view.planet[0] = settings.parameters.radii[0] + 6.0f;
-    view.planet[3] = 1.0f; view.sunDirection[3] = 0.0f; view.exposure[0] = 1.0f;
-    view.exposure[1] = 1.0f; // picture-only factor: not the fog's light, not a rebuild key
+    view.SkyPlanet[0] = settings.parameters.AtmosphereRadii[0] + 6.0f;
+    view.SkyPlanet[3] = 1.0f; view.SkySunDirection[3] = 0.0f; view.SkyExposure[0] = 1.0f;
+    view.SkyExposure[1] = 1.0f; // picture-only factor: not the fog's light, not a rebuild key
     // N1: the moon's disc is not light either -- only its direction and illuminance key a rebuild.
-    view.light1Direction[3] = 0.0f; view.light1Illuminance[3] = 0.0f;
-    std::fill(std::begin(view.moonDisc), std::end(view.moonDisc), 0.0f);
-    std::fill(std::begin(view.moonDisc2), std::end(view.moonDisc2), 0.0f);
+    view.SkyLight1Direction[3] = 0.0f; view.SkyLight1Illuminance[3] = 0.0f;
+    std::fill(std::begin(view.SkyMoonDisc), std::end(view.SkyMoonDisc), 0.0f);
+    std::fill(std::begin(view.SkyMoonDisc2), std::end(view.SkyMoonDisc2), 0.0f);
     const auto params = settings.parameters;
     // P1: the moving bodies and their light within a tolerance of the last build's (NearlySameView).
     if (distantReady_ && std::memcmp(&params, &distantParameters_, sizeof(params)) == 0
@@ -1096,31 +1096,31 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
             // The MAJOR revision (DistantMajorRevision): far from the last major key, or the first.
             {
                 const auto& k = distantMajorKey_;
-                const float cosTurn = view.sunDirection[0] * k.sunDirection[0] + view.sunDirection[1] * k.sunDirection[1] +
-                                      view.sunDirection[2] * k.sunDirection[2];
+                const float cosTurn = view.SkySunDirection[0] * k.SkySunDirection[0] + view.SkySunDirection[1] * k.SkySunDirection[1] +
+                                      view.SkySunDirection[2] * k.SkySunDirection[2];
                 // N1: the moon counts by its SHARE of the light. The test is on the two lights' sum, so
                 // a daytime moon (a millionth of the sun) cannot reset the fog's history by waxing; its
                 // turn counts only while it carries a tenth of the light or more -- the night.
-                const float cosMoonTurn = view.light1Direction[0] * k.light1Direction[0] +
-                                          view.light1Direction[1] * k.light1Direction[1] +
-                                          view.light1Direction[2] * k.light1Direction[2];
+                const float cosMoonTurn = view.SkyLight1Direction[0] * k.SkyLight1Direction[0] +
+                                          view.SkyLight1Direction[1] * k.SkyLight1Direction[1] +
+                                          view.SkyLight1Direction[2] * k.SkyLight1Direction[2];
                 bool lightChanged = false;
                 bool moonMatters = false;
                 for (int c = 0; c < 3; ++c)
                 {
-                    const float total = std::fabs(k.illuminance[c]) + std::fabs(k.light1Illuminance[c]);
-                    const float change = std::fabs(view.illuminance[c] - k.illuminance[c]) +
-                                         std::fabs(view.light1Illuminance[c] - k.light1Illuminance[c]);
+                    const float total = std::fabs(k.SkyIlluminance[c]) + std::fabs(k.SkyLight1Illuminance[c]);
+                    const float change = std::fabs(view.SkyIlluminance[c] - k.SkyIlluminance[c]) +
+                                         std::fabs(view.SkyLight1Illuminance[c] - k.SkyLight1Illuminance[c]);
                     lightChanged = lightChanged || change > 0.1f * std::max(total, 1.0e-6f);
-                    moonMatters = moonMatters || std::fabs(view.light1Illuminance[c]) > 0.1f * std::max(
-                        std::fabs(view.illuminance[c]) + std::fabs(view.light1Illuminance[c]), 1.0e-12f);
+                    moonMatters = moonMatters || std::fabs(view.SkyLight1Illuminance[c]) > 0.1f * std::max(
+                        std::fabs(view.SkyIlluminance[c]) + std::fabs(view.SkyLight1Illuminance[c]), 1.0e-12f);
                 }
                 lightChanged = lightChanged || (moonMatters && cosMoonTurn < 0.99939083f);
                 const bool major = !distantMajorValid_ ||
                     std::memcmp(&params, &distantMajorParameters_, sizeof(params)) != 0 ||
                     cosTurn < 0.99939083f /* cos 2 degrees */ || lightChanged ||
-                    view.illuminance[3] != k.illuminance[3] ||
-                    std::memcmp(view.planet, k.planet, sizeof(view.planet)) != 0;
+                    view.SkyIlluminance[3] != k.SkyIlluminance[3] ||
+                    std::memcmp(view.SkyPlanet, k.SkyPlanet, sizeof(view.SkyPlanet)) != 0;
                 if (major)
                 {
                     distantMajorParameters_ = params; distantMajorKey_ = view; distantMajorValid_ = true;

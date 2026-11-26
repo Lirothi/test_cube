@@ -17,7 +17,7 @@ namespace
 {
 const SettingDesc kVsmRows[] = {
     TC_SETTING("vsm.clipmapDepthBias", Float, SettingPersistent,
-               [](SettingContext&, float value) { vsm::g_clipmapDepthBias_game = value; return true; },
+               [](SettingContext&, float value) { value = std::isfinite(value) ? std::clamp(value, 0.0f, 0.01f) : 0.0002f; vsm::g_clipmapDepthBias_game = value; return true; },
                [](SettingContext&, float& out) { out = AsFloat(vsm::g_clipmapDepthBias_game); return true; }),
     // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
     // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.
@@ -28,7 +28,7 @@ const SettingDesc kVsmRows[] = {
                [](SettingContext&, float value) { vsm::g_clipmapDepthBiasFloorTexels_game = std::max(0.0f, value); return true; },
                [](SettingContext&, float& out) { out = AsFloat(vsm::g_clipmapDepthBiasFloorTexels_game); return true; }),
     TC_SETTING("vsm.clipmapNormalBias", Float, SettingPersistent,
-               [](SettingContext&, float value) { vsm::g_clipmapNormalBias_game = value; return true; },
+               [](SettingContext&, float value) { value = std::isfinite(value) ? std::clamp(value, 0.0f, 4.0f) : 1.0f; vsm::g_clipmapNormalBias_game = value; return true; },
                [](SettingContext&, float& out) { out = AsFloat(vsm::g_clipmapNormalBias_game); return true; }),
     TC_SETTING("vsm.clipmapFirstLevel", Int, SettingPersistent,
                [](SettingContext&, float value) { vsm::g_clipmapFirstLevel_game = std::clamp(static_cast<int>(value), 0, 16); return true; },
@@ -116,7 +116,7 @@ const SettingDesc kVsmRows[] = {
     // point: the round-trip perf leak is only reproducible in ONE process
     // (docs/bug_shadow_lod_bias_perf.md §6).
     TC_SETTING("vsm.shadowLodBias", Float, SettingPersistent,
-               [](SettingContext&, float value) { render::g_shadowLodBias_game = (int)value; return true; },
+               [](SettingContext&, float value) { value = std::isfinite(value) ? std::clamp(value, -2.0f, 3.0f) : 0.0f; render::g_shadowLodBias_game = (int)value; return true; },
                [](SettingContext&, float& out) { out = AsFloat(render::g_shadowLodBias_game); return true; }),
     // Caster-vs-receiver LOD floor (LodSelect.h). Off = the old per-view-only caster LOD.
     TC_SETTING("vsm.pageCaching", Bool, SettingPersistent,
@@ -184,6 +184,23 @@ const SettingDesc kVsmRows[] = {
                [](SettingContext&, float value) { vsm::g_lruThreshold_game = static_cast<std::uint32_t>(std::clamp(value, 1.0f, static_cast<float>(vsm::kMaxLruFrames))); return true; },
                [](SettingContext&, float& out) { out = AsFloat(vsm::g_lruThreshold_game); return true; }),
     // Plan S10d: UE r.Shadow.Virtual.DistantLightMode (0 = off, 1 = on) and MaxDistantUpdatePerFrame (< 0 = all).
+    // R2.n: the persisted VSM knobs without a row before (clamps as the graphics file's load had them).
+    TC_SETTING("vsm.lodRefDistance", Float, SettingPersistent,
+               [](SettingContext&, float value)
+               {
+                   vsm::g_refDist_game = std::isfinite(value) ? std::clamp(value, 1.0f, 40.0f) : vsm::kLodRefDist;
+                   return true;
+               },
+               [](SettingContext&, float& out) { out = vsm::g_refDist_game; return true; }),
+    TC_SETTING("vsm.requestDownscale", Int, SettingPersistent,
+               [](SettingContext&, float value) { vsm::g_requestDownscale_game = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 8.0f)); return true; },
+               [](SettingContext&, float& out) { out = AsFloat(vsm::g_requestDownscale_game); return true; }),
+    TC_SETTING("vsm.residentOnly", Bool, SettingPersistent,
+               [](SettingContext&, float value) { vsm::g_residentIterOnly_game = value != 0.0f; return true; },
+               [](SettingContext&, float& out) { out = AsFloat(vsm::g_residentIterOnly_game); return true; }),
+    TC_SETTING("vsm.singleDraw", Bool, SettingPersistent,
+               [](SettingContext&, float value) { vsm::g_pageDrawSingle_game = value != 0.0f; return true; },
+               [](SettingContext&, float& out) { out = AsFloat(vsm::g_pageDrawSingle_game); return true; }),
     TC_SETTING("vsm.distantLightMode", Float, SettingTransient,
                [](SettingContext&, float value) { vsm::g_distantLightMode_game = value != 0.0f ? 1 : 0; return true; },
                [](SettingContext&, float& out) { out = AsFloat(vsm::g_distantLightMode_game); return true; }),

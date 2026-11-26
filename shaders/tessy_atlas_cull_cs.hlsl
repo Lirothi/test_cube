@@ -39,51 +39,15 @@
     "DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
+#include "shared/shader_types.h"
+#include "shared/tessy_atlas_cull.h" // AtlasCullCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer AtlasCullCB : register(b0)
 {
-    uint gNumGroups;   // virtual groups (a row's width)
-    uint gFirstView;   // the row of local view 0 in the args (the main rows: kShadowViewCascades; S7's static rows and
-                       // the camera: 0)
-    uint gNumViews;    // local views (the camera: 1, or with kFlagByRun its G-buffer's PSO runs)
-    uint gRowSet;      // 0 = the main rows, 1 = S7's static rows, 2 = the camera's row (the cluster view, N5's G-buffer),
-                       // 3 = the SDSM partitions' rows (tessy.sdsm: the sun, re-culled by Main_SdsmCull): its
-                       // TessyAtlasViewInfo / args slot is gRowSet * gViewStride + view, its claim cursor gCounterAt.x
-    uint gViewStride;  // render::kShadowViewCeiling
-    uint gFrustumFirst;// the frustum slot of local view 0 (render::kShadowViewCascades)
-    uint gRecordBase;  // this row set's part of TessyAtlasVisible: [gRecordBase, gRecordBase + gRecordCap)
-    uint gRecordCap;
-    float4 gWind0;     // the frame's wind, as the views' PerView carries it: (time, prevTime, dir.x, dir.z)
-    float4 gWind1;     // (sway amplitude, frequency, gust, previous gust); a rigid light's view is padded anyway
-    uint gWindPad;     // tessy.windPad
-    uint gFlags;       // kFlag* below
-    uint gClassicCountOffset; // kFlagByRun: where in TessyAtlasArgs each run's classic command count goes (bytes)
-    uint gCamDeferCap; // N5's two-pass occlusion: TessyCamDeferred's capacity (entries); 0 = no pyramid test
-    // N7d: the camera's DAG cut (the camera's runs only). xyz = the camera, w = pixels per unit at depth 1 / lod.pixelError
-    // (/ lod.distanceScale); gDagNear floors the distance (a sphere around the camera takes its leaves).
-    float4 gDagCam;
-    uint gDagOn;
-    float gDagNear;
-    uint gDagBand; // N7e: 1 = each caster tests the band of levels its distance can cut (tessy.lodBand), 0 = every level
-    uint gPlanes;  // the frustum planes a box is tested against: a local view's 6; an SDSM partition's 16 (its cull volume
-                   // and its box, the tail accept-all -- shadow_cull_cs tests the same 16)
-    // Where this row set counts in TessyAtlasCounter (bytes): x its claimed records, y its views that did not fit, z its
-    // clusters tested, w its triangles written (+4: its DAG clusters), ~0 = not counted. Row sets 0-2 share y / z.
-    uint4 gCounterAt;
-    // Groups a view (the SDSM partitions: ShadowGpuData::kTessySunSplit; the camera's G-buffer runs: tessy.camSplit):
-    // group g takes view g / gSplit and writes its own run at slot g -- a partition its virtual groups vg % gSplit ==
-    // g % gSplit, a camera run the (g % gSplit)-th contiguous part of its commands (the order the classic draw has). One
-    // group a view left the GPU idle: six camera runs kept six SMs busy for 0.25 ms of DAG tests. 1 else.
-    uint gSplit;
-    float2 gRectSize;  // kFlagRectCull on the SDSM partitions' rows: the partition's viewport (the tile's content rect)
-    uint gRectCountAt; // kFlagRectCull: where in TessyAtlasCounter the clusters it dropped are counted (bytes)
-    // S7's rows (gRowSet 1): one bit per view slot, the views that draw their static rows this frame (a cache miss, an
-    // uncached view). A hit copies them from the pool, so its rows are left as they are (nothing draws them).
-    uint4 gStaticViews[(TC_SHADOW_VIEW_CEILING + 127u) / 128u];
+    TESSY_ATLAS_CULL_FIELDS((TC_SHADOW_VIEW_CEILING + 127u) / 128u)
 };
 
 // N5: mirrors ShadowGpuData::CameraHzbParams (shadow_cull_cs.hlsl's b2). Bound on every row set; read only with
 // gCamDeferCap != 0 (the camera's runs, the camera's two-pass HZB on this frame).
-#include "shared/shader_types.h"
 #include "shared/camera_hzb.h" // CameraHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CameraHzbCB : register(b1)
 {

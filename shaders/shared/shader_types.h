@@ -62,6 +62,25 @@ using int4 = IntVector<std::int32_t, 4>;
 using uint3 = IntVector<std::uint32_t, 3>;
 using uint4 = IntVector<std::uint32_t, 4>;
 static_assert(sizeof(int4) == 16 && sizeof(uint3) == 12, "HLSL's integer vectors are packed 4-byte components");
+
+// A row a C++ mirror keeps as a float array (it indexes it, copies it by pointer, hands it to ImGui): HLSL's float4 /
+// float4x4 for a struct that says `using float4 = shader_shared::FloatArray<4>;` -- the same 16 / 64 bytes, a float*
+// where one is wanted, zero unless set. FloatRow(x, y, z, w) is a TC_INIT value (one argument).
+template<int N> struct FloatArray
+{
+    float v[N] = {};
+    operator float*() { return v; }
+    operator const float*() const { return v; }
+    float* data() { return v; }
+    const float* data() const { return v; }
+    float* begin() { return v; }
+    float* end() { return v + N; }
+    const float* begin() const { return v; }
+    const float* end() const { return v + N; }
+    static constexpr int size() { return N; }
+};
+constexpr FloatArray<4> FloatRow(float x, float y, float z, float w) { return { { x, y, z, w } }; }
+static_assert(sizeof(FloatArray<4>) == 16 && sizeof(FloatArray<16>) == 64, "a row is its floats");
 }
 #else
 #define TC_INIT(value)

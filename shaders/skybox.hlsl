@@ -5,6 +5,8 @@
 #include "night_sky.hlsli"
 #include "uds_sky.hlsli"
 
+#include "shared/shader_types.h"
+#include "shared/night_sky.h" // the night sky's rows, once for HLSL and C++ (architecture plan R5.3)
 cbuffer PerFrame : register(b0)
 {
     float4x4 view;      // regular view matrix
@@ -28,11 +30,7 @@ cbuffer PerFrame : register(b0)
     float4 skyMoonDisc2;         // x the disc's lit scale; y 1 = the albedo/normal texture is ready; z the eye's adaptation to the disc (0..1); w the bright limb's position angle (rad, 0 = r, pi/2 = u)
     float4 skyMoonGlow;          // N4: x the glow's peak, a fraction of the FULL moon's mean disc radiance (phase law applied); y its radius (rad); zw 0
     // Time-of-day plan N2: the night sky (NightSkyFrameData).
-    float4 nightGlow;            // rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean
-    float4 nightLayers;          // x stars, y Milky Way (0 = its map not ready), z twinkle 0..1, w time (s)
-    float4 nightRow0;            // world -> equatorial by rows; w 1 = the night sky is drawn
-    float4 nightRow1;
-    float4 nightRow2;
+    NIGHT_SKY_FIELDS
     // Ultra Dynamic Sky's sky material over the atmosphere (UdsSkyFrameData, uds_sky.hlsli); udsSkyGlow.w 0 = off.
     float4 udsSkyParams;
     float4 udsSkyGlow;

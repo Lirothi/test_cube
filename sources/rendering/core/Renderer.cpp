@@ -2288,6 +2288,7 @@ void Renderer::ApplyPendingResize() {
 
     // Important: wait for the GPU before replacing resources
     WaitForPreviousFrame();
+    if (dlssHandler_) { dlssHandler_->ReleaseFeatureIfResized(); } // DLSS's feature at the old size, now (DlssHandler.h)
 
     // Release the old RTV/DSV objects
     for (UINT i = 0; i < render::kFrameCount; ++i) {
@@ -3207,6 +3208,7 @@ void Renderer::RecreateDeferredTargets()
     }
 
     WaitForPreviousFrame();
+    if (dlssHandler_) { dlssHandler_->ReleaseFeatureIfResized(); } // DLSS's feature at the old size, now (DlssHandler.h)
     DestroyDeferredTargets();
     CreateDeferredTargets(width_, height_);
     RefreshCurrentFrameCaches();

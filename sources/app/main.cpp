@@ -329,13 +329,5 @@ int WINAPI WinMain(
         if (Boot().harness.sceneStressExit != 0) { return Boot().harness.sceneStressExit; } // --scene-stress ended before its verdict
         return rtaudit::ExitCode();
     }();
-    // --scene-stress ends the process here, its teardown done, as its own loop always did: past this point Streamline's
-    // exit handlers (sl.interposer, execute_onexit_table) read an unloaded module after a churn -- an access violation in
-    // two stress runs of three, never in an ordinary run (R3.3e; the old driver never got this far). The log's footer
-    // first: the session object in WinMain does not unwind.
-    if (Boot().harness.sceneStress) {
-        logging::Shutdown();
-        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode));
-    }
     return exitCode;
 }

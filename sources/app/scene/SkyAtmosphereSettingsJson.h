@@ -62,15 +62,15 @@ inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
     SetSkyMedium(s, rayleigh, mie, ozone);
     for (unsigned i = 0; i < 3; ++i)
     {
-        s.parameters.groundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.groundAlbedo[0]), 0.0f, 1.0f);
+        s.parameters.GroundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.GroundAlbedo[0]), 0.0f, 1.0f);
     }
-    s.parameters.groundAlbedo[3] =
-        std::clamp(j.value("multiScatteringFactor", earth.groundAlbedo[3]), 0.0f, 10.0f);
+    s.parameters.GroundAlbedo[3] =
+        std::clamp(j.value("multiScatteringFactor", earth.GroundAlbedo[3]), 0.0f, 10.0f);
     // UE's MieAnisotropy, their range and default: how forward-peaked the Mie phase is, which is
     // what decides the size and hardness of the halo around the sun rather than how much haze
     // there is. Lives in mieScattering.w, which `mieScale` deliberately does not touch.
-    s.parameters.mieScattering[3] =
-        std::clamp(j.value("mieAnisotropy", earth.mieScattering[3]), 0.0f, 0.999f);
+    s.parameters.MieScattering[3] =
+        std::clamp(j.value("mieAnisotropy", earth.MieScattering[3]), 0.0f, 0.999f);
 }
 
 inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
@@ -85,17 +85,17 @@ inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
     j["environmentLighting"] = s.environmentLighting;
     j["aerialPerspective"] = s.aerialPerspective;
     j["heightFogContribution"] = s.heightFogContribution;
-    j["rayleighScale"] = SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint);
-    j["mieScale"] = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
-    j["ozoneScale"] = SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
+    j["rayleighScale"] = SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint);
+    j["mieScale"] = SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint);
+    j["ozoneScale"] = SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint);
     const auto tint = [](const float t[3]) { return nlohmann::json::array({t[0], t[1], t[2]}); };
     j["rayleighTint"] = tint(s.rayleighTint);
     j["mieTint"] = tint(s.mieTint);
     j["ozoneTint"] = tint(s.ozoneTint);
     if (s.mieAbsorptionScale >= 0.0f) { j["mieAbsorptionScale"] = s.mieAbsorptionScale; }
-    j["groundAlbedo"] = s.parameters.groundAlbedo[0];
-    j["multiScatteringFactor"] = s.parameters.groundAlbedo[3];
-    j["mieAnisotropy"] = s.parameters.mieScattering[3];
+    j["groundAlbedo"] = s.parameters.GroundAlbedo[0];
+    j["multiScatteringFactor"] = s.parameters.GroundAlbedo[3];
+    j["mieAnisotropy"] = s.parameters.MieScattering[3];
     return j;
 }
 

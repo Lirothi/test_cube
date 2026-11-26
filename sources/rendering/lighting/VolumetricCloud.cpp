@@ -580,9 +580,9 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
 {
     const VolumetricCloudSettings& s = *in.settings;
     VolumetricCloudConstants c{};
-    CopyMat(c.invViewProjNoJitter, in.invViewProjNoJitter);
-    CopyMat(c.viewProjNoJitter, in.viewProjNoJitter);
-    CopyMat(c.prevViewProjNoJitter, in.prevViewProjNoJitter);
+    CopyMat(c.cloudInvViewProjNoJitter, in.invViewProjNoJitter);
+    CopyMat(c.cloudViewProjNoJitter, in.viewProjNoJitter);
+    CopyMat(c.cloudPrevViewProjNoJitter, in.prevViewProjNoJitter);
 
     // --- The shadow map's view (C3). The look-at is the ground under the camera (sea level, Y 0),
     // snapped to a world grid; the light sits 2 extents up the light direction and the far plane is
@@ -609,8 +609,8 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
         const Math::float3 offset(snapComponent(originClip.x) - originClip.x, snapComponent(originClip.y) - originClip.y, 0.0f);
         shadowViewProj = shadowViewProj * Math::mat4::Translation(offset);
     }
-    CopyMat(c.shadowViewProj, shadowViewProj);
-    CopyMat(c.shadowInvViewProj, Math::mat4::Inverse(shadowViewProj));
+    CopyMat(c.cloudShadowViewProj, shadowViewProj);
+    CopyMat(c.cloudShadowInvViewProj, Math::mat4::Inverse(shadowViewProj));
     // :1805-1810: more samples towards the horizon, where each ray crosses far more layer.
     const float horizonFactor = std::clamp(0.2f / std::max(std::fabs(-lightDir.y), 1.0e-4f), 0.0f, 1.0f);
     const float baseCount = std::clamp(static_cast<float>(s.shadowMapSampleCount), 4.0f, 128.0f);
@@ -618,47 +618,47 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
 
     const float bottomRadius = in.planetRadiusKm + s.layerBottomKm;
     const float topRadius = bottomRadius + std::max(s.layerHeightKm, 0.001f);
-    c.camera[0] = in.cameraPos.x; c.camera[1] = in.cameraPos.y; c.camera[2] = in.cameraPos.z; c.camera[3] = in.planetRadiusKm;
-    c.layer[0] = bottomRadius; c.layer[1] = topRadius; c.layer[2] = 1.0f / (topRadius - bottomRadius); c.layer[3] = s.layerBottomKm;
-    c.sun[0] = -cloudLightDir.x; c.sun[1] = -cloudLightDir.y; c.sun[2] = -cloudLightDir.z; c.sun[3] = s.phaseG;
-    c.shadowSun[0] = -lightDir.x; c.shadowSun[1] = -lightDir.y; c.shadowSun[2] = -lightDir.z;
+    c.cloudCamera[0] = in.cameraPos.x; c.cloudCamera[1] = in.cameraPos.y; c.cloudCamera[2] = in.cameraPos.z; c.cloudCamera[3] = in.planetRadiusKm;
+    c.cloudLayer[0] = bottomRadius; c.cloudLayer[1] = topRadius; c.cloudLayer[2] = 1.0f / (topRadius - bottomRadius); c.cloudLayer[3] = s.layerBottomKm;
+    c.cloudSun[0] = -cloudLightDir.x; c.cloudSun[1] = -cloudLightDir.y; c.cloudSun[2] = -cloudLightDir.z; c.cloudSun[3] = s.phaseG;
+    c.cloudShadowSun[0] = -lightDir.x; c.cloudShadowSun[1] = -lightDir.y; c.cloudShadowSun[2] = -lightDir.z;
     const bool perSample = in.perSampleTransmittance && in.atmosphereTopKm > in.planetRadiusKm;
-    c.light[0] = perSample ? in.atmosphereTopKm : 0.0f; c.light[1] = perSample ? 1.0f : 0.0f;
-    c.light[2] = static_cast<float>(in.lightBody);
-    c.light[3] = std::sin(std::clamp(std::isfinite(s.reflectionHorizonFadeDeg) ? s.reflectionHorizonFadeDeg : 5.0f, 0.0f, 45.0f) * 0.0174532925f);
-    c.sunColor[0] = in.sunIlluminance.x; c.sunColor[1] = in.sunIlluminance.y; c.sunColor[2] = in.sunIlluminance.z; c.sunColor[3] = s.phaseG2;
-    c.phase[0] = s.phaseBlend; c.phase[1] = s.msContribution; c.phase[2] = s.msOcclusion; c.phase[3] = s.msEccentricity;
-    c.trace[0] = static_cast<float>(std::max(s.viewSampleCountMax, 1u));
-    c.trace[1] = static_cast<float>(std::max(s.viewSampleCountMin, 1u));
-    c.trace[2] = 1.0f / std::max(s.distanceToSampleCountMaxKm, 0.001f);
-    c.trace[3] = s.stopTracingTransmittance;
-    c.shadowTrace[0] = static_cast<float>(std::max(s.shadowSampleCount, 1u));
-    c.shadowTrace[1] = s.shadowTracingDistanceKm;
-    c.shadowTrace[2] = 1.0f - std::clamp(s.skyLightBottomOcclusion, 0.0f, 1.0f); // UE SkyLightCloudBottomVisibility
-    c.shadowTrace[3] = s.tracingMaxDistanceKm;
-    c.medium[0] = s.extinctionScale; c.medium[1] = s.albedo; c.medium[2] = s.coverage; c.medium[3] = s.cloudType;
+    c.cloudLight[0] = perSample ? in.atmosphereTopKm : 0.0f; c.cloudLight[1] = perSample ? 1.0f : 0.0f;
+    c.cloudLight[2] = static_cast<float>(in.lightBody);
+    c.cloudLight[3] = std::sin(std::clamp(std::isfinite(s.reflectionHorizonFadeDeg) ? s.reflectionHorizonFadeDeg : 5.0f, 0.0f, 45.0f) * 0.0174532925f);
+    c.cloudSunColor[0] = in.sunIlluminance.x; c.cloudSunColor[1] = in.sunIlluminance.y; c.cloudSunColor[2] = in.sunIlluminance.z; c.cloudSunColor[3] = s.phaseG2;
+    c.cloudPhase[0] = s.phaseBlend; c.cloudPhase[1] = s.msContribution; c.cloudPhase[2] = s.msOcclusion; c.cloudPhase[3] = s.msEccentricity;
+    c.cloudTrace[0] = static_cast<float>(std::max(s.viewSampleCountMax, 1u));
+    c.cloudTrace[1] = static_cast<float>(std::max(s.viewSampleCountMin, 1u));
+    c.cloudTrace[2] = 1.0f / std::max(s.distanceToSampleCountMaxKm, 0.001f);
+    c.cloudTrace[3] = s.stopTracingTransmittance;
+    c.cloudShadowTrace[0] = static_cast<float>(std::max(s.shadowSampleCount, 1u));
+    c.cloudShadowTrace[1] = s.shadowTracingDistanceKm;
+    c.cloudShadowTrace[2] = 1.0f - std::clamp(s.skyLightBottomOcclusion, 0.0f, 1.0f); // UE SkyLightCloudBottomVisibility
+    c.cloudShadowTrace[3] = s.tracingMaxDistanceKm;
+    c.cloudMedium[0] = s.extinctionScale; c.cloudMedium[1] = s.albedo; c.cloudMedium[2] = s.coverage; c.cloudMedium[3] = s.cloudType;
     // The drift: the level's wind heading at the cloud's own speed, on the shared (freezable) clock.
     // The field moves WITH the wind, so the sample point moves against it.
     const float driftM = s.windKmH / 3.6f * in.windTime;
-    c.wind[0] = -in.windDirXZ.x * driftM; c.wind[1] = 0.0f; c.wind[2] = -in.windDirXZ.y * driftM; c.wind[3] = s.tracingStartMaxDistanceKm;
-    c.output[0] = static_cast<float>(in.outputWidth); c.output[1] = static_cast<float>(in.outputHeight);
-    c.output[2] = in.preExposure; c.output[3] = 1.0f / std::max(in.preExposure, 1.0e-8f);
-    c.depth[0] = static_cast<float>(in.depthWidth); c.depth[1] = static_cast<float>(in.depthHeight);
-    c.depth[2] = in.projZ33; c.depth[3] = in.projZ43;
-    c.resolve[0] = static_cast<float>(std::max(in.resolveWidth, 1u)); c.resolve[1] = static_cast<float>(std::max(in.resolveHeight, 1u));
-    c.resolve[2] = static_cast<float>(std::max(in.resolveScale, 1u));
-    c.resolve[3] = (blueNoise_.Get() != nullptr && render::g_cloudBlueNoise) ? 1.0f : 0.0f;
-    c.aerial[0] = in.aerialBuilt ? 1.0f : 0.0f; c.aerial[1] = in.aerialStartKm;
-    c.aerial[2] = in.distantActive ? 1.0f : 0.0f; c.aerial[3] = static_cast<float>(in.debugView);
-    c.temporal[0] = in.historyValid ? 1.0f : 0.0f; c.temporal[1] = s.temporal ? std::clamp(s.historyWeight, 0.0f, 0.99f) : 0.0f;
-    c.temporal[2] = in.prevPreExposure > 0.0f ? in.preExposure / in.prevPreExposure : 1.0f;
-    c.temporal[3] = static_cast<float>(in.frameIndex & 1023u);
-    c.shadowMap[0] = static_cast<float>(kShadowSize); c.shadowMap[1] = 1.0f / static_cast<float>(kShadowSize);
-    c.shadowMap[2] = farPlane / 1000.0f; c.shadowMap[3] = s.shadowStrength;
-    c.shadowMap2[0] = shadowSamples; c.shadowMap2[1] = s.shadowDepthBiasKm;
+    c.cloudWind[0] = -in.windDirXZ.x * driftM; c.cloudWind[1] = 0.0f; c.cloudWind[2] = -in.windDirXZ.y * driftM; c.cloudWind[3] = s.tracingStartMaxDistanceKm;
+    c.cloudOutput[0] = static_cast<float>(in.outputWidth); c.cloudOutput[1] = static_cast<float>(in.outputHeight);
+    c.cloudOutput[2] = in.preExposure; c.cloudOutput[3] = 1.0f / std::max(in.preExposure, 1.0e-8f);
+    c.cloudDepth[0] = static_cast<float>(in.depthWidth); c.cloudDepth[1] = static_cast<float>(in.depthHeight);
+    c.cloudDepth[2] = in.projZ33; c.cloudDepth[3] = in.projZ43;
+    c.cloudResolve[0] = static_cast<float>(std::max(in.resolveWidth, 1u)); c.cloudResolve[1] = static_cast<float>(std::max(in.resolveHeight, 1u));
+    c.cloudResolve[2] = static_cast<float>(std::max(in.resolveScale, 1u));
+    c.cloudResolve[3] = (blueNoise_.Get() != nullptr && render::g_cloudBlueNoise) ? 1.0f : 0.0f;
+    c.cloudAerial[0] = in.aerialBuilt ? 1.0f : 0.0f; c.cloudAerial[1] = in.aerialStartKm;
+    c.cloudAerial[2] = in.distantActive ? 1.0f : 0.0f; c.cloudAerial[3] = static_cast<float>(in.debugView);
+    c.cloudTemporal[0] = in.historyValid ? 1.0f : 0.0f; c.cloudTemporal[1] = s.temporal ? std::clamp(s.historyWeight, 0.0f, 0.99f) : 0.0f;
+    c.cloudTemporal[2] = in.prevPreExposure > 0.0f ? in.preExposure / in.prevPreExposure : 1.0f;
+    c.cloudTemporal[3] = static_cast<float>(in.frameIndex & 1023u);
+    c.cloudShadowMap[0] = static_cast<float>(kShadowSize); c.cloudShadowMap[1] = 1.0f / static_cast<float>(kShadowSize);
+    c.cloudShadowMap[2] = farPlane / 1000.0f; c.cloudShadowMap[3] = s.shadowStrength;
+    c.cloudShadowMap2[0] = shadowSamples; c.cloudShadowMap2[1] = s.shadowDepthBiasKm;
     // Read by the environment capture only: the screen trace's aerial volume is scaled on the CPU.
-    c.shadowMap2[2] = CloudAirSunScale(CloudSunGroundVisibility(s));
-    c.profile[1] = profileInvSize_[0]; c.profile[2] = profileInvSize_[1];
+    c.cloudShadowMap2[2] = CloudAirSunScale(CloudSunGroundVisibility(s));
+    c.cloudProfile[1] = profileInvSize_[0]; c.cloudProfile[2] = profileInvSize_[1];
     // The formation's time axis advances with the DRIFT, as UDS's does with their cloud movement:
     // formationChangeSpeed full cycles per 16 formation tiles travelled (VolumetricCloudSettings.h).
     // In double, wrapped before upload: the drift grows without bound on a long session.
@@ -666,26 +666,26 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     const double driftKm = static_cast<double>(s.windKmH) * static_cast<double>(in.windTime) / 3600.0;
     const double cycles = static_cast<double>(std::max(s.formationChangeSpeed, 0.0f)) * driftKm
         / (static_cast<double>(std::max(s.weatherTileKm, 0.001f)) * kTilesPerCycle);
-    c.formation[0] = 1.0f / std::max(s.weatherTileKm, 0.001f);
-    c.formation[1] = std::isfinite(cycles) ? static_cast<float>(cycles - std::floor(cycles)) : 0.0f;
+    c.cloudFormation[0] = 1.0f / std::max(s.weatherTileKm, 0.001f);
+    c.cloudFormation[1] = std::isfinite(cycles) ? static_cast<float>(cycles - std::floor(cycles)) : 0.0f;
     // An overcast deck is one sheet: the macro variation fades with it (UDS scale theirs by 1 - lerp to simplified).
     const float overcast = CloudOvercastAmount(s);
-    c.formation[2] = std::clamp(s.macroVariation, 0.0f, 1.0f) * (1.0f - overcast);
-    c.formation[3] = 1.0f / std::max(s.macroTileKm, 0.1f);
-    c.lighting[0] = static_cast<float>(std::min(s.msOctaves, 2u));
-    c.lighting[1] = std::isfinite(s.skyLightIntensity) ? std::clamp(s.skyLightIntensity, 0.0f, 10.0f) : 1.0f;
-    c.lighting[2] = std::isfinite(s.diffuseLight) ? std::clamp(s.diffuseLight, 0.0f, 10.0f) : 0.25f;
-    c.lighting[3] = overcast;
-    c.floorShape[3] = kCloudOvercastDensityLift * overcast;
-    c.profile[0] = overcast * (std::isfinite(s.overcastEvenness) ? std::clamp(s.overcastEvenness, 0.0f, 1.0f) : 0.7f);
+    c.cloudFormation[2] = std::clamp(s.macroVariation, 0.0f, 1.0f) * (1.0f - overcast);
+    c.cloudFormation[3] = 1.0f / std::max(s.macroTileKm, 0.1f);
+    c.cloudLighting[0] = static_cast<float>(std::min(s.msOctaves, 2u));
+    c.cloudLighting[1] = std::isfinite(s.skyLightIntensity) ? std::clamp(s.skyLightIntensity, 0.0f, 10.0f) : 1.0f;
+    c.cloudLighting[2] = std::isfinite(s.diffuseLight) ? std::clamp(s.diffuseLight, 0.0f, 10.0f) : 0.25f;
+    c.cloudLighting[3] = overcast;
+    c.cloudFloorShape[3] = kCloudOvercastDensityLift * overcast;
+    c.cloudProfile[0] = overcast * (std::isfinite(s.overcastEvenness) ? std::clamp(s.overcastEvenness, 0.0f, 1.0f) : 0.7f);
     const auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
-    c.erosion[0] = std::clamp(finite(s.erosionStrength, 1.2f), 0.0f, 4.0f);
-    c.erosion[1] = std::clamp(finite(s.erosionPower, 3.0f), 0.25f, 8.0f);
-    c.erosion[2] = 1.0f / std::clamp(finite(s.erosionTileKm, 1.2f), 0.05f, 100.0f);
-    c.erosion[3] = std::clamp(finite(s.highFrequencyStrength, 0.24f), 0.0f, 2.0f);
-    c.floorShape[0] = std::clamp(finite(s.floorVariationClear, 0.08f), 0.0f, 2.0f);
-    c.floorShape[1] = std::clamp(finite(s.floorVariationCloudy, 0.64f), 0.0f, 2.0f);
-    c.floorShape[2] = 1.0f / std::clamp(finite(s.highFrequencyDistanceKm, 1.5f), 0.01f, 100.0f);
+    c.cloudErosion[0] = std::clamp(finite(s.erosionStrength, 1.2f), 0.0f, 4.0f);
+    c.cloudErosion[1] = std::clamp(finite(s.erosionPower, 3.0f), 0.25f, 8.0f);
+    c.cloudErosion[2] = 1.0f / std::clamp(finite(s.erosionTileKm, 1.2f), 0.05f, 100.0f);
+    c.cloudErosion[3] = std::clamp(finite(s.highFrequencyStrength, 0.24f), 0.0f, 2.0f);
+    c.cloudFloorShape[0] = std::clamp(finite(s.floorVariationClear, 0.08f), 0.0f, 2.0f);
+    c.cloudFloorShape[1] = std::clamp(finite(s.floorVariationCloudy, 0.64f), 0.0f, 2.0f);
+    c.cloudFloorShape[2] = 1.0f / std::clamp(finite(s.highFrequencyDistanceKm, 1.5f), 0.01f, 100.0f);
     return c;
 }
 
@@ -732,7 +732,7 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     probe.cameraPos = Math::float3(in.cameraPos.x, 1.0f, in.cameraPos.z);
     probe.preExposure = 1.0f; probe.prevPreExposure = 1.0f;
     VolumetricCloudConstants constants = MakeConstants(probe);
-    constants.aerial[0] = 1.0f;
+    constants.cloudAerial[0] = 1.0f;
     const bool distant = in.distantActive && in.distantResource && in.distantSrv.ptr != 0;
 
     overlay.active = true;
@@ -743,7 +743,7 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     overlayConstants_ = constants; // read by the closure, which stays inside the small buffer (see the member)
     overlay.writeConstants = [this](uint8_t* dst, unsigned mipSize) {
         VolumetricCloudConstants mip = overlayConstants_;
-        mip.output[0] = mip.output[1] = static_cast<float>(mipSize);
+        mip.cloudOutput[0] = mip.cloudOutput[1] = static_cast<float>(mipSize);
         std::memcpy(dst, &mip, sizeof(mip));
     };
     const DensityBinding bind = Binding();
@@ -771,7 +771,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     // none below 1 degree, smoothstep to full at the fade height. shadowSun is the unit direction TO the light.
     {
         const float fadeDeg = in.settings->shadowHorizonFadeDeg;
-        const float elevationDeg = std::asin(std::clamp(constants.shadowSun[1], -1.0f, 1.0f)) * 57.2957795f;
+        const float elevationDeg = std::asin(std::clamp(constants.cloudShadowSun[1], -1.0f, 1.0f)) * 57.2957795f;
         float strength = 1.0f;
         if (fadeDeg > 1.0f)
         {
@@ -795,7 +795,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     // The filter pass still runs over the whole map every frame; it reads texels of mixed age.
     const std::uint32_t updateFrames = render::SanitizeCloudShadowUpdateFrames(render::g_cloudShadowUpdateFrames);
     const float texelMetres = 2000.0f * std::max(in.settings->shadowExtentKm, 0.001f) / static_cast<float>(kShadowSize);
-    const float windDx = constants.wind[0] - shadowKeyWind_.x, windDz = constants.wind[2] - shadowKeyWind_.y;
+    const float windDx = constants.cloudWind[0] - shadowKeyWind_.x, windDz = constants.cloudWind[2] - shadowKeyWind_.y;
     // The map march's cheap-density bits (render::CloudShadowCheapBits): part of the key, because a
     // slice traced with them beside texels traced without them would be two different maps.
     const std::uint32_t cheapBits = render::CloudShadowCheapBits();
@@ -811,7 +811,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     if (!shadowHistoryValid_) { forced = "no history"; }
     else if (updateFrames != shadowKeyFrames_) { forced = "update mode changed"; }
     else if (cheapBits != shadowKeyCheap_) { forced = "density mode changed"; }
-    else if (std::memcmp(constants.shadowViewProj, shadowKeyViewProj_, sizeof(shadowKeyViewProj_)) != 0) { forced = "map moved (sun or anchor)"; }
+    else if (std::memcmp(constants.cloudShadowViewProj, shadowKeyViewProj_, sizeof(shadowKeyViewProj_)) != 0) { forced = "map moved (sun or anchor)"; }
     else if (std::memcmp(in.settings, &shadowKeySettings_, sizeof(VolumetricCloudSettings)) != 0) { forced = "cloud settings"; }
     else if (noiseBuilds_ != shadowKeyNoise_) { forced = "noise rebuilt"; }
     else if (in.planetRadiusKm != shadowKeyPlanetKm_) { forced = "planet radius"; }
@@ -845,21 +845,21 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
                                       forced ? forced : "?");
         }
     }
-    constants.shadowMap3[0] = static_cast<float>(stride);
-    constants.shadowMap3[1] = static_cast<float>(offsetX);
-    constants.shadowMap3[2] = static_cast<float>(offsetY);
-    constants.shadowMap3[3] = static_cast<float>(cheapBits);
+    constants.cloudShadowMap3[0] = static_cast<float>(stride);
+    constants.cloudShadowMap3[1] = static_cast<float>(offsetX);
+    constants.cloudShadowMap3[2] = static_cast<float>(offsetY);
+    constants.cloudShadowMap3[3] = static_cast<float>(cheapBits);
     const UINT traceSize = kShadowSize / stride;
     render::g_cloudShadowStats.tracedTexels = traceSize * traceSize;
 
     shadowHistoryValid_ = true;
-    std::memcpy(shadowKeyViewProj_, constants.shadowViewProj, sizeof(shadowKeyViewProj_));
+    std::memcpy(shadowKeyViewProj_, constants.cloudShadowViewProj, sizeof(shadowKeyViewProj_));
     std::memcpy(&shadowKeySettings_, in.settings, sizeof(VolumetricCloudSettings));
     shadowKeyNoise_ = noiseBuilds_;
     shadowKeyPlanetKm_ = in.planetRadiusKm;
     shadowKeyFrames_ = updateFrames;
     shadowKeyCheap_ = cheapBits;
-    shadowKeyWind_ = Math::float2(constants.wind[0], constants.wind[2]);
+    shadowKeyWind_ = Math::float2(constants.cloudWind[0], constants.cloudWind[2]);
 
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (after != kNone) { deps.push_back(after); }
@@ -893,8 +893,8 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
             ctx.Use(shadowFiltered_.Get(), kRest);
             // Serial builder: what the consumers registered after this read.
             shadowBuilt_ = true;
-            std::memcpy(&shadowViewProj_.m, shadowPass_.constants.shadowViewProj, sizeof(float) * 16);
-            shadowFarKm_ = shadowPass_.constants.shadowMap[2];
+            std::memcpy(&shadowViewProj_.m, shadowPass_.constants.cloudShadowViewProj, sizeof(float) * 16);
+            shadowFarKm_ = shadowPass_.constants.cloudShadowMap[2];
             return [this, renderer, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudShadow);
                 const VolumetricCloudConstants& constants = shadowPass_.constants;
@@ -936,7 +936,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     f.aerialSrv = aerial ? in.aerialSrv : renderer->VsmDummyTexSrv();
     f.distantSrv = distant ? in.distantSrv : renderer->VsmDummyTexSrv();
     // N3: the sky's transmittance LUT (t7), for the light at each sample; read only when constants say so.
-    const bool transmittance = constants.light[1] > 0.0f && in.transmittanceResource && in.transmittanceSrv.ptr != 0;
+    const bool transmittance = constants.cloudLight[1] > 0.0f && in.transmittanceResource && in.transmittanceSrv.ptr != 0;
     f.transmittanceResource = transmittance ? in.transmittanceResource : nullptr;
     f.transmittanceSrv = transmittance ? in.transmittanceSrv : renderer->VsmDummyTexSrv();
     // The density model's textures: generated, or the files that replaced them.

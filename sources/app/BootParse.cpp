@@ -361,6 +361,14 @@ void Sweep(const char* cmd)
 // --- harness ---------------------------------------------------------------------------------------------------------
 
 // "--settings-dump=<file>" (architecture plan R2.0): every readable setting after the warmup, then quit.
+void GraphicsResetAtDump(const char* cmd)
+{
+    Boot().harness.graphicsResetAtDump = std::strstr(cmd, "--graphics-reset-at-dump") != nullptr;
+    if (std::strstr(cmd, "--graphics-reset-at-dump=")) {
+        Boot().harness.graphicsResetSetting = ExtractArgValue(cmd, "--graphics-reset-at-dump=");
+    }
+}
+
 void SettingsDump(const char* cmd)
 {
     if (std::strstr(cmd, "--settings-dump=")) {

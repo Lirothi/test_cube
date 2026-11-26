@@ -69,30 +69,12 @@ cbuffer InstanceArray : register(b0)
 // (camera matrices for the gbuffer pass, light viewProj for the shadow passes).
 // Declared here so the gbuffer + shadow variants share one layout; the depth-only
 // shadow shaders only consume viewProj (the other two are unused there).
+#include "shared/shader_types.h"
+#include "shared/per_view.h" // PerView's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer PerView : register(b1)
 {
-    float4x4 viewProj;
-    float4x4 viewProjNoJitter;
-    float4x4 prevViewProjNoJitter;
-    // W3: global wind, filled from WindState by BuildGBufferViewCB. The gbuffer VS (W4) applies the
-    // sway offset from these; the depth-only shadow shaders declare a shorter PerView and ignore
-    // this tail (W5 adds the matching fields to the shadow CB). windGustMul defaults to 1.
-    float  windTime;
-    float  windPrevTime;
-    float2 windDirXZ;
-    float  windSwayAmp;
-    float  windSwayFreq;
-    float  windGustMul;
-    float  windPrevGustMul;
-    // S6: shadow-depth bias params at 224..239. The GBUFFER VS never reads them; the three
-    // CPU-fallback shadow VS in this header do. Declared here because they share this cbuffer.
-    float  shadowConstBias;   // 224
-    float  shadowSlopeBias;   // 228
-    float  shadowMaxSlope;    // 232
-    float  shadowClampNear;   // 236 (S7)
-    // 240: the frame's directional light (the sun or the moon) for the G-buffer's GB1.a, xyz TOWARD it, w = 1 when set
-    // (FinalizeGBuffer). The shadow views leave it 0.
-    float4 gbLightToward;
+    PER_VIEW_FIELDS
+    PER_VIEW_GBUFFER_FIELDS
 };
 
 // W4/W5: single call site of the PerView wind fields for every shader that includes this header

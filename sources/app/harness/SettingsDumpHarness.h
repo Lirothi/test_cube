@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "app/harness/Harness.h"
 
@@ -16,7 +17,10 @@ class SettingsDumpHarness final : public Harness
 public:
     // Reads a setting by its --set name (App.cpp's ReadSweepValue, then the registry); false = it cannot be read.
     using ReadSetting = std::function<bool(Scene&, const SceneRenderSettings&, const std::string&, float&)>;
-    explicit SettingsDumpHarness(ReadSetting read) : read_(std::move(read)) {}
+    // The graphics file's lines (R2.n): GraphicsSettingsManager::DescribeFile, and after a Reset all when
+    // --graphics-reset-at-dump asks (reset = true).
+    using GraphicsLines = std::function<void(FrameContext&, bool reset, std::vector<std::string>&)>;
+    SettingsDumpHarness(ReadSetting read, GraphicsLines graphics) : read_(std::move(read)), graphics_(std::move(graphics)) {}
     const char* Name() const override { return "settings-dump"; }
     bool Wanted() const override;
     void OnFrame(FrameContext& ctx) override;
@@ -24,6 +28,7 @@ public:
 
 private:
     ReadSetting read_;
+    GraphicsLines graphics_;
     bool started_ = false;
     bool failed_ = false;
     double start_ = 0.0;

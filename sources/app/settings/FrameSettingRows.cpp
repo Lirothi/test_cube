@@ -31,6 +31,10 @@ const SettingDesc kFrameRows[] = {
     TC_SETTING("frame.vsync", Bool, SettingPersistent,
                [](SettingContext&, float value) { render::g_vsync_game = value != 0.0f; return true; },
                [](SettingContext&, float& out) { out = AsFloat(render::g_vsync_game); return true; }),
+    // Async compute (R2.n: persisted as performance.asyncCompute; render::g_noAsyncCompute is its inverse).
+    TC_SETTING("frame.asyncCompute", Bool, SettingPersistent,
+               [](SettingContext&, float value) { render::g_noAsyncCompute_game = value == 0.0f; return true; },
+               [](SettingContext&, float& out) { out = AsFloat(!render::g_noAsyncCompute_game); return true; }),
     TC_SETTING("frame.maxFps", Int, SettingPersistent,
                [](SettingContext&, float value) { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; },
                [](SettingContext&, float& out) { out = AsFloat(render::g_maxFps_game); return true; }),

@@ -78,6 +78,9 @@
 #include "editor/commands/SetRaceKeyCommand.h"    // TestEditorRaceTracks
 #include "editor/scene/EditorRaceTracks.h"        // TestEditorRaceTracks
 #include <algorithm>
+#include <map>
+#include <set>
+#include "core/settings/SettingsSeries.h" // TestSettingsSeriesRestores
 #include <array>
 #include <cstring>
 #include "rendering/renderables/GBufferRenderable.h"
@@ -3219,6 +3222,77 @@ void TestModelAnswersAreRead()
 // fallback only when the key is ABSENT. A key that is there with another type throws -- out of a frame or a detached
 // thread that is std::terminate, the editor gone with the level in it. Each test below is one place where that was so.
 
+// MCP's set_settings / reset_settings bookkeeping (core/settings/SettingsSeries; architecture plan R2.n review): a
+// fake app with one scalability group "sg.g" over two knobs (a level writes 10 x level into each unpinned one),
+// sg.unpin (drops every pin and puts the levels back), a boot --set pin, and an ocean colour readable only while
+// there is an ocean.
+void TestSettingsSeriesRestores()
+{
+    struct FakeApp
+    {
+        std::map<std::string, float> values{ { "sg.g", 2.0f }, { "k1", 7.0f }, { "k2", 15.0f }, { "k3", 5.0f },
+                                             { "plain", 1.0f }, { "ocean.c", 0.3f } };
+        std::set<std::string> pins{ "k3" }; // k3: a boot --set
+        bool ocean = false;
+        void Level(float level)
+        {
+            values["sg.g"] = level;
+            for (const char* k : { "k1", "k2" })
+            {
+                if (pins.count(k) == 0) { values[k] = 10.0f * level; }
+            }
+        }
+    } app;
+    settings::SettingsSeries::Host host;
+    host.read = [&](const std::string& n, float& out) {
+        if (n == "ocean.c" && !app.ocean) { return false; }
+        const auto it = app.values.find(n);
+        if (it == app.values.end() || n == "sg.unpin") { return false; }
+        out = it->second;
+        return true;
+    };
+    host.apply = [&](const std::string& n, float v) {
+        if (n == "sg.g") { app.Level(v); return true; }
+        if (n == "sg.unpin") { app.pins.clear(); app.Level(app.values["sg.g"]); return true; }
+        if (app.values.count(n) == 0) { return false; }
+        app.values[n] = v;
+        return true;
+    };
+    host.isAction = [](const std::string& n) { return n == "sg.unpin"; };
+    host.rewritesKnobs = [](const std::string& n) { return n.rfind("sg.", 0) == 0; };
+    host.knobs = [] { return std::vector<std::string>{ "k1", "k2", "k3" }; };
+    host.pins = [&] { return app.pins; };
+    host.pin = [&](const std::string& n, bool on) {
+        if (n.rfind("k", 0) != 0) { return; } // only the knobs are pinnable (Scalability::Pin)
+        if (on) { app.pins.insert(n); } else { app.pins.erase(n); }
+    };
+    settings::SettingsSeries series;
+    Check(series.Set(host, "plain", 2.0f) && series.Set(host, "plain", 3.0f), "set_settings applies, twice");
+    Check(series.Set(host, "k3", 9.0f), "a boot-pinned knob is set");
+    Check(series.Set(host, "ocean.c", 0.9f), "a name nothing can read yet is still applied");
+    app.ocean = true; // a level with an ocean opens; its own colour now
+    app.values["ocean.c"] = 0.4f;
+    Check(series.Set(host, "ocean.c", 0.5f), "...and set again once it can be read");
+    Check(series.Set(host, "k1", 99.0f), "a knob set by hand (pinned now)");
+    Check(series.Set(host, "sg.g", 0.0f), "a level change rewrites the unpinned knob");
+    Check(app.values["k2"] == 0.0f && app.values["k1"] == 99.0f, "the level wrote k2, the pinned k1 stayed");
+    Check(series.Set(host, "sg.unpin", 1.0f), "sg.unpin drops every pin, the boot one too");
+    Check(app.pins.empty(), "no pins after sg.unpin");
+    const std::string text = series.Restore(host);
+    Check(app.values["plain"] == 1.0f, "a name set twice is back at its first value: " + text);
+    Check(app.values["k3"] == 5.0f && app.pins.count("k3") == 1, "the boot-pinned knob: its value and its pin back");
+    Check(app.values["k1"] == 7.0f && app.pins.count("k1") == 0, "the hand-set knob: its value, unpinned again");
+    Check(app.values["k2"] == 15.0f, "a knob only the level rewrote (15 by hand at level 2): 15, not the level's: " + text);
+    Check(app.values["sg.g"] == 2.0f, "the group's level back");
+    Check(app.values["ocean.c"] == 0.4f, "a name readable only later: back at its value when first readable");
+    Check(text.find("Put back") != std::string::npos && text.find("Not readable") == std::string::npos,
+          "the answer counts what came back and names nothing left unreadable: " + text);
+    // A second series starts clean (the pins as they are now).
+    Check(series.Set(host, "k2", 1.0f) && series.Restore(host).find("Put back 1 ") == 0 && app.values["k2"] == 15.0f &&
+              app.pins.count("k2") == 0 && app.pins.count("k3") == 1,
+          "a second series starts from what the first left");
+}
+
 void TestJsonFieldsAreReadWithoutThrowing()
 {
     const Json h = Json::parse(R"({"build": 4, "zip": null, "version": 1.5, "published": 1, "levels": "a.json",
@@ -6338,6 +6412,7 @@ int main(int argc, char** argv)
         TestGeneratedGrammar(document, assets);
         TestModelAnswersAreRead();
         TestJsonFieldsAreReadWithoutThrowing();
+        TestSettingsSeriesRestores();
         TestModelRepliesOfAnyShape();
         TestTheModelServersEndpointAnswerAndStop();
         TestTheBuildsPythonAndItsJob();

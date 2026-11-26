@@ -233,7 +233,13 @@ namespace
         Report(what.c_str(), nullptr, 3);
     }
 
-    void OnAbort(int) { Report("abort()", nullptr, 3); }
+    std::atomic<void (*)()> g_abortHook{ nullptr }; // SetAbortHook
+
+    void OnAbort(int)
+    {
+        if (void (*hook)() = g_abortHook.load()) { hook(); }
+        Report("abort()", nullptr, 3);
+    }
     void OnPureCall() { Report("pure virtual function call", nullptr, 3); }
     void OnInvalidParameter(const wchar_t*, const wchar_t*, const wchar_t*, unsigned, uintptr_t)
     {
@@ -313,6 +319,8 @@ void Install(const Options& options)
 bool Installed() { return g_installed.load(); }
 
 void NoteDeviceRemoved(unsigned reason) { g_deviceRemovedReason.store(reason == 0 ? 1u : reason); }
+
+void SetAbortHook(void (*hook)()) { g_abortHook.store(hook); }
 
 void InstallThisThread()
 {

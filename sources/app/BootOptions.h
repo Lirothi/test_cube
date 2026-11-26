@@ -161,6 +161,11 @@ struct BootOptions
         // "--settings-dump=<file>" (architecture plan R2.0): after the warmup, every readable setting as `name value`
         // (app/harness/SettingsDumpHarness.h), then quit.
         std::string settingsDumpPath;
+        // "--graphics-reset-at-dump[=<setting>]" (architecture plan R2.n): with the settings dump, Reset all graphics after
+        // it -- or, with a setting, the Reset button of its control (GraphicsSettingsManager::ResetSetting) -- (writes
+        // user_settings.json -- a gate's copy) and dump the graphics file again (`graphicsReset:` lines).
+        bool graphicsResetAtDump = false;
+        std::string graphicsResetSetting; // empty = Reset all
         // "--boot-dump=<file>" (architecture plan R3.2b): every field here as the command line set it, then out before the
         // App starts (app/BootOptionsDump.cpp) -- the gate of moving a switch's parsing.
         std::string bootDumpPath;

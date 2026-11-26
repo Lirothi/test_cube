@@ -331,6 +331,7 @@ fog.volumetric r
 fog.volumetricDistance r
 fog.volumetricFadeIn r
 fog.volumetricStart r
+frame.asyncCompute r
 frame.gbvCreationExcludesSubmission
 frame.maxFps r
 frame.oneFrameThreadLag r
@@ -939,6 +940,7 @@ vsm.localSmrtRayCount r
 vsm.localSmrtSamplesPerRay r
 vsm.localSmrtTexelDitherScale r
 vsm.localTexelBias r
+vsm.lodRefDistance r
 vsm.logPageStats r
 vsm.lruFrames r
 vsm.markCoarsePages r
@@ -948,13 +950,16 @@ vsm.pageCaching r
 vsm.pageDilation r
 vsm.perInstanceCasterLod r
 vsm.redrawUnrequestedFrames r
+vsm.requestDownscale r
 vsm.requestLightCull r
+vsm.residentOnly r
 vsm.resolutionLodBiasDirectional r
 vsm.resolutionLodBiasLocal r
 vsm.resolutionLodBiasLocalMoving r
 vsm.shadowLodBias r
 vsm.shadowLodBiasNearTier r
 vsm.shadowLodTierStride r
+vsm.singleDraw r
 vsm.smrtAdaptiveRayCount r
 vsm.smrtExtrapolateMaxSlope r
 vsm.smrtRayCount r

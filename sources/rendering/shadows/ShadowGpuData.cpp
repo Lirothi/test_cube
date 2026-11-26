@@ -39,6 +39,7 @@
 #include "rendering/shadows/TessySettings.h" // Tessy N4: tessy::g_atlas
 #include "rendering/wind/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
 #include "shaders/shared/shadow_cull.h" // ShadowCullCB's fields, once (R5.3)
+#include "shaders/shared/tessy_atlas_cull.h" // AtlasCullCB's fields, once (R5.3)
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
 
@@ -5425,77 +5426,72 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     const bool byRun = camera && dec.tessyGBuffer;
     const std::uint32_t views = camera ? (byRun ? dec.tessyCamRows : 1u) : dec.localViews;
     if (f >= render::kFrameCount || views == 0u || rowSet >= kTessyAtlasRowSets || (sun && frustumSrv.ptr == 0)) { return; }
+    // shaders/shared/tessy_atlas_cull.h (architecture plan R5.3): the fields, once for HLSL and C++.
     struct AtlasCullCB
     {
-        std::uint32_t numGroups, firstView, numViews, rowSet, viewStride, frustumFirst, recordBase, recordCap;
-        float wind0[4], wind1[4];
-        std::uint32_t windPad, flags, classicCountOffset, camDeferCap;
-        float dagCam[4];      // N7d: the camera, pixels per unit / lod.pixelError (the camera's runs)
-        std::uint32_t dagOn;
-        float dagNear;
-        std::uint32_t dagBand; // N7e: tessy.lodBand
-        std::uint32_t planes;  // a local view's frustum planes (6), an SDSM partition's (16)
-        std::uint32_t counterAt[4]; // the row set's counters in TessyAtlasCounter: claim, not fit, tested, triangles (~0 none)
-        std::uint32_t split;   // groups a view (the SDSM partitions: kTessySunSplit, each its own run), else 1
-        float rectSize[2];     // kFlagRectCull on the SDSM partitions: their viewport (texels)
-        std::uint32_t rectCountAt; // where in TessyAtlasCounter the clusters it dropped are counted (bytes)
-        ViewMask staticViews; // S7's rows: the views that draw them (SetLocalStaticDrawn); the other row sets ignore it
+        using float2 = shader_shared::float2;
+        using float4 = shader_shared::FloatArray<4>;
+        using uint = shader_shared::uint;
+        using uint4 = shader_shared::uint4;
+        TESSY_ATLAS_CULL_FIELDS((render::kShadowViewCeiling + 127u) / 128u)
     };
-    static_assert(offsetof(AtlasCullCB, staticViews) == 144u, "tessy_atlas_cull_cs.hlsl AtlasCullCB: gStaticViews at 144");
+    static_assert(sizeof(AtlasCullCB::gStaticViews) == sizeof(ViewMask), "a ViewMask is gStaticViews' rows");
+    static_assert(offsetof(AtlasCullCB, gStaticViews) == 144u, "tessy_atlas_cull_cs.hlsl AtlasCullCB: gStaticViews at 144");
+    static_assert(sizeof(AtlasCullCB) == 144u + sizeof(ViewMask), "AtlasCullCB mirrors tessy_atlas_cull_cs.hlsl's");
     static constexpr std::uint32_t kFlagKeepRows = 1u, kFlagNoCull = 2u, kFlagClusterId = 4u, kFlagByRun = 8u, // the kernel's
                                    kFlagLevelId = 16u, kFlagOrdered = 32u, kFlagCameraCut = 64u, kFlagRectCull = 128u;
     AtlasCullCB c{};
-    c.numGroups = empty ? 0u : numVirtualGroups_;
-    c.firstView = rowSet == 0u ? render::kShadowViewCascades : 0u; // the main rows by view slot, S7's by slot - cascades
-    c.numViews = views;
-    c.rowSet = rowSet;
-    c.viewStride = render::kShadowViewCeiling;
+    c.gNumGroups = empty ? 0u : numVirtualGroups_;
+    c.gFirstView = rowSet == 0u ? render::kShadowViewCascades : 0u; // the main rows by view slot, S7's by slot - cascades
+    c.gNumViews = views;
+    c.gRowSet = rowSet;
+    c.gViewStride = render::kShadowViewCeiling;
     // The camera's frustum sits past the capacity's views (shadow_cull_cs gCamView); the cluster view alone reads none;
     // the SDSM partitions' planes are their own buffer's 0..
-    c.frustumFirst = camera ? (byRun ? render::MaxShadowViews() : 0u) : sun ? 0u : render::kShadowViewCascades;
-    c.planes = sun ? 16u : 6u;
-    c.split = sun ? kTessySunSplit : byRun ? std::max(dec.tessyCamSplit, 1u) : 1u;
+    c.gFrustumFirst = camera ? (byRun ? render::MaxShadowViews() : 0u) : sun ? 0u : render::kShadowViewCascades;
+    c.gPlanes = sun ? 16u : 6u;
+    c.gSplit = sun ? kTessySunSplit : byRun ? std::max(dec.tessyCamSplit, 1u) : 1u;
     if (sun)
     {
-        c.counterAt[0] = kTessySunCounterOffset; c.counterAt[1] = kTessySunCounterOffset + 4u;
-        c.counterAt[2] = kTessySunCounterOffset + 8u; c.counterAt[3] = kTessySunCounterOffset + 12u;
+        c.gCounterAt[0] = kTessySunCounterOffset; c.gCounterAt[1] = kTessySunCounterOffset + 4u;
+        c.gCounterAt[2] = kTessySunCounterOffset + 8u; c.gCounterAt[3] = kTessySunCounterOffset + 12u;
     }
     else
     {
-        c.counterAt[0] = rowSet * 4u; c.counterAt[1] = 12u; c.counterAt[2] = 16u; c.counterAt[3] = byRun ? 24u : 0xFFFFFFFFu;
+        c.gCounterAt[0] = rowSet * 4u; c.gCounterAt[1] = 12u; c.gCounterAt[2] = 16u; c.gCounterAt[3] = byRun ? 24u : 0xFFFFFFFFu;
     }
-    c.recordBase = rowSet * kTessyAtlasRowSetCap;
-    c.recordCap = kTessyAtlasRowSetCap;
-    for (int i = 0; i < 4; ++i) { c.wind0[i] = dec.tessyWind0[i]; c.wind1[i] = dec.tessyWind1[i]; }
-    c.windPad = std::min(tessy::g_vsmWindPad, 2u);
-    c.classicCountOffset = static_cast<std::uint32_t>(kTessyCamClassicCountOffset); // by run: the classic runs' counts
-    c.flags = !camera ? 0u : byRun ? (kFlagClusterId | kFlagByRun) : (kFlagKeepRows | kFlagNoCull | kFlagClusterId);
-    if (camera && tessyViewFrame_ && tessyViewMode_ == 3u) { c.flags |= kFlagLevelId; } // the cluster view's "Levels"
+    c.gRecordBase = rowSet * kTessyAtlasRowSetCap;
+    c.gRecordCap = kTessyAtlasRowSetCap;
+    for (int i = 0; i < 4; ++i) { c.gWind0[i] = dec.tessyWind0[i]; c.gWind1[i] = dec.tessyWind1[i]; }
+    c.gWindPad = std::min(tessy::g_vsmWindPad, 2u);
+    c.gClassicCountOffset = static_cast<std::uint32_t>(kTessyCamClassicCountOffset); // by run: the classic runs' counts
+    c.gFlags = !camera ? 0u : byRun ? (kFlagClusterId | kFlagByRun) : (kFlagKeepRows | kFlagNoCull | kFlagClusterId);
+    if (camera && tessyViewFrame_ && tessyViewMode_ == 3u) { c.gFlags |= kFlagLevelId; } // the cluster view's "Levels"
     // The camera's records in the classic draw's order (tessy_atlas_cull_cs Sweep: coplanar surfaces of two meshes must
     // resolve their depth tie the same way every frame); a shadow row writes depth alone and keeps the atomics.
-    if (camera && tessy::g_ordered) { c.flags |= kFlagOrdered; }
+    if (camera && tessy::g_ordered) { c.gFlags |= kFlagOrdered; }
     // The SDSM partitions cut the DAG exactly as the camera did (dagOn from the camera's frame decision, gDagCam its eye).
-    if (sun && dec.tessyAtlasDag) { c.flags |= kFlagCameraCut; }
+    if (sun && dec.tessyAtlasDag) { c.gFlags |= kFlagCameraCut; }
     // tessy.clusterCull: a cluster that holds no sample of its view goes -- the camera's runs on the render target (b1's
     // jittered matrix, SceneRenderer fills it every frame), the lamps by ViewRects, the partitions by their matrices. Not
     // the cluster view (it culls nothing).
     const bool rectCull = tessy::g_clusterCull && (sun ? (partitionSrv.ptr != 0 && sunTexels > 0.0f)
                                                        : camera ? (byRun && camHzbParams_.gCamViewRect[2] > 0)
                                                                 : viewRect_.Valid());
-    if (rectCull) { c.flags |= kFlagRectCull; }
-    c.rectSize[0] = c.rectSize[1] = sun ? sunTexels : 0.0f;
-    c.rectCountAt = sun ? kTessySunCounterOffset + 16u : kTessyRectCulledOffset;
-    c.staticViews = dec.tessyStaticViews;
-    c.dagOn = byRun ? (dec.tessyCamDag ? 1u : 0u) : (!camera && dec.tessyAtlasDag ? 1u : 0u);
-    for (int i = 0; i < 4; ++i) { c.dagCam[i] = dec.tessyDagCam[i]; }
-    c.dagNear = 0.01f; // 1 cm: a sphere around the camera takes its leaves
-    c.dagBand = tessy::g_lodBand ? 1u : 0u;
+    if (rectCull) { c.gFlags |= kFlagRectCull; }
+    c.gRectSize.x = c.gRectSize.y = sun ? sunTexels : 0.0f;
+    c.gRectCountAt = sun ? kTessySunCounterOffset + 16u : kTessyRectCulledOffset;
+    std::memcpy(c.gStaticViews, dec.tessyStaticViews.data(), sizeof(c.gStaticViews));
+    c.gDagOn = byRun ? (dec.tessyCamDag ? 1u : 0u) : (!camera && dec.tessyAtlasDag ? 1u : 0u);
+    for (int i = 0; i < 4; ++i) { c.gDagCam[i] = dec.tessyDagCam[i]; }
+    c.gDagNear = 0.01f; // 1 cm: a sphere around the camera takes its leaves
+    c.gDagBand = tessy::g_lodBand ? 1u : 0u;
     // The rows (RAW) and their caster ids: main, static, camera, the SDSM partitions (the main pair's rows 0..3).
     static constexpr std::size_t kArgsSet[kTessyAtlasRowSets] = { 0u, 16u, 7u, 0u };
     static constexpr std::size_t kListSet[kTessyAtlasRowSets] = { 1u, 17u, 8u, 1u };
     // N5: the camera's runs test their clusters against last frame's pyramid too, when the two-pass HZB is on.
     const bool camHzb = byRun && dec.tessyCamHzb;
-    c.camDeferCap = camHzb ? kTessyCamDeferCap : 0u;
+    c.gCamDeferCap = camHzb ? kTessyCamDeferCap : 0u;
     CameraHzbParams hzb = camHzbParams_;
     hzb.gCamHzbOn = camHzb ? 1u : 0u;
     // The camera's runs are a handful of groups with thousands of tests each: the 1024-thread twin. (The SDSM partitions
@@ -5528,7 +5524,7 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
                                                   TessyAtlasDescriptor(f, 3u), TessyAtlasDescriptor(f, 6u) }).gpu;
     rc.samplerTable[0] = D3D12_GPU_DESCRIPTOR_HANDLE{};
     kernel->Bind(cl, rc);
-    cl->Dispatch(views * c.split, 1, 1); // one group per view (the camera: per run; the sun: kTessySunSplit per partition)
+    cl->Dispatch(views * c.gSplit, 1, 1); // one group per view (the camera: per run; the sun: kTessySunSplit per partition)
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::TessySrv(UINT slot) const

@@ -2503,10 +2503,10 @@ void Scene::Sync(Renderer* renderer)
         const float mie = timeOfDay_.MieScale();
         for (int c = 0; c < 3; ++c)
         {
-            frameData_.settings.skyAtmosphere.parameters.rayleigh[c] *= rayleigh[c];
-            frameData_.settings.skyAtmosphere.parameters.ozone[c] *= ozone[c];
-            frameData_.settings.skyAtmosphere.parameters.mieScattering[c] *= mie;
-            frameData_.settings.skyAtmosphere.parameters.mieAbsorption[c] *= mie;
+            frameData_.settings.skyAtmosphere.parameters.RayleighScattering[c] *= rayleigh[c];
+            frameData_.settings.skyAtmosphere.parameters.AbsorptionExtinction[c] *= ozone[c];
+            frameData_.settings.skyAtmosphere.parameters.MieScattering[c] *= mie;
+            frameData_.settings.skyAtmosphere.parameters.MieAbsorption[c] *= mie;
         }
         // ...and the day sky's brightness (TimeOfDaySettings::daySkyBrightness), the same way.
         frameData_.settings.skyAtmosphere.luminanceScale *= timeOfDay_.SkyLuminanceScale();

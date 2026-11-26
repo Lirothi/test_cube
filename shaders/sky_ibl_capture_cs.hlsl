@@ -5,6 +5,8 @@
 #include "height_fog.hlsli"
 #include "uds_sky.hlsli"
 #define SKY_IBL_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#include "shared/shader_types.h"
+#include "shared/night_sky.h" // the night sky's rows, once for HLSL and C++ (architecture plan R5.3)
 cbuffer Capture : register(b0)
 {
     float4 planet;     // height, bottom, 1/fixed preExposure, target mip size
@@ -12,11 +14,7 @@ cbuffer Capture : register(b0)
     // Time-of-day plan N2 (NightSkyFrameData): the night sky's own light, in the picture as in the sky
     // pixel -- the airglow and the Milky Way, and the stars as their mean (a 0.7-degree texel cannot
     // hold a point). nightRow0.w 0 = none.
-    float4 nightGlow;
-    float4 nightLayers;
-    float4 nightRow0;
-    float4 nightRow1;
-    float4 nightRow2;
+    NIGHT_SKY_FIELDS
     // UE's DistantHeightFog (ReflectionEnvironmentRealTimeCapture.cpp:919-962, ReflectionEnvironmentShaders.usf:1041-1073;
     // the fog's bVisibleInRealTimeSkyCaptures, default true): the analytic height fog at an infinite distance from the
     // probe, `sky x T + FogColor`, over the sky and before the clouds. PackHeightFog's numbers as compose takes them

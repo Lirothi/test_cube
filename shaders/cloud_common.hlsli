@@ -20,62 +20,23 @@ static const float CloudMetresPerKm = 1000.0f;
 
 // MIRROR of VolumetricCloudConstants (rendering/lighting/VolumetricCloud.h), field for field: it is
 // uploaded as one blob, so the two must not drift. All members are float4 / float4x4.
+#include "shared/shader_types.h"
+#include "shared/sky_atmosphere.h" // CloudCB's sky tail
+#include "shared/cloud.h" // CloudCB's fields, once for HLSL and C++ (architecture plan R5.3)
 #ifndef CLOUD_B_CB
 #define CLOUD_B_CB b0
 #endif
 cbuffer CloudCB : register(CLOUD_B_CB)
 {
-    float4x4 cloudInvViewProjNoJitter;   // clip -> world, this frame's UNJITTERED camera
-    float4x4 cloudViewProjNoJitter;      // world -> clip (w = view depth)
-    float4x4 cloudPrevViewProjNoJitter;  // world -> last frame's unjittered clip (history UV)
-    float4x4 cloudShadowViewProj;        // world -> cloud shadow map clip (plan C3)
-    float4x4 cloudShadowInvViewProj;     // cloud shadow map clip -> world
-    float4 cloudCamera;      // xyz: camera position (world m), w: planet bottom radius (km)
-    float4 cloudLayer;       // x: bottom radius (km), y: top radius (km), z: 1 / layer height (km), w: layer bottom altitude (km)
-    float4 cloudSun;         // xyz: direction TO the sun (world), w: phase g (textbook sign: + forward)
-    float4 cloudSunColor;    // rgb: the sun's effective illuminance (post transmittance), w: second phase g
-    float4 cloudPhase;       // x: phase blend, y: ms contribution, z: ms occlusion, w: ms eccentricity
-    float4 cloudTrace;       // x: view sample count max, y: min, z: 1 / distance to max count (1/km), w: stop transmittance
-    float4 cloudShadowTrace; // x: shadow sample count, y: shadow tracing distance (km), z: sky light bottom visibility, w: tracing max distance (km)
-    float4 cloudMedium;      // x: extinction at density 1 (1/m), y: albedo, z: coverage, w: cloud type bias (the profile column's offset)
-    float4 cloudFormation;   // x: 1 / formation tile (1/km), y: the formation's time coordinate (0..1, wraps), z: macro variation (coverage +-), w: 1 / macro tile (1/km)
-    float4 cloudWind;        // xyz: world drift offset (m) added to every sample, w: tracing start max distance (km)
-    float4 cloudOutput;      // x: trace width, y: trace height (half the resolved size), z: preExposure, w: 1 / preExposure
-    float4 cloudDepth;       // x: depth width, y: depth height (the render size), z: proj._33, w: proj._43 (reverse-Z: viewZ = w / (z - z33))
-    float4 cloudAerial;      // x: aerial perspective on, y: aerial start depth (km), z: distant sky light on, w: debug view
-    float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
-    float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
-    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: the air's sun under the deck (the capture's aerial perspective), w: unused
-    float4 cloudShadowMap3;  // x: shadow-map texel stride this frame (1 = every texel), yz: the traced texel's offset in its stride x stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
-    float4 cloudProfile;     // x: the overcast's evenness (overcast x overcastEvenness), y: 1 / LUT width, z: 1 / LUT height, w: unused
-    float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), y: sky light intensity, z: light diffused through the cloud (strength), w: overcast (0..1)
-    float4 cloudErosion;     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
-    float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's lift of the threshold's density
-    float4 cloudLight;       // N3: x atmosphere top radius (km), y 1 = per-sample transmittance to the light, z body (0 sun, 1 moon), w sin(the capture's horizon fade)
-    float4 cloudShadowSun;   // N3: xyz direction TO the ground's light (the shadow map's), w unused
-    float4 cloudResolve;     // xy: the resolved clouds' size, z: render pixels per resolved pixel (1; 2 in trace mode 0, VolumetricCloudSettings.h), w: 1 = the start offset from the blue-noise mask (cloud_trace_cs.hlsl)
+    CLOUD_FIELDS
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
     // (cloud_capture_cs.hlsl). The names are the sky's own, so its functions read them unchanged;
     // sky_atmosphere.hlsli is then included with SKY_CB_EXTERNAL and declares no cbuffer. The C++
     // blob is VolumetricCloudConstants + SkyAtmosphereParameters + SkyViewFrameData, in that order.
-    float4 AtmosphereRadii;
-    float4 RayleighScattering;
-    float4 MieScattering;
-    float4 MieAbsorption;
-    float4 AbsorptionExtinction;
-    float4 AbsorptionDensity;
-    float4 GroundAlbedo;
-    float4 SkySunDirection;
-    float4 SkyIlluminance;
-    float4 SkyExposure;
-    float4 SkyPlanet;
-    float4 SkyLight1Direction;   // N1: the moon, the atmosphere's second light (SkyViewFrameData)
-    float4 SkyLight1Illuminance;
-    float4 SkyMoonDisc;
-    float4 SkyMoonDisc2;
-    float4 SkyNightGlow;         // N2: the night sky's own light (SkyViewFrameData::nightGlow)
+    SKY_ATMOSPHERE_FIELDS
+    SKY_VIEW_FIELDS
 #endif
 };
 

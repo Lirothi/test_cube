@@ -56,6 +56,13 @@ void SettingsDumpHarness::OnFrame(FrameContext& ctx)
         out << name << ' ' << text << '\n';
         ++written;
     }
+    if (graphics_)
+    {
+        std::vector<std::string> extra;
+        graphics_(ctx, false, extra);
+        if (Boot().harness.graphicsResetAtDump) { graphics_(ctx, true, extra); }
+        for (const std::string& l : extra) { out << l << '\n'; }
+    }
     out.close();
     LOG_INFO(logging::LogCategory::App, "settings dump: {} values ({} names without a reader) -> {}", written, unreadable, path);
 }

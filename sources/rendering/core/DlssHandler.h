@@ -31,6 +31,13 @@ public:
     void OnRenderResolutionScaleChanged();
     void UpdateSettings();
     void AllocateResourcesIfNeeded();
+    // The GPU is idle (Renderer::ApplyPendingResize, RecreateDeferredTargets): a DLSS feature created at other sizes is
+    // released here, so the next evaluate creates the new one. Left to Streamline, its own recreate ("Detected resize")
+    // hands the old feature to sl.common's queue three frames ahead (compute->destroy(releaseFeatureLambda, 3), a lambda
+    // in sl.dlss), and slShutdown runs that queue after it has unloaded sl.dlss: a process that ended within three frames
+    // of a resize jumped into the unloaded module -- 0xC0000005 at the end of slShutdown and again at exit (every
+    // --scene-stress: its first iteration resizes, and the run ends two frames later). slFreeResources releases at once.
+    void ReleaseFeatureIfResized();
     void UpdateCameraData(const Camera& camera);
     bool Evaluate(ID3D12GraphicsCommandList* cl);
     void RefreshRenderResolution();
@@ -94,6 +101,13 @@ private:
     static constexpr std::uint32_t kEvaluateBackoffFrames = 30;
     std::uint32_t skipEvaluateFrames_ = 0;
     sl::ViewportHandle viewport_{ 1 };
+    // The feature Streamline holds for viewport_: whether an evaluate created one since the last release, and the sizes
+    // it was created at (the input and output tags' extents) -- ReleaseFeatureIfResized's test.
+    bool featureLive_ = false;
+    UINT featureInWidth_ = 0;
+    UINT featureInHeight_ = 0;
+    UINT featureOutWidth_ = 0;
+    UINT featureOutHeight_ = 0;
     sl::DLSSOptions options_{};
     sl::Constants constants_{};
     sl::FrameToken* frameToken_ = nullptr;
