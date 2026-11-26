@@ -27,6 +27,10 @@ public:
     virtual const char* Name() const = 0;
     virtual bool Wanted() const = 0;
     virtual void OnBoot(FrameContext&) {}
+    // Right after Renderer::BeginFrame, the render thread idle (--scene-stress: requests that arrive mid-frame).
+    virtual void OnBeginFrame(FrameContext&) {}
+    // A frame threw (App::Run rethrows after): a harness with a verdict to write does it here (--scene-stress).
+    virtual void OnFrameThrew(const char* /*what*/) {}
     virtual void OnFrame(FrameContext& ctx) = 0;
     virtual int Verdict() const { return 0; } // main's exit code when not 0
 };

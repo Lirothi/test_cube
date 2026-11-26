@@ -30,7 +30,27 @@ BARE_READS = {"scene-stress": ("--scene-stress",), "scene-stress-gbv": ("--scene
 
 LITERAL = re.compile(r'L?"(--[a-z0-9][a-z0-9-]*)')
 BARE = re.compile(r'"(' + "|".join(re.escape(k) for k in BARE_READS) + r')"')
-ROW = re.compile(r'\{\s*"(--[a-z0-9][a-z0-9-]*)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)",\s*(true|false)\s*\}')
+ROW = re.compile(r'\{\s*"(--[a-z0-9][a-z0-9-]*)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)",\s*(true|false)\s*'
+                 r'(?:,\s*&parse::(\w+)\s*)?\}')
+PARSE = "app/BootParse.cpp"
+
+
+def parse_check(files, out=print):
+    """R3.2b: a row that names its parse function (&parse::Fn) -- the function is in BootParse.cpp and reads that switch."""
+    findings = 0
+    code = strip_comments(files.get(PARSE, ""))
+    for m in ROW.finditer(strip_comments(files.get(TABLE, ""))):
+        name, fn = m.group(1), m.group(5)
+        if not fn:
+            continue
+        body = re.search(r"^void " + fn + r"\(const char\* cmd\)\n\{\n(.*?)^\}", code, re.S | re.M)
+        if not body:
+            out(f"{TABLE}: {name} names parse::{fn}, which is not in sources/{PARSE}")
+            findings += 1
+        elif f'"{name}' not in body.group(1):
+            out(f"{TABLE}: {name} names parse::{fn}, which does not read {name}")
+            findings += 1
+    return findings
 
 
 def strip_comments(text):
@@ -121,6 +141,32 @@ def check(files, out=print):
     return findings, rows
 
 
+OPTIONS = "app/BootOptions.h"
+DUMP = "app/BootOptionsDump.cpp"
+STRUCT = re.compile(r"^    struct (\w+)\s*$")
+FIELD = re.compile(r"^        [\w:<>, ]+?[ *&]+(\w+)(?:\[\d+\])?(?:\s*=[^;]*)?;")
+CLOSE = re.compile(r"^    \} (\w+);")
+
+
+def dump_check(files, out=print):
+    """R3.2b: every field of BootOptions.h is written by --boot-dump (BootOptionsDump.cpp), but bootDumpPath."""
+    if OPTIONS not in files or DUMP not in files:
+        return 0
+    findings, fields = 0, []
+    for line in strip_comments(files[OPTIONS]).split("\n"):
+        m = FIELD.match(line)
+        if m:
+            fields.append(m.group(1))
+        c = CLOSE.match(line)
+        if c:
+            for name in fields:
+                if name != "bootDumpPath" and f'"{c.group(1)}.{name}"' not in files[DUMP]:
+                    out(f"sources/{DUMP}: {c.group(1)}.{name} (sources/{OPTIONS}) is not written by --boot-dump")
+                    findings += 1
+            fields = []
+    return findings
+
+
 def load(root=ROOT):
     files = {}
     for path in sorted(root.rglob("*")):
@@ -166,6 +212,26 @@ def selftest():
     ok = len(rows) == 5
     failures += not ok
     print(f"  {'ok' if ok else 'FAIL':4s} a commented-out row is not a row ({len(rows)} rows)")
+    opts = ("struct BootOptions\n{\n    struct Frame\n    {\n        std::string levelPath;\n"
+            "        float camPos[3] = { 0.0f, 0.0f, 0.0f };\n        // bool commented = false;\n    } frame;\n};\n")
+    dump_lines = []
+    dump_findings = dump_check({OPTIONS: opts, DUMP: 'line("frame.levelPath", f.levelPath);'}, out=dump_lines.append)
+    expected_dump = [f"sources/{DUMP}: frame.camPos (sources/{OPTIONS}) is not written by --boot-dump"]
+    ok = dump_lines == expected_dump and dump_findings == 1
+    failures += not ok
+    print(f"  {'ok' if ok else 'FAIL':4s} a BootOptions field --boot-dump does not write ({dump_lines})")
+    ptable = ('    { "--a", "", "x", false, &parse::A },\n'
+              '    { "--b", "", "y", false, &parse::Missing },\n'
+              '    { "--c", "", "z", false, &parse::C },\n')
+    pcode = ('void A(const char* cmd)\n{\n    if (std::strstr(cmd, "--a")) {}\n}\n\n'
+             'void C(const char* cmd)\n{\n    if (std::strstr(cmd, "--a")) {}\n}\n')
+    plines = []
+    pfindings = parse_check({TABLE: ptable, PARSE: pcode}, out=plines.append)
+    expected_parse = [f"{TABLE}: --b names parse::Missing, which is not in sources/{PARSE}",
+                      f"{TABLE}: --c names parse::C, which does not read --c"]
+    ok = plines == expected_parse and pfindings == 2
+    failures += not ok
+    print(f"  {'ok' if ok else 'FAIL':4s} a row's parse function missing, or reading another switch ({plines})")
     print(f"check_switches selftest: {'PASS' if failures == 0 else 'FAIL'} ({failures} failing)")
     return failures
 
@@ -175,6 +241,8 @@ def main(argv):
         return selftest()
     files = load()
     findings, rows = check(files)
+    findings += dump_check(files)
+    findings += parse_check(files)
     if "--list" in argv:
         for name, value, help_text, shipping in sorted(rows):
             print(f"  {name + value:60s} {'[shipping] ' if shipping else ''}{help_text}")

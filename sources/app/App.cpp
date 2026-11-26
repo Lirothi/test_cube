@@ -90,6 +90,7 @@ BootOptions& Boot()
 #include "app/harness/GateHarnesses.h" // R3.3: --mem-readout, --scalability-check, --rt-audit
 #include "app/harness/IntentHarness.h" // R3.3: --intent's end
 #include "app/harness/SettingsDumpHarness.h" // R2.0: --settings-dump
+#include "app/diagnostics/SceneStress.h"      // R3.3e: --scene-stress, a harness of this loop
 #include "input/InputActions.h"   // R12.3: player.test* go into the keys' channel
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
@@ -532,14 +533,15 @@ namespace
             }
             // What a script says in place of the keys goes into the keys' own channel (architecture plan R12.3): a
             // press is the next frame's press, held / axis values stay until 0. testMoveX / Z are the WORLD's axes
-            // (actions::kMoveWorldX / Z); testThrottle / testRudder are what W S / A D say (MoveZ / MoveX).
+            // (actions::kMoveWorldX / Z); testThrottle / testRudder / testSprint have actions of their own that only the
+            // helm and the player read (kHelmThrottle / kHelmRudder / kScriptSprint): the free camera reads W S / A D, Shift.
             InputManager& input = Systems::GetInput();
             if (key == "testMoveX") { input.InjectAxis(actions::kMoveWorldX, std::clamp(value, -1.0f, 1.0f)); return true; }
             if (key == "testMoveZ") { input.InjectAxis(actions::kMoveWorldZ, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testThrottle") { input.InjectAxis(actions::kMoveZ, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testRudder") { input.InjectAxis(actions::kMoveX, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testThrottle") { input.InjectAxis(actions::kHelmThrottle, std::clamp(value, -1.0f, 1.0f)); return true; }
+            if (key == "testRudder") { input.InjectAxis(actions::kHelmRudder, std::clamp(value, -1.0f, 1.0f)); return true; }
             if (key == "testCrouch") { input.InjectHeld(actions::kCrouch, value != 0.0f); return true; }
-            if (key == "testSprint") { input.InjectHeld(actions::kSprint, value != 0.0f); return true; }
+            if (key == "testSprint") { input.InjectHeld(actions::kScriptSprint, value != 0.0f); return true; }
             if (key == "testJump") { if (value != 0.0f) { input.InjectPress(actions::kJump); } return true; }
             if (key == "testInteract") { if (value != 0.0f) { input.InjectPress(actions::kInteract); } return true; }
             if (key == "testView") { if (value != 0.0f) { input.InjectPress(actions::kToggleView); } return true; }
@@ -3412,6 +3414,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         // The level set its own clouds, fog, bloom, GTAO...: the graphics levels' ceilings again.
                         settings::TheScalability().OnContentReloaded("level load");
                         ++harness::g_levelLoadsCompleted;
+                        // --scene-stress pins --set again over every level it loads (the level's sections overwrote
+                        // them): otherwise a pass behind a setting would be validated in its default (R3.3e).
+                        if (Boot().harness.sceneStress) { ApplyFixedSettings(scene); }
                     }
                 }
 #if WITH_EDITOR
@@ -3454,6 +3459,22 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         harness::IntentHarness intentHarness;
         harness::SettingsDumpHarness settingsDumpHarness(
             [](Scene& s, const SceneRenderSettings& rs, const std::string& name, float& out) { return ReadSweepValue(s, rs, name, out); });
+        std::unique_ptr<harness::Harness> sceneStressHarness = harness::MakeSceneStressHarness(hWnd_, renderer, scene, levelManager);
+        // R3.4: the run's harnesses, one list for each of afterFrame's three places, in the order they always ran there;
+        // each asked whether its switch is on. Before the renderer's requests: a scalability step's dlss.mode is taken
+        // in the same frame. After Present: the captures, the dumps, the stress's churn. After the frame's end: the gates
+        // that judge it.
+        harness::Harness* const harnessesBeforeRequests[] = { &scalabilityCheckHarness };
+        harness::Harness* const harnessesAfterPresent[] = { &shotHarness, &intentHarness, &profDumpHarness, &settingsDumpHarness,
+                                                            &traceHarness, sceneStressHarness.get() };
+        harness::Harness* const harnessesAfterFrameEnd[] = { &memGateHarness, &rtAuditHarness };
+        const auto runHarnesses = [](harness::Harness* const* list, std::size_t count, harness::FrameContext& ctx)
+        {
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (list[i]->Wanted()) { list[i]->OnFrame(ctx); }
+            }
+        };
         const auto afterFrame = [&]()
         {
             // "--set=<name>:<value>;...": pin settings for the run. Applied once, here, because the
@@ -3483,7 +3504,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
             harness::FrameContext harnessFrame{ renderer, scene, levelManager, appController_.SettingsRef(), isRunning_ };
             // "--scalability-check": one step a frame; its verdict ends the run (app/harness/GateHarnesses.h).
-            if (scalabilityCheckHarness.Wanted()) { scalabilityCheckHarness.OnFrame(harnessFrame); }
+            runHarnesses(harnessesBeforeRequests, std::size(harnessesBeforeRequests), harnessFrame);
 
             // dlss.mode asked for by --set / set_settings: here, where the frame has been presented.
             if (g_requestDlssMode >= 0)
@@ -3517,20 +3538,15 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
 #endif
 
-            if (shotHarness.Wanted()) { shotHarness.OnFrame(harnessFrame); } // --shot, --shot-count, --sweep (app/harness)
-
-            intentHarness.OnFrame(harnessFrame); // --intent's end: the verdict, or the timeout (app/harness)
-
-            if (profDumpHarness.Wanted()) { profDumpHarness.OnFrame(harnessFrame); } // --profdump
-            if (settingsDumpHarness.Wanted()) { settingsDumpHarness.OnFrame(harnessFrame); } // --settings-dump (R2.0)
-
-            if (traceHarness.Wanted()) { traceHarness.OnFrame(harnessFrame); } // --trace
+            // --shot, --shot-count, --sweep; --intent's end (the verdict, or the timeout); --profdump; --settings-dump (R2.0);
+            // --trace; --scene-stress's churn (R3.3e).
+            runHarnesses(harnessesAfterPresent, std::size(harnessesAfterPresent), harnessFrame);
 
 
             Profiler::Get().EndFrame();
             memtrace::OnFrameEnd(renderer.GetTotalFrameNumber()); // the frame marker; a delayed --memtrace start
-            memGateHarness.OnFrame(harnessFrame); // --mem-selftest's leak, --mem-readout's samples and verdict
-            rtAuditHarness.OnFrame(harnessFrame); // --rt-audit's verdict (the audit's probes are in the loop)
+            // --mem-selftest's leak, --mem-readout's samples and verdict; --rt-audit's verdict (its probes are in the loop).
+            runHarnesses(harnessesAfterFrameEnd, std::size(harnessesAfterFrameEnd), harnessFrame);
         };
         const auto paceFrame = [&]()
         {
@@ -3647,6 +3663,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                          static_cast<double>(sum) / static_cast<double>(frames), worst, frames, when);
             }
         };
+        harness::FrameContext beginFrameContext{ renderer, scene, levelManager, appController_.SettingsRef(), isRunning_ };
+        try {
         while (isRunning_) {
             // Switched only here, between frames. --rt-audit (G9) runs with the render thread whatever the settings say.
             const bool threaded = threading::g_renderThreadEnabled || rtaudit::Enabled();
@@ -3697,6 +3715,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
 
             beginFrame();
+            if (sceneStressHarness->Wanted()) { sceneStressHarness->OnBeginFrame(beginFrameContext); } // R3.3e: mid-frame resize requests
             if (threaded)
             {
                 wholeCycle.emplace(ProfilerScopes::kWholeCycle); // closed where the wait for this frame returns
@@ -3759,10 +3778,21 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 gameWaitLogStart = frameStart;
             }
         }
+        }
+        catch (const std::exception& e) {
+            // A frame that throws ends a --scene-stress with its FAULT verdict and DRED, as its own loop did (R3.3e); every
+            // run goes on to the terminate handler as before.
+            if (sceneStressHarness && sceneStressHarness->Wanted()) { sceneStressHarness->OnFrameThrew(e.what()); }
+            throw;
+        }
         wholeCycle.reset();
         renderer.LogGpuIdleWaits(GetTimeSeconds() - gameWaitLogStart); // R16.10: the rest of the run's, and the total
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
         logInputLag(" (the rest of the run)");
+        // The stress harness holds the device's InfoQueue and its DRED file: gone before the GPU teardown, as its driver
+        // always was (R3.3e: released after Renderer::Shutdown, the process died at its exit). Its list's pointer is not
+        // used after the loop.
+        sceneStressHarness.reset();
 
         timeEndPeriod(1);
         threading::SetCurrentRole(threading::ThreadRole::Sync); // teardown: nothing else runs

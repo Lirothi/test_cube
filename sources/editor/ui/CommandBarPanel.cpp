@@ -278,11 +278,13 @@ void CommandBarPanel::SetModelSettings(const LlmIntentSettings& settings)
 void CommandBarPanel::ApplyMcpSettings(const LlmIntentSettings& settings)
 {
     const int port = Boot().editor.mcpPort > 0 ? Boot().editor.mcpPort : settings.mcpPort;
-    if (mcp_.Running() && (!settings.mcpEnabled || mcp_.Port() != port))
+    // No MCP under --scene-stress (R3.3e): a stress run is nobody's editor, and 8128 is the owner's.
+    const bool serve = settings.mcpEnabled && !Boot().harness.sceneStress;
+    if (mcp_.Running() && (!serve || mcp_.Port() != port))
     {
         mcp_.Stop();
     }
-    if (!settings.mcpEnabled)
+    if (!serve)
     {
         mcpError_.clear();
         return;

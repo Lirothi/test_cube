@@ -23,7 +23,7 @@ void PlayerController::Tick(InputManager& input, Camera& camera, CameraControlle
     out.move = move + Math::float3(input.GetActionAxis(actions::kMoveWorldX), 0.0f, input.GetActionAxis(actions::kMoveWorldZ));
     out.jump = input.TakeActionPress(actions::kJump);
     out.crouch = input.IsActionDown(actions::kCrouch);
-    out.sprint = input.IsActionDown(actions::kSprint);
+    out.sprint = input.IsActionDown(actions::kSprint) || input.IsActionDown(actions::kScriptSprint);
     look.TakeOwedLook(deltaTime); // the smoothing's tail runs out even as the mouse goes free
     world.SetPlayerInput(out);
 }

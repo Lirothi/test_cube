@@ -22,6 +22,7 @@ A step of --keys is
   set:<name>:<v>[;<name>:<v>]   with --mcp-port, MCP set_settings -- what a script says in place of the keys
                      (player.testInteract:1 = the action of E, through the keys' own channel since R12.3);
   read:player        with --mcp-port, MCP get_readouts: prints the player's feet.
+  read:camera        with --mcp-port, MCP get_camera: prints the camera's position.
 --mcp-port <n> needs a build with the editor (x64/Release_Editor); the run gets --editor (the editor's frame serves
 MCP calls) and listens on <n> instead of the owner's 8128. Every
 run puts imgui.ini and editor_state.json back as they were (a run of the game rewrites them).
@@ -205,6 +206,11 @@ def main():
             if kind == "set":
                 answer = mcp(a.mcp_port, "set_settings", {"set": rest, "resetExposure": False})
                 print(f"helm_keys: {time.time() - t0:6.2f} s  set {rest}: {answer[:120]}")
+            elif kind == "read" and rest == "camera":
+                text = mcp(a.mcp_port, "get_camera", {})
+                m = re.search(r'"position":\s*\[([^\]]*)\]', text)
+                print(f"helm_keys: {time.time() - t0:6.2f} s  read camera position {m.group(1) if m else text[:120]}")
+                continue
             elif kind == "read":
                 text = mcp(a.mcp_port, "get_readouts", {})
                 m = re.search(r'"player":\{[^}]*"feet":\[([^\]]*)\]', text)
@@ -224,6 +230,9 @@ def main():
         if kernel32.WaitForSingleObject(wintypes.HANDLE(pi.hProcess), 60000) != 0:
             print("helm_keys: the game did not close; killed")
             kernel32.TerminateProcess(wintypes.HANDLE(pi.hProcess), 99)
+        exit_code = wintypes.DWORD()
+        kernel32.GetExitCodeProcess(wintypes.HANDLE(pi.hProcess), ctypes.byref(exit_code))
+        print(f"helm_keys: the game exited with 0x{exit_code.value:08X}")
     finally:
         if kernel32.WaitForSingleObject(wintypes.HANDLE(pi.hProcess), 0) != 0:
             kernel32.TerminateProcess(wintypes.HANDLE(pi.hProcess), 99)

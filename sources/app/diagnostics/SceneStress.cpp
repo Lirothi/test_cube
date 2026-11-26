@@ -1,5 +1,7 @@
 #include "app/diagnostics/SceneStress.h"
 
+#include "app/BootOptions.h"
+
 #include "app/App.h"
 #include "core/math/Math.h"
 #include "core/task/TaskSystem.h"
@@ -35,7 +37,6 @@
 #include "core/memory/MemTrace.h"
 #include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
 #include "core/threading/Knob.h"
-#include "core/threading/RenderThread.h" // G8: frame.renderThread 1 in the stress too
 #include "app/diagnostics/RtAudit.h"     // G9: --rt-audit over the level churn
 #include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
@@ -53,6 +54,7 @@
 #include <exception>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -216,41 +218,127 @@ const char* OpName(Op op)
     }
 }
 
-// Drives the real render/scene loop autonomously and hammers the suspect
-// scene-lifecycle operations. Holds no ownership: the App owns the systems.
-class SceneStressDriver
+// The scene-lifecycle stress (architecture plan R3.3e): a harness of App::Run's own loop. Its churn ops run once a frame
+// at afterFrame -- after Present, the render half idle, where the renderer's own requests (dlss.mode, aa.renderScale,
+// --scene-replicate) are taken too -- and the frames after an op are App::Run's frames, the render thread's overlap and
+// the UI included. Until R3.3e it drove a loop of its own (RenderFrames_: a frame without the UI, dt 1/60, the render
+// thread waited for after every op's frames); the ops, their order, the fault checks and the log lines are as they were.
+// Holds no ownership: the App owns the systems.
+class SceneStressHarness final : public harness::Harness
 {
 public:
-    SceneStressDriver(HWND hWnd, Renderer& renderer, Scene& scene,
-                      LevelManager& levelManager, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
+    SceneStressHarness(HWND hWnd, Renderer& renderer, Scene& scene, LevelManager& levelManager)
         : hWnd_(hWnd)
         , renderer_(renderer)
         , scene_(scene)
         , levelManager_(levelManager)
-        , iterations_(iterations)
-        , gbvContinue_(gbvContinue)
-        , roughnessEdits_(roughnessEdits)
-        , skyEdits_(skyEdits)
+        , iterations_(Boot().harness.sceneStressIterations > 0 ? Boot().harness.sceneStressIterations : 300) // a few hundred churn steps
+        , gbvContinue_(Boot().harness.sceneStressGbv)
+        , skyEdits_(Boot().harness.sceneStressSky)
+        , roughnessEdits_(Boot().harness.sceneStressRoughness)
     {
     }
 
-    // Volumetric fog plan A (GBV gate): what to run after EVERY level load -- the App re-applies
-    // its --set values here. Applied once at boot they are gone at the first reload/switch (the
-    // level's own height fog block overwrites the scene's), so a gate about a knob the levels do
-    // not carry was validating the default, exactly the S3a mistake in a new coat.
-    void SetOnLevelLoaded(std::function<void()> fn) { onLevelLoaded_ = std::move(fn); }
-
-    // Returns process exit code: 0 clean, nonzero fault.
-    int Run()
+    ~SceneStressHarness() override
     {
+        if (phase_ != Phase::Start) { SetUnhandledExceptionFilter(previousFilter_); } // the build's own crash handler again (its minidump)
+        if (gLog)
+        {
+            Log("shutdown complete; exit code %d at %.1f s\n", exitCode_, boot::ElapsedMs() / 1000.0);
+            gLog.Close();
+        }
+    }
+
+    const char* Name() const override { return "scene-stress"; }
+    bool Wanted() const override { return Boot().harness.sceneStress; }
+    int Verdict() const override { return exitCode_; }
+
+    // Once a frame, after Present (App::Run's afterFrame).
+    void OnFrame(harness::FrameContext& ctx) override
+    {
+        switch (phase_)
+        {
+        case Phase::Done:
+            return;
+        case Phase::Start:
+            Begin_();
+            return;
+        case Phase::Warmup:
+            // A few warm-up frames so the pipeline is fully primed before churn.
+            if (--framesLeft_ > 0) { return; }
+            if (const char* early = CheckFault_()) { return Fault_(-1, "warmup", early); }
+            if (skyEdits_) { Profiler::Get().RequestTraceCapture(iterations_); }
+            barriers::AsEmitStats(asEnhancedStart_, asLegacyStart_);
+            return NextStep_(ctx);
+        case Phase::Spawned:
+            // EditorSpawnDelete: the box drawn for two frames, then deleted; then the step's own frames.
+            if (--framesLeft_ > 0) { return; }
+            if (!Guarded_(&SceneStressHarness::DeleteSpawned_) || faultDetail_[0]) { return Fault_(iter_, opName_, faultDetail_); }
+            framesLeft_ = framesAfterOp_;
+            phase_ = Phase::Frames;
+            return;
+        case Phase::Frames:
+            if (--framesLeft_ > 0) { return; }
+            if (resizeDuringFrame_)
+            {
+                LOG_INFO(logging::LogCategory::RenderRhi,
+                         "resize boundary regression PASS: {} frames, deferred and coalesced requests", framesAfterOp_);
+            }
+            if (!EndStep_()) { return; }
+            return NextStep_(ctx);
+        case Phase::Drain:
+            if (--framesLeft_ > 0) { return; }
+            return Final_(ctx);
+        }
+    }
+
+    // ResizeWindow's frames: right after each BeginFrame, where its driver made the requests -- they must wait for the
+    // next BeginFrame and be coalesced there.
+    void OnBeginFrame(harness::FrameContext&) override
+    {
+        if (phase_ == Phase::Frames && resizeDuringFrame_ && !ResizeBoundary_()) { Fault_(iter_, opName_, faultDetail_); }
+    }
+
+    // A frame threw (App::Run rethrows after this): the FAULT verdict and DRED, attributed to the step in progress.
+    void OnFrameThrew(const char* what) override
+    {
+        if (phase_ == Phase::Done) { return; }
+        std::snprintf(faultDetail_, sizeof(faultDetail_), "exception during %s frame: %.220s", opName_[0] ? opName_ : "warmup", what);
+        Log("EXCEPTION: %s\n", faultDetail_);
+        Fault_(iter_, opName_[0] ? opName_ : "warmup", faultDetail_);
+    }
+
+private:
+    enum class Phase { Start, Warmup, Spawned, Frames, Drain, Done };
+
+    // The first frame: the stress's log, crash filter and InfoQueue, and the sky / roughness runs' conditions.
+    void Begin_()
+    {
+        gLog.Open("scene_stress.log", diag::ArtifactMode::PerRunTruncate);
+        previousFilter_ = SetUnhandledExceptionFilter(StressCrashFilter); // symbolize worker-thread/WndProc faults of the churn
+        Boot().harness.sceneStressExit = 1;              // until the verdict: a run that ends another way is not CLEAN
+        Log("scene lifecycle stress harness\n");
+        Log("gbvContinue=%d\n", gbvContinue_ ? 1 : 0);
+        Log("iterations=%d WITH_EDITOR=%d\n", iterations_,
+#if WITH_EDITOR
+            1
+#else
+            0
+#endif
+        );
+        Log("boot: window + device + scene ready (initial level loaded) at %.1f s\n", boot::ElapsedMs() / 1000.0);
+        boot::Dump("scene-stress: boot complete");
         SetupInfoQueue_();
         if (skyEdits_)
         {
-            // This harness branches before the ordinary app's --dlss/--wind-freeze parser.
-            // Set its measurement conditions explicitly, without changing authored settings.
-            renderer_.SetDlssMode(sl::DLSSMode::eOff);
-            renderer_.SetRenderResolutionScale(1.0f);
-            vfx::g_windFreeze = true; vfx::g_windFrozenTime = 0.0f;
+            // Its measurement conditions, set over whatever the command line and the level said, without changing
+            // authored settings.
+            {
+                threading::RoleScope renderRole(threading::ThreadRole::Render); // the renderer's targets, as afterFrame's requests
+                renderer_.SetDlssMode(sl::DLSSMode::eOff);
+                renderer_.SetRenderResolutionScale(1.0f);
+            }
+            vfx::g_windFreeze_game = true; vfx::g_windFrozenTime_game = 0.0f;
             scene_.SkyAtmosphereRef().mode = 1;
             scene_.SkyAtmosphereRef().environmentLighting = true;
             auto settings = scene_.GetRenderSettings();
@@ -263,134 +351,67 @@ public:
         {
             if (!renderer_.IsRaytracingSupported())
             {
-                return FinishFault_(-1, "roughness-setup", "RT unsupported; regression not exercised");
+                return Fault_(-1, "roughness-setup", "RT unsupported; regression not exercised");
             }
             auto settings = scene_.GetRenderSettings();
             settings.reflectionSource = ReflectionSource::RT;
             scene_.SetRenderSettings(settings);
             Log("roughness regression: wind_test #722, RT, one distinct value per frame, no idle waits\n");
         }
-
-        // Pump a few warm-up frames so the pipeline is fully primed before churn.
-        {
-        BOOT_SCOPE("stress warmup frames");
-        for (int i = 0; i < (skyEdits_ ? 32 : 4); ++i)
-        {
-            if (!RenderFrames_(1, "warmup"))
-            {
-                return FinishFault_(-1, "warmup", "render-frame threw");
-            }
-        }
-        }
-        if (const char* early = CheckFault_())
-        {
-            return FinishFault_(-1, "warmup", early);
-        }
-
-        if (skyEdits_) Profiler::Get().RequestTraceCapture(iterations_);
-        std::uint32_t asEnhancedStart = 0, asLegacyStart = 0;
-        barriers::AsEmitStats(asEnhancedStart, asLegacyStart);
-        for (int iter = 0; iter < iterations_ && !faultCaught_; ++iter)
-        {
-            // Rotate op order across iterations so races surface under different
-            // timings (the resize/level-reload interleave especially).
-            const int opCount = static_cast<int>(Op::Count);
-            const Op op = static_cast<Op>((iter + iter / opCount) % opCount);
-
-            const char* opName = skyEdits_ ? "SkyEdit" : (roughnessEdits_ ? "RoughnessEdit" : OpName(op));
-            Log("[iter %d] op=%s begin\n", iter, opName);
-
-            // Do the churn op + frames under an SEH guard so a hard fault
-            // (e.g. access violation from a dead/removed device) is attributed
-            // to this op instead of crashing the process with no verdict. The
-            // returned status distinguishes the failure modes.
-            const auto stepBegin = std::chrono::steady_clock::now();
-            const StepStatus status = RunStep_(op, iter);
-            boot::AddBucket("stress iteration",
-                            std::chrono::duration<double, std::milli>(
-                                std::chrono::steady_clock::now() - stepBegin).count(),
-                            opName);
-            switch (status)
-            {
-            case StepStatus::Ok:
-                break;
-            case StepStatus::FrameThrew:
-                return FinishFault_(iter, opName, faultDetail_[0] ? faultDetail_ : "render-frame threw");
-            case StepStatus::HardFault:
-                return FinishFault_(iter, opName, faultDetail_);
-            }
-
-            if (const char* reason = CheckFault_())
-            {
-                return FinishFault_(iter, opName, reason);
-            }
-
-            // The GPU census after every op (memory profiling plan M1): a record whose release
-            // never comes back shows as `live` climbing across the run.
-            gpu::CensusTotals census;
-            gpu::ReadCensus(census);
-            Log("[iter %d] op=%s ok | gpu %.0f/%.0f MB %u res %u heaps live %llu\n", iter, opName,
-                static_cast<double>(census.all.bytes[0]) / (1024.0 * 1024.0),
-                static_cast<double>(census.all.bytes[1]) / (1024.0 * 1024.0),
-                census.all.resources, census.all.heaps,
-                static_cast<unsigned long long>(census.created - census.released));
-            TrackVisit_(iter, !skyEdits_ && !roughnessEdits_ && (op == Op::ReloadLevel || op == Op::SwitchLevel));
-        }
-        RecordVisitEnd_(iterations_);
-        LogVisitVerdict_();
-
-        if (skyEdits_ && !RenderFrames_(30, "sky-trace-drain"))
-            return FinishFault_(iterations_, "sky-trace-drain", "render-frame threw");
-        // Drain the final in-flight frames before declaring success, too.
-        renderer_.WaitForPreviousFrame();
-        if (const char* reason = CheckFault_()) { return FinishFault_(iterations_, "drain", reason); }
-        if (roughnessEdits_)
-        {
-            std::uint32_t asEnhanced = 0, asLegacy = 0;
-            barriers::AsEmitStats(asEnhanced, asLegacy);
-            const auto builds = asEnhanced + asLegacy - asEnhancedStart - asLegacyStart;
-            Log("roughness regression: AS barriers during edits=%u\n", builds);
-            if (builds < static_cast<unsigned>(iterations_))
-            {
-                return FinishFault_(iterations_, "roughness-coverage", "RT stopped building; possible SSR fallback");
-            }
-        }
-        // Game thread plan G9: an --rt-audit riding the churn gives its verdict here (the exit code carries it).
-        rtaudit::Finished(0.0, /*now=*/true);
-        // Game thread plan G1: the phase checks (Debug) are part of the verdict -- a role violation is an
-        // ownership bug that a render thread would turn into a race.
-        threading::LogRoleCheckSummary();
-        if (const std::uint32_t roleViolations = threading::RoleViolationCount())
-        {
-            char detail[96];
-            std::snprintf(detail, sizeof(detail), "%u thread role violations (see 'thread role:' errors)", roleViolations);
-            return FinishFault_(iterations_, "thread-roles", detail);
-        }
-        LogBarrierEmits_();
-        Log("verdict: CLEAN after %d iterations (total %.1f s)\n",
-            iterations_, boot::ElapsedMs() / 1000.0);
-        LOG_INFO(logging::LogCategory::App, "scene-stress verdict: CLEAN after {} iterations ({:.1f} s); details in logs/scene_stress.log",
-                 iterations_, boot::ElapsedMs() / 1000.0);
-        boot::Dump("scene-stress: iterations complete");
-        return 0;
+        framesLeft_ = skyEdits_ ? 32 : 4;
+        phase_ = Phase::Warmup;
     }
 
-    bool FaultCaught() const { return faultCaught_; }
+    // The next churn op, or the end of the churn.
+    void NextStep_(harness::FrameContext& ctx)
+    {
+        if (iter_ >= iterations_)
+        {
+            RecordVisitEnd_(iterations_);
+            LogVisitVerdict_();
+            if (skyEdits_)
+            {
+                framesLeft_ = 30; // the trace's last frames ("sky-trace-drain")
+                phase_ = Phase::Drain;
+                return;
+            }
+            return Final_(ctx);
+        }
+        // Rotate op order across iterations so races surface under different
+        // timings (the resize/level-reload interleave especially).
+        const int opCount = static_cast<int>(Op::Count);
+        op_ = static_cast<Op>((iter_ + iter_ / opCount) % opCount);
+        opName_ = skyEdits_ ? "SkyEdit" : (roughnessEdits_ ? "RoughnessEdit" : OpName(op_));
+        Log("[iter %d] op=%s begin\n", iter_, opName_);
+        stepBegin_ = std::chrono::steady_clock::now();
+        spawned_ = false;
+        // The churn op under an SEH guard so a hard fault (e.g. access violation from a dead/removed device) is
+        // attributed to this op instead of crashing the process with no verdict.
+        if (!Guarded_(&SceneStressHarness::RunOp_)) { return Fault_(iter_, opName_, faultDetail_); }
+        if (faultDetail_[0]) { return Fault_(iter_, opName_, faultDetail_); } // the op could not run (roughness: no sphere)
+        opEnd_ = std::chrono::steady_clock::now();
+        resizeDuringFrame_ = !skyEdits_ && !roughnessEdits_ && op_ == Op::ResizeWindow;
+        expectedResizeWidth_ = 0;
+        if (spawned_)
+        {
+            framesLeft_ = 2; // "editor-spawn"
+            phase_ = Phase::Spawned;
+            return;
+        }
+        framesLeft_ = framesAfterOp_;
+        phase_ = Phase::Frames;
+    }
 
-private:
-    enum class StepStatus { Ok, FrameThrew, HardFault };
-
-    // Runs one churn step under a structured-exception guard. A hardware/driver
-    // fault surfacing as an SEH exception (commonly ACCESS_VIOLATION off a
-    // removed device) is converted into StepStatus::HardFault with the code
-    // recorded, so the harness reports the op that triggered it and exits with
-    // its own code rather than dying with an opaque OS fault. Kept free of C++
-    // objects requiring unwinding (the actual work lives in RunStepBody_).
-    StepStatus RunStep_(Op op, int iter)
+    // Runs a churn op under a structured-exception guard. A hardware/driver fault surfacing as an SEH exception
+    // (commonly ACCESS_VIOLATION off a removed device) is converted into a fault with the code recorded, so the harness
+    // reports the op that triggered it rather than dying with an opaque OS fault. Kept free of C++ objects requiring
+    // unwinding (the work lives in the member it calls).
+    bool Guarded_(void (SceneStressHarness::*body)())
     {
         __try
         {
-            return RunStepBody_(op, iter);
+            (this->*body)();
+            return true;
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
@@ -400,12 +421,112 @@ private:
                           code,
                           static_cast<unsigned>(renderer_.GetDevice()
                               ? renderer_.GetDevice()->GetDeviceRemovedReason() : E_FAIL));
-            return StepStatus::HardFault;
+            return false;
         }
     }
 
-    StepStatus RunStepBody_(Op op, int iter)
+    // The step's frames are drawn: its checks, the GPU census, the level visit.
+    bool EndStep_()
     {
+        const auto now = std::chrono::steady_clock::now();
+        boot::AddBucket("stress frames (after op)", std::chrono::duration<double, std::milli>(now - opEnd_).count(), OpName(op_));
+        boot::AddBucket("stress iteration", std::chrono::duration<double, std::milli>(now - stepBegin_).count(), opName_);
+        if (const char* reason = CheckFault_())
+        {
+            Fault_(iter_, opName_, reason);
+            return false;
+        }
+        // The GPU census after every op (memory profiling plan M1): a record whose release
+        // never comes back shows as `live` climbing across the run.
+        gpu::CensusTotals census;
+        gpu::ReadCensus(census);
+        Log("[iter %d] op=%s ok | gpu %.0f/%.0f MB %u res %u heaps live %llu\n", iter_, opName_,
+            static_cast<double>(census.all.bytes[0]) / (1024.0 * 1024.0),
+            static_cast<double>(census.all.bytes[1]) / (1024.0 * 1024.0),
+            census.all.resources, census.all.heaps,
+            static_cast<unsigned long long>(census.created - census.released));
+        TrackVisit_(iter_, !skyEdits_ && !roughnessEdits_ && (op_ == Op::ReloadLevel || op_ == Op::SwitchLevel));
+        ++iter_;
+        return true;
+    }
+
+    // ResizeWindow's frames (OnBeginFrame): two resize requests after BeginFrame must be deferred to the next one and
+    // coalesced there -- the size this frame draws is unchanged by them, and the next frame takes the later alone.
+    bool ResizeBoundary_()
+    {
+        const UINT width = renderer_.GetWidth();
+        const UINT height = renderer_.GetHeight();
+        const auto generation = renderer_.GetDeferredTargetsGeneration();
+        const bool applied = !expectedResizeWidth_ || width == expectedResizeWidth_;
+        renderer_.OnResize(width + 1, height);
+        renderer_.OnResize(width + 2, height); // only the latest request must be applied
+        expectedResizeWidth_ = width + 2;
+        if (!applied || renderer_.GetWidth() != width ||
+            renderer_.GetDeferredTargetsGeneration() != generation)
+        {
+            std::snprintf(faultDetail_, sizeof(faultDetail_),
+                          "resize boundary regression: resize was not deferred/coalesced at BeginFrame");
+            LOG_ERROR(logging::LogCategory::RenderRhi, "{}", faultDetail_);
+            return false;
+        }
+        return true;
+    }
+
+    // The churn is over: drain, the end checks, the verdict.
+    void Final_(harness::FrameContext& ctx)
+    {
+        // Drain the final in-flight frames before declaring success, too.
+        renderer_.WaitForPreviousFrame();
+        if (const char* reason = CheckFault_()) { return Fault_(iterations_, "drain", reason); }
+        if (roughnessEdits_)
+        {
+            std::uint32_t asEnhanced = 0, asLegacy = 0;
+            barriers::AsEmitStats(asEnhanced, asLegacy);
+            const auto builds = asEnhanced + asLegacy - asEnhancedStart_ - asLegacyStart_;
+            Log("roughness regression: AS barriers during edits=%u\n", builds);
+            if (builds < static_cast<unsigned>(iterations_))
+            {
+                return Fault_(iterations_, "roughness-coverage", "RT stopped building; possible SSR fallback");
+            }
+        }
+        rtaudit::Finished(0.0, /*now=*/true);
+        threading::LogRoleCheckSummary();
+        if (const std::uint32_t roleViolations = threading::RoleViolationCount())
+        {
+            char detail[96];
+            std::snprintf(detail, sizeof(detail), "%u thread role violations (see 'thread role:' errors)", roleViolations);
+            return Fault_(iterations_, "thread-roles", detail);
+        }
+        LogBarrierEmits_();
+        Log("verdict: CLEAN after %d iterations (total %.1f s)\n",
+            iterations_, boot::ElapsedMs() / 1000.0);
+        LOG_INFO(logging::LogCategory::App, "scene-stress verdict: CLEAN after {} iterations ({:.1f} s); details in logs/scene_stress.log",
+                 iterations_, boot::ElapsedMs() / 1000.0);
+        boot::Dump("scene-stress: iterations complete");
+        exitCode_ = 0;
+        Boot().harness.sceneStressExit = 0;
+        phase_ = Phase::Done;
+        ctx.running = false;
+    }
+
+    // A fault ends the run where it stands: the verdict and DRED, then the process terminated without the GPU teardown
+    // (the device likely removed), as the stress always has.
+    void Fault_(int iter, const char* op, const char* reason)
+    {
+        exitCode_ = FinishFault_(iter, op, reason);
+        phase_ = Phase::Done;
+        memtrace::Stop();
+        Log("fault caught: skipping GPU teardown (device likely removed); terminating with exit code %d\n", exitCode_);
+        gLog.Close();
+        logging::Shutdown();
+        TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode_));
+    }
+
+    // The step's churn op (the frames after it are App::Run's: framesAfterOp_ of them).
+    void RunOp_()
+    {
+        const Op op = op_;
+        const int iter = iter_;
         faultDetail_[0] = '\0';
         if (skyEdits_)
         {
@@ -420,7 +541,8 @@ private:
             }
             if (phase >= 40 && phase < 48)
                 scene_.CameraExposureRef().compensationEv = float(phase - 44) * 0.125f;
-            return RenderFrames_(1, "sky-edit") ? StepStatus::Ok : StepStatus::FrameThrew;
+            framesAfterOp_ = 1; // "sky-edit"
+            return;
         }
         if (roughnessEdits_)
         {
@@ -430,15 +552,16 @@ private:
             if (!gb)
             {
                 std::snprintf(faultDetail_, sizeof(faultDetail_), "wind_test sphere #722 missing");
-                return StepStatus::FrameThrew;
+                return;
             }
             // Exactly the inspector's live mutation, without recreating materials or flushing GPU.
             auto& params = gb->MaterialParamsRef();
             params.metalRough.y = 0.001f + 0.998f * float((iter * 173) % 10007) / 10006.0f;
-            return RenderFrames_(1, "roughness-edit") ? StepStatus::Ok : StepStatus::FrameThrew;
+            framesAfterOp_ = 1; // "roughness-edit"
+            return;
 #else
             std::snprintf(faultDetail_, sizeof(faultDetail_), "roughness regression requires WITH_EDITOR");
-            return StepStatus::FrameThrew;
+            return;
 #endif
         }
 
@@ -465,18 +588,7 @@ private:
         }
 
         // Render K real frames to pump the pipeline (K rotates 2..4).
-        const int framesToRender = 2 + (iter % 3);
-        const auto frameBegin = std::chrono::steady_clock::now();
-        const bool framesOk = RenderFrames_(framesToRender, OpName(op), op == Op::ResizeWindow);
-        boot::AddBucket("stress frames (after op)",
-                        std::chrono::duration<double, std::milli>(
-                            std::chrono::steady_clock::now() - frameBegin).count(),
-                        OpName(op));
-        if (!framesOk)
-        {
-            return StepStatus::FrameThrew;
-        }
-        return StepStatus::Ok;
+        framesAfterOp_ = 2 + (iter % 3);
     }
 
     void SetupInfoQueue_()
@@ -915,240 +1027,6 @@ private:
         if (count == 0) { DredLine_("    (none)\n"); }
     }
 
-    // Renders `count` real frames. Mirrors the essential per-frame steps of the
-    // interactive App loop (message pump + BeginFrame + level-request pump +
-    // scene render). Returns false if a frame render threw (caught here).
-    // With frame.renderThread 1 (game thread plan G8) the frame is split as App::Run splits it: Scene::Render on the
-    // render thread while this thread simulates the next frame (messages, Scene::Tick) and then waits for it. The last
-    // frame is waited for before returning, so the driver's churn between calls meets an idle render thread.
-    bool RenderFrames_(int count, const char* label, bool resizeDuringFrame = false)
-    {
-        UINT expectedResizeWidth = 0;
-        const bool threaded = threading::g_renderThreadEnabled || rtaudit::Enabled(); // --rt-audit rides the churn
-        std::chrono::steady_clock::time_point inFlightBegin{};
-        // A frame's end, after its Present: at once on one thread, after the wait for it with a render thread.
-        const auto finishFrame = [&](std::chrono::steady_clock::time_point frameBegin)
-        {
-            Profiler::Get().EndFrame();
-            memtrace::OnFrameEnd(renderer_.GetTotalFrameNumber());
-            memgate::OnFrameEnd(renderer_.GetDevice(), boot::ElapsedMs() / 1000.0); // --mem-selftest's leak
-            boot::AddBucket("frame: WHOLE",
-                            std::chrono::duration<double, std::milli>(
-                                std::chrono::steady_clock::now() - frameBegin).count(),
-                            label);
-            boot::AddCount("frames rendered");
-        };
-        // G8: the render thread's frame in flight, waited for and finished; false (the fault recorded) if it threw.
-        const auto waitRenderThread = [&]() -> bool
-        {
-            if (!renderThread_.InFlight())
-            {
-                return true;
-            }
-            try
-            {
-                renderThread_.WaitIdle();
-            }
-            catch (const std::exception& e)
-            {
-                std::snprintf(faultDetail_, sizeof(faultDetail_),
-                              "exception during %s frame (render thread): %.200s", label, e.what());
-                Log("EXCEPTION: %s\n", faultDetail_);
-                Profiler::Get().EndFrame();
-                return false;
-            }
-            finishFrame(inFlightBegin);
-            return true;
-        };
-        for (int f = 0; f < count && !faultCaught_; ++f)
-        {
-            // Per-FRAME breakdown, in buckets rather than tree scopes: a stress run renders
-            // hundreds of frames and the tree would grow without bound. The split matters because
-            // "a GBV frame costs 17 s" has three very different explanations -- the wait for the
-            // previous frame, recording, or the submit -- and they need different fixes.
-            const auto frameBegin = std::chrono::steady_clock::now();
-            if (threaded)
-            {
-                // The game half's frame up to the wait, while the render thread draws the previous one.
-                rtaudit::Jitter(); // --rt-audit (G9): a different overlap every frame; nothing otherwise
-                MSG msg = {};
-                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-                {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                }
-                scene_.Tick(1.0f / 60.0f);
-                levelManager_.Tick(1.0f / 60.0f);
-                rtaudit::GameHalf(scene_);
-                rtaudit::Jitter();
-                if (!waitRenderThread())
-                {
-                    return false;
-                }
-            }
-            Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
-            logging::SetFrameNumber(renderer_.GetTotalFrameNumber());
-            // The frame's phases and roles as App::Run gives them (game thread plan G1); the driver runs as the
-            // game half, so its churn ops are checked the way the editor's are.
-            {
-                threading::RoleScope renderRole(threading::ThreadRole::Render);
-                const auto beginFrameBegin = std::chrono::steady_clock::now();
-                renderer_.BeginFrame();
-                boot::AddBucket("frame: Renderer::BeginFrame",
-                                std::chrono::duration<double, std::milli>(
-                                    std::chrono::steady_clock::now() - beginFrameBegin).count(),
-                                label);
-
-                // Match App::Run: consume completed timestamp batches before the readback ring wraps.
-                // Without this the sky stress trace retained old batches until capture end and read
-                // overwritten slots; it could not measure dirty passes reliably.
-                Profiler::Get().CollectGpuResults();
-            }
-
-            // Service window messages (WM_SIZE from our resizes, paint, etc.).
-            if (!threaded)
-            {
-                MSG msg = {};
-                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
-                {
-                    TranslateMessage(&msg);
-                    DispatchMessage(&msg);
-                }
-            }
-
-            if (resizeDuringFrame)
-            {
-                // WM_SIZE is serviced AFTER BeginFrame by App::Run. Before the fix, this changed
-                // frame slots without resetting the new slot's pools; repeated events overflowed
-                // the 4096-entry descriptor ring. Exercise that exact ordering every resize step.
-                const UINT width = renderer_.GetWidth();
-                const UINT height = renderer_.GetHeight();
-                const auto generation = renderer_.GetDeferredTargetsGeneration();
-                const bool applied = !expectedResizeWidth || width == expectedResizeWidth;
-                renderer_.OnResize(width + 1, height);
-                renderer_.OnResize(width + 2, height); // only the latest request must be applied
-                expectedResizeWidth = width + 2;
-                if (!applied || renderer_.GetWidth() != width ||
-                    renderer_.GetDeferredTargetsGeneration() != generation)
-                {
-                    std::snprintf(faultDetail_, sizeof(faultDetail_),
-                                  "resize boundary regression: resize was not deferred/coalesced at BeginFrame");
-                    LOG_ERROR(logging::LogCategory::RenderRhi, "{}", faultDetail_);
-                    Profiler::Get().EndFrame();
-                    return false;
-                }
-            }
-
-            try
-            {
-                renderer_.BeginImGuiFrame();
-                {
-                    threading::RoleScope renderRole(threading::ThreadRole::Render);
-                    renderer_.Tick(1.0f / 60.0f);
-                }
-                if (!threaded)
-                {
-                    scene_.Tick(1.0f / 60.0f);
-                    levelManager_.Tick(1.0f / 60.0f);
-                }
-
-                PumpPendingLevelRequest_();
-                renderer_.EndImGuiFrame();
-
-                {
-                    threading::RoleScope syncRole(threading::ThreadRole::Sync);
-                    scene_.Sync(&renderer_);
-                    renderer_.HandOverImGui(); // G8b: the UI frame is the render half's from here
-                }
-                if (threaded)
-                {
-                    inFlightBegin = frameBegin;
-                    renderThread_.Kick([this]()
-                    {
-                        rtaudit::BeginRenderFrame(scene_);
-                        rtaudit::Jitter();
-                        scene_.Render(&renderer_);
-                        rtaudit::Jitter();
-                        rtaudit::EndRenderFrame(scene_);
-                    });
-                    if (!threading::g_oneFrameThreadLag && !waitRenderThread())
-                    {
-                        return false; // UE's r.OneFrameThreadLag 0: drawn before the next frame's game half
-                    }
-                    continue; // finished after the next frame's simulation, or below
-                }
-                const auto renderBegin = std::chrono::steady_clock::now();
-                {
-                    threading::RoleScope renderRole(threading::ThreadRole::Render);
-                    scene_.Render(&renderer_);
-                }
-                boot::AddBucket("frame: Scene::Render",
-                                std::chrono::duration<double, std::milli>(
-                                    std::chrono::steady_clock::now() - renderBegin).count(),
-                                label);
-            }
-            catch (const std::exception& e)
-            {
-                std::snprintf(faultDetail_, sizeof(faultDetail_),
-                              "exception during %s frame: %.220s", label, e.what());
-                Log("EXCEPTION: %s\n", faultDetail_);
-                Profiler::Get().EndFrame();
-                return false;
-            }
-
-            finishFrame(frameBegin);
-        }
-        if (threaded && !waitRenderThread())
-        {
-            return false;
-        }
-        if (resizeDuringFrame)
-        {
-            LOG_INFO(logging::LogCategory::RenderRhi,
-                     "resize boundary regression PASS: {} frames, deferred and coalesced requests", count);
-        }
-        return true;
-    }
-
-    // Copy of the interactive loop's level-request handling so a queued reload/
-    // switch actually executes (teardown + rebuild) inside a rendered frame.
-    void PumpPendingLevelRequest_()
-    {
-        auto pendingLevel = levelManager_.ConsumePendingLevelRequest();
-        if (!pendingLevel)
-        {
-            return;
-        }
-
-        BOOT_SCOPE("Level switch (runtime)");
-        {
-            BOOT_SCOPE("WaitForPreviousFrame (level switch)");
-            renderer_.WaitForPreviousFrame();
-        }
-
-        UploadBatch levelBatch;
-        if (levelBatch.Begin(&renderer_))
-        {
-            LevelLoadContext levelCtx{ levelBatch, renderer_, scene_
-#if WITH_EDITOR
-                , pendingLevel->options.editorDocument
-#endif
-            };
-
-            const bool levelLoaded = pendingLevel->loadFromPath
-                ? levelManager_.LoadLevelFromPath(pendingLevel->sourcePath, levelCtx, pendingLevel->options)
-                : levelManager_.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
-            if (levelLoaded)
-            {
-                {
-                    BOOT_SCOPE("UploadBatch::SubmitAndWait");
-                    levelBatch.SubmitAndWait(&renderer_);
-                }
-                if (onLevelLoaded_) { onLevelLoaded_(); }
-            }
-        }
-    }
-
     void PerformOp_(Op op, int iter)
     {
         switch (op)
@@ -1174,6 +1052,7 @@ private:
         }
         case Op::DlssMode:
         {
+            threading::RoleScope renderRole(threading::ThreadRole::Render); // as afterFrame's dlss.mode / aa.renderScale requests
             // Rotate DLSS modes — each render-resolution change recreates the
             // deferred targets. No-ops gracefully if DLSS is unavailable.
             static const sl::DLSSMode kModes[] = {
@@ -1185,6 +1064,7 @@ private:
         }
         case Op::RenderScale:
         {
+            threading::RoleScope renderRole(threading::ThreadRole::Render); // as afterFrame's dlss.mode / aa.renderScale requests
             static const float kScales[] = { 1.0f, 0.75f, 0.5f, 0.85f };
             renderScaleIndex_ = (renderScaleIndex_ + 1) % static_cast<int>(std::size(kScales));
             renderer_.SetRenderResolutionScale(kScales[renderScaleIndex_]);
@@ -1192,6 +1072,7 @@ private:
         }
         case Op::ReflectionScale:
         {
+            threading::RoleScope renderRole(threading::ThreadRole::Render); // as afterFrame's dlss.mode / aa.renderScale requests
             static const float kScales[] = { 0.5f, 0.25f, 0.75f, 1.0f };
             reflectionScaleIndex_ = (reflectionScaleIndex_ + 1) % static_cast<int>(std::size(kScales));
             renderer_.SetReflectionTextureScale(kScales[reflectionScaleIndex_]);
@@ -1200,7 +1081,7 @@ private:
 #if WITH_EDITOR
         case Op::EditorSpawnDelete:
         {
-            EditorSpawnRenderDelete_();
+            Spawn_();
             break;
         }
 #endif
@@ -1233,10 +1114,10 @@ private:
 
 #if WITH_EDITOR
     // Mirrors SpawnMeshCommand/DeleteObjectCommand: spawn an initialized editor
-    // object, render a frame with it live, then delete it. Exercises the editor
+    // object, two frames with it live, then delete it (DeleteSpawned_). Exercises the editor
     // scene-mutation path (AddInitializedEditorObject / RemoveEditorObject with
     // a full GPU sync around each mutation).
-    void EditorSpawnRenderDelete_()
+    void Spawn_()
     {
         nlohmann::json o = nlohmann::json::object();
         o["type"] = "staticMesh";
@@ -1275,12 +1156,25 @@ private:
         scene_.RefreshShadowGpuForEditor(renderer_);
 
         // Render a couple of frames with the object live, then delete it.
-        RenderFrames_(2, "editor-spawn");
-
-        renderer_.WaitForPreviousFrame();
-        scene_.RemoveEditorObject(id);
-        scene_.RefreshShadowGpuForEditor(renderer_);
+        spawnedId_ = id;
+        spawned_ = true; // NextStep_: two frames with it, then DeleteSpawned_
     }
+
+    void DeleteSpawned_()
+    {
+        renderer_.WaitForPreviousFrame();
+        const std::size_t before = scene_.ObjectCount();
+        scene_.RemoveEditorObject(spawnedId_);
+        const std::size_t removed = before - scene_.ObjectCount();
+        scene_.RefreshShadowGpuForEditor(renderer_);
+        if (removed != 1)
+        {
+            std::snprintf(faultDetail_, sizeof(faultDetail_), "editor delete of id %llu removed %zu objects (one expected)",
+                          static_cast<unsigned long long>(spawnedId_), removed);
+        }
+    }
+#else
+    void DeleteSpawned_() {}
 #endif
 
     // Memory profiling plan M6: a level's tags at the end of each visit against its earlier visits. A
@@ -1453,7 +1347,6 @@ private:
     Renderer& renderer_;
     Scene& scene_;
     LevelManager& levelManager_;
-    std::function<void()> onLevelLoaded_; // re-applies --set after each level load (see SetOnLevelLoaded)
     int iterations_ = 0;
     bool gbvContinue_ = false;
     bool skyEdits_ = false;
@@ -1463,7 +1356,25 @@ private:
     diag::ArtifactFile dredFile_;
     bool faultCaught_ = false;
     char faultDetail_[320] = {};
-    threading::RenderThread renderThread_; // G8: Scene::Render's thread under frame.renderThread 1
+    // The churn's state, advanced once a frame (OnFrame).
+    Phase phase_ = Phase::Start;
+    int framesLeft_ = 0;        // frames still to draw in this phase
+    int framesAfterOp_ = 0;     // the step's frames after its op (2-4; 1 for a sky / roughness edit)
+    int iter_ = 0;
+    Op op_ = Op::ReloadLevel;
+    const char* opName_ = "";
+    bool resizeDuringFrame_ = false;
+    UINT expectedResizeWidth_ = 0;
+    bool spawned_ = false;
+#if WITH_EDITOR
+    Scene::SceneObjectId spawnedId_ = 0;
+#endif
+    int exitCode_ = 1;
+    LPTOP_LEVEL_EXCEPTION_FILTER previousFilter_ = nullptr;
+    std::uint32_t asEnhancedStart_ = 0;
+    std::uint32_t asLegacyStart_ = 0;
+    std::chrono::steady_clock::time_point stepBegin_{};
+    std::chrono::steady_clock::time_point opEnd_{};
 
     int nextLevelIndex_ = Boot().harness.sceneStressExtraLevel.empty() ? 0 : 3; // --stress-level boots into the extra level
     int resizeIndex_ = 0;
@@ -1471,7 +1382,9 @@ private:
     int renderScaleIndex_ = 0;
     int reflectionScaleIndex_ = 0;
 #if WITH_EDITOR
-    Scene::SceneObjectId nextEditorStressId_ = 1;
+    // The spawned boxes' ids: past any level's (a document numbers its objects from 1, and RemoveEditorObject removes
+    // every object of an id -- from 1 each delete took a level object along with the box).
+    Scene::SceneObjectId nextEditorStressId_ = Scene::SceneObjectId(1) << 40;
 #endif
 
     static constexpr std::int64_t kVisitNoteBytes = 256 * 1024;      // logged per comparison
@@ -1492,159 +1405,14 @@ private:
         "data/levels/demo.json", "data/levels/demo1.json", "data/levels/new1.json" };
 };
 
-constexpr const char* SceneStressDriver::kLevels_[3];
+constexpr const char* SceneStressHarness::kLevels_[3];
 
 } // namespace
 
-int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
+namespace harness
 {
-    if (iterations <= 0)
-    {
-        iterations = 300; // default: a few hundred churn steps
-    }
-
-    gLog.Open("scene_stress.log", diag::ArtifactMode::PerRunTruncate);
-    SetUnhandledExceptionFilter(StressCrashFilter); // symbolize worker-thread/teardown/WndProc faults
-    Log("scene lifecycle stress harness\n");
-    Log("gbvContinue=%d\n", gbvContinue ? 1 : 0);
-    Log("iterations=%d WITH_EDITOR=%d\n", iterations,
-#if WITH_EDITOR
-        1
-#else
-        0
-#endif
-    );
-
-    int exitCode = 1;
-
-    // Same real bootstrap as App::Run(), in the same roles: boot and teardown hand over, the driver is the game half.
-    threading::SetCurrentRole(threading::ThreadRole::Sync);
-    knob::Exchange(); // G5: the command line's knobs, before the boot reads them
-    systems_ = std::make_unique<Systems::AppSystems>();
-    Systems::Init(systems_.get());
-
-    {
-        auto& renderer = systems_->renderer;
-        auto& scene = systems_->scene;
-        auto& input = systems_->input;
-        auto& levelManager = systems_->levelManager;
-
-        {
-            BOOT_SCOPE("App::InitWindow");
-            InitWindow(hInstance, nCmdShow);
-        }
-        {
-            BOOT_SCOPE("TaskSystem::Start");
-            TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
-        }
-        Profiler::Get().SetThreadName("MainThread");
-
-        InitScene();
-        // The harness honours --set like the app does (occlusion plan S3a: a GBV gate that could
-        // not switch the occlusion pass on was validating the default, not the pass).
-        ApplyFixedSettings(systems_->scene);
-        knob::Exchange(); // --set's knobs
-        Log("boot: window + device + scene ready (initial level loaded) at %.1f s\n",
-            boot::ElapsedMs() / 1000.0);
-        // The whole point of the split: this run's headline number is minutes, and until
-        // now nothing said how much of it was boot and how much was the churn loop.
-        boot::Dump("scene-stress: boot complete");
-
-        bool faultCaught = false;
-        try
-        {
-            (void)input;
-            SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits, skyEdits);
-            driver.SetOnLevelLoaded([this]() { ApplyFixedSettings(systems_->scene); });
-            threading::RoleScope gameRole(threading::ThreadRole::Game);
-            exitCode = driver.Run();
-            if (exitCode == 0)
-            {
-                exitCode = rtaudit::ExitCode(); // G9: an --rt-audit riding the churn (its verdict is in the session log)
-            }
-            faultCaught = driver.FaultCaught();
-        }
-        catch (const std::exception& e)
-        {
-            Log("EXCEPTION (outside frame try/catch): %.240s\n", e.what());
-            Log("verdict: FAULT op=driver iter=? detail=uncaught-exception\n");
-            exitCode = 2;
-            faultCaught = true;
-        }
-        memtrace::Stop(); // after the churn, before the teardown -- and before a fault's TerminateProcess
-
-        {
-            BOOT_SCOPE("TaskSystem::Stop");
-            TaskSystem::Get().Stop();
-        }
-
-        // On a caught fault the device is typically removed; the normal GPU
-        // teardown (WaitForPreviousFrame / Clear / Shutdown) then dereferences
-        // dead resources and crashes with an access violation during process
-        // exit — which would mask our deterministic exit code and truncate the
-        // log. Skip it: the process is terminating anyway. On a clean run, tear
-        // down normally.
-        if (!faultCaught)
-        {
-            BOOT_SCOPE("GPU teardown");
-            {
-                BOOT_SCOPE("WaitForPreviousFrame");
-                renderer.WaitForPreviousFrame();
-            }
-            memgate::ReleaseSelfTest();
-            {
-                BOOT_SCOPE("Scene::Clear");
-                scene.Clear();
-            }
-            {
-                BOOT_SCOPE("DestroyOceanSimulation");
-                Systems::DestroyOceanSimulation();
-            }
-            {
-                BOOT_SCOPE("Renderer::Shutdown");
-                renderer.Shutdown();
-            }
-        }
-        else
-        {
-            // Flush the verdict and terminate immediately with our own exit code.
-            // Unwinding through the destructors of dead GPU objects (Renderer,
-            // Scene) would itself access-violate and mask the result. The OS
-            // reclaims everything on process exit.
-            Log("fault caught: skipping GPU teardown (device likely removed); terminating with exit code %d\n", exitCode);
-            gLog.Close();
-            // TerminateProcess skips WinMain's RAII session: close it by hand so the session log
-            // carries its footer and everything queued before the verdict.
-            logging::Shutdown();
-            TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode));
-        }
-    }
-
-    {
-        BOOT_SCOPE("Systems::Shutdown");
-        Systems::Shutdown();
-        systems_.reset();
-    }
-
-    // Final dump: the run's tail (teardown) is a real part of "why does this take so long" and is
-    // the one stretch that produces no log line at all while it happens.
-    boot::Dump("scene-stress: shutdown complete");
-    Log("shutdown complete; exit code %d at %.1f s\n", exitCode, boot::ElapsedMs() / 1000.0);
-    gLog.Close();
-
-    // Skip the CRT exit-time teardown (execute_onexit_table). Streamline/NGX registers a static
-    // destructor that intermittently access-violates there — AFTER our explicit slShutdown() + device
-    // release (Renderer::Shutdown) and after this deterministic exit code is set. It's an NVIDIA DLL
-    // teardown-order bug (reproduces regardless of shadow mode; a dangling pointer into an unmapped
-    // module), not ours, and would otherwise mask the harness's real exit code with 0xC0000005. All
-    // our own cleanup has already run; the OS reclaims the rest. Mirrors the faultCaught path above.
-    logging::Shutdown(); // same reason as above: the RAII session in WinMain never unwinds
-    TerminateProcess(GetCurrentProcess(), static_cast<UINT>(exitCode));
-    return exitCode; // not reached (TerminateProcess doesn't return)
+std::unique_ptr<Harness> MakeSceneStressHarness(HWND__* window, Renderer& renderer, Scene& scene, LevelManager& levelManager)
+{
+    return std::make_unique<SceneStressHarness>(window, renderer, scene, levelManager);
 }
-
-int RunSceneStress(HINSTANCE__* hInstance, int nCmdShow, int iterations, bool gbvContinue, bool roughnessEdits, bool skyEdits)
-{
-    App app;
-    return app.RunSceneStress(reinterpret_cast<HINSTANCE>(hInstance), nCmdShow, iterations, gbvContinue, roughnessEdits, skyEdits);
 }

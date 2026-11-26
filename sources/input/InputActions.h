@@ -57,6 +57,12 @@ inline constexpr std::string_view kSetDlssQualityDLAA = "SetDlssQualityDLAA";
 // WORLD's axes, not turned with the camera as MoveX / MoveZ are. No key binds them, so they are not in kAll.
 inline constexpr std::string_view kMoveWorldX = "MoveWorldX";
 inline constexpr std::string_view kMoveWorldZ = "MoveWorldZ";
+// The helm's throttle and rudder, and the player's sprint, as a script says them (--set player.testThrottle /
+// testRudder / testSprint): added to W S / A D and Shift by their one reader (PlaySession::TickHelm, PlayerController)
+// -- not injected into MoveZ / MoveX / Sprint, which the free camera reads too.
+inline constexpr std::string_view kHelmThrottle = "HelmThrottle";
+inline constexpr std::string_view kHelmRudder = "HelmRudder";
+inline constexpr std::string_view kScriptSprint = "ScriptSprint";
 
 // Every action a key binds: what the bindings file is checked against.
 inline constexpr std::string_view kAll[] = {

@@ -187,6 +187,7 @@ public:
     // the same uint64 value for EditorObjectId and SceneObjectId. objectIds_ is
     // kept in lockstep with objects_ on every add/remove/clear.
     using SceneObjectId = std::uint64_t;
+    std::size_t ObjectCount() const { return objects_.size(); } // the renderables, editor and level objects alike
     SceneObjectId AddEditorObject(std::unique_ptr<RenderableObjectBase> obj);
     void AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id);
     // `visible` is the editor document's `enabled` and is not optional: a factory builds every

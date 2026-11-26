@@ -161,6 +161,17 @@ struct BootOptions
         // "--settings-dump=<file>" (architecture plan R2.0): after the warmup, every readable setting as `name value`
         // (app/harness/SettingsDumpHarness.h), then quit.
         std::string settingsDumpPath;
+        // "--boot-dump=<file>" (architecture plan R3.2b): every field here as the command line set it, then out before the
+        // App starts (app/BootOptionsDump.cpp) -- the gate of moving a switch's parsing.
+        std::string bootDumpPath;
+        // "--scene-stress[=<n>]" and its variants (main.cpp, before device creation): the level-churn stress as a
+        // harness of App::Run (app/diagnostics/SceneStress.h, architecture plan R3.3e). 0 iterations = its default.
+        bool sceneStress = false;
+        int sceneStressIterations = 0;
+        bool sceneStressGbv = false;       // --scene-stress-gbv: InfoQueue errors logged, the run goes on
+        bool sceneStressRoughness = false; // --scene-stress-roughness: RT roughness edits on wind_test #722
+        bool sceneStressSky = false;       // --scene-stress-sky: sun / exposure / IBL edits
+        int sceneStressExit = 0;           // 1 from its first frame until the CLEAN verdict: main's exit code
     } harness;
 
     // What opens at boot -- the editor and its windows, the play session, the player's settings screen -- so a headless
@@ -219,3 +230,5 @@ struct BootOptions
 
 // The run's options: main.cpp fills them before App::Run, everything else reads them (and clears what it consumes).
 BootOptions& Boot();
+// "--boot-dump=<file>": writes every field of Boot() but bootDumpPath, one `group.field=value` a line (BootOptionsDump.cpp).
+bool WriteBootDump(const std::string& path);

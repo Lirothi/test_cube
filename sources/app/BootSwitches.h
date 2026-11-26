@@ -17,6 +17,9 @@ struct Switch
     const char* value;    // "=<path>", "[=<sec>]" or "" for a flag
     const char* help;     // one line
     bool shipping;        // a Shipping build keeps it (every other switch is dropped there, with a warning)
+    // R3.2b: what the switch sets in BootOptions -- the branch WinMain had for it (app/BootParse.cpp); null = it is still
+    // parsed at its own site.
+    void (*parse)(const char* cmdLine) = nullptr;
 };
 
 // The table, sorted by name.
@@ -25,4 +28,6 @@ const Switch* Switches(std::size_t& count);
 const Switch* FindSwitch(std::string_view name);
 // The help text: every switch, or only those a Shipping build keeps.
 std::string HelpText(bool shippingOnly);
+// R3.2b: runs the parse function of every row that has one, in the table's order (WinMain, where it parsed them).
+void ParseSwitches(const char* cmdLine);
 }

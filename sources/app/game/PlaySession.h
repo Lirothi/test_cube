@@ -5,6 +5,7 @@
 #include "app/game/PlayerController.h"
 #include "app/game/PlayerStart.h"
 #include "app/game/RaceCourse.h"
+#include "app/game/VesselCamera.h" // ScriptCameraHold
 
 class InputManager;
 class Renderer;
@@ -60,6 +61,7 @@ private:
 
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;
+    game::ScriptCameraHold scriptCameraBefore_; // the script's camera (VesselCamera.h) before the session, as settingsBefore_
     Math::float3 cameraPosition_;
     float cameraYaw_ = 0.0f;
     float cameraPitch_ = 0.0f;

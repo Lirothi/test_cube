@@ -258,6 +258,12 @@
     <ClCompile Include="sources/app/BootSwitches.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/BootParse.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/BootOptionsDump.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/harness/CaptureHarnesses.cpp">
       <Filter>sources\app\harness</Filter>
     </ClCompile>
@@ -1296,6 +1302,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/BootSwitches.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/BootParse.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/harness/Harness.h">

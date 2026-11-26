@@ -18,7 +18,8 @@ namespace harness
 {
 void MemGateHarness::OnFrame(FrameContext& ctx)
 {
-    if (memgate::OnFrameEnd(ctx.renderer.GetDevice(), GetTimeSeconds()))
+    // Riding a --scene-stress, the readout's end does not end the churn (the stress's own loop never read it).
+    if (memgate::OnFrameEnd(ctx.renderer.GetDevice(), GetTimeSeconds()) && !Boot().harness.sceneStress)
     {
         ctx.running = false; // the readout's verdict is in; main returns its exit code
     }
@@ -28,6 +29,8 @@ int MemGateHarness::Verdict() const { return memgate::ExitCode(); }
 
 void RtAuditHarness::OnFrame(FrameContext& ctx)
 {
+    // Riding a --scene-stress, the audit ends with the churn (the stress's Final_ calls Finished(now)), not on its clock.
+    if (Boot().harness.sceneStress) { return; }
     if (rtaudit::Finished(GetTimeSeconds()))
     {
         ctx.running = false; // the audit's verdict is in; main returns its exit code

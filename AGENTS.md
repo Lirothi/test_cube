@@ -31,7 +31,8 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   layers of `docs/architecture_review_plan.md` section 4; today's exceptions are `tools/arch_layers_allow.txt`, which
   only shrinks: `--update` drops an include that is gone), `check_switches.py` (every switch the code reads is a row of
   `sources/app/BootSwitches.cpp` -- name, value, help, kept by Shipping -- and every row is read; `test_cube.exe
-  --help` prints the table), `check_shaders.py` (its own entry lists AND every permutation of the cook's record
+  --help` prints the table; a row's parse function in `app/BootParse.cpp` reads its own switch; a change of a parse is
+  proven by `--boot-dump=<file>` -- every `BootOptions` field, before and after), `check_shaders.py` (its own entry lists AND every permutation of the cook's record
   `tools/dist/shader_list.txt` at 6_6: a shader that no longer compiles is a FAIL naming it) (exit code = findings).
   A layout C++ and HLSL share lives in `shaders/shared/*.h` (`shader_types.h`: HLSL's type names for C++; HLSL
   includes `"shared/x.h"`, C++ `"shaders/shared/x.h"`; the cook packs them). Tools: `arch_metrics.py` (the plan's

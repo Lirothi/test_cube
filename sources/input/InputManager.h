@@ -32,12 +32,16 @@ public:
     bool  TakeActionPress(std::string_view name);
 
     // Architecture plan R12.3: what a script says in place of the keys (--set / MCP set_settings player.test*, a gate)
-    // enters HERE, the keys' own channel, and the same queries read it: an injected press is the next frame's press
-    // (WasActionPressed / TakeActionPress, once), a held action holds IsActionDown until let go, an axis adds to
-    // GetActionAxis until set to 0. An action no key binds is a script's alone (actions::kMoveWorldX / Z).
+    // enters HERE, the keys' own channel, and the same queries read it: an injected press is pressed from the next frame
+    // until a listener takes it (TakeActionPress -- every action a script presses is read that way; the old test*
+    // fields waited for their reader too), a held action holds IsActionDown until let go, an axis adds to
+    // GetActionAxis until set to 0. An action no key binds is a script's alone (actions::kMoveWorldX / Z, ...).
     void InjectPress(std::string_view name);
     void InjectHeld(std::string_view name, bool held);
     void InjectAxis(std::string_view name, float value);
+    // Lets go of everything a script holds or pressed (PlaySession's end: a script's keys are its session's, as a
+    // person's are let go when they stop).
+    void ClearInjected();
 
     // A listener whose keys are not its own this frame (PlaySession: the mouse free, a panel up, a bot watched): while
     // the scope lives the keys' actions read as not pressed / 0, and the injected ones still count -- a scripted

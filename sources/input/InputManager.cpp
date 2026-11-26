@@ -30,7 +30,10 @@ void InputManager::NewFrame() {
     pendingDY_ = 0;
     pendingWheel_ = 0;
     takenThisFrame_.clear();
-    injectedPresses_ = std::move(pendingInjectedPresses_);
+    // A script's presses wait until taken (TakeActionPress); the ones sent since the last frame join them.
+    for (std::string& press : pendingInjectedPresses_) {
+        injectedPresses_.push_back(std::move(press));
+    }
     pendingInjectedPresses_.clear();
 }
 
@@ -180,6 +183,10 @@ bool InputManager::TakeActionPress(std::string_view name) {
         }
     }
     takenThisFrame_.emplace_back(name);
+    // A script's press is used up by the listener that took it.
+    if (const auto it = std::find(injectedPresses_.begin(), injectedPresses_.end(), name); it != injectedPresses_.end()) {
+        injectedPresses_.erase(it);
+    }
     return true;
 }
 
@@ -195,6 +202,13 @@ float InputManager::GetActionAxis(std::string_view name) const {
         }
     }
     return value;
+}
+
+void InputManager::ClearInjected() {
+    pendingInjectedPresses_.clear();
+    injectedPresses_.clear();
+    injectedHeld_.clear();
+    injectedAxes_.clear();
 }
 
 void InputManager::InjectPress(std::string_view name) {

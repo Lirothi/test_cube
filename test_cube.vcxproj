@@ -365,6 +365,8 @@
     <ClCompile Include="sources/app/GpuRequirements.cpp" />
     <ClCompile Include="sources/app/Shipping.cpp" />
     <ClCompile Include="sources/app/BootSwitches.cpp" />
+    <ClCompile Include="sources/app/BootParse.cpp" />
+    <ClCompile Include="sources/app/BootOptionsDump.cpp" />
     <ClCompile Include="sources/app/harness/CaptureHarnesses.cpp" />
     <ClCompile Include="sources/app/harness/GateHarnesses.cpp" />
     <ClCompile Include="sources/app/harness/IntentHarness.cpp" />
@@ -661,6 +663,7 @@
     <ClInclude Include="sources/app/App.h" />
     <ClInclude Include="sources/app/BootOptions.h" />
     <ClInclude Include="sources/app/BootSwitches.h" />
+    <ClInclude Include="sources/app/BootParse.h" />
     <ClInclude Include="sources/app/harness/Harness.h" />
     <ClInclude Include="sources/app/harness/CaptureHarnesses.h" />
     <ClInclude Include="sources/app/harness/GateHarnesses.h" />

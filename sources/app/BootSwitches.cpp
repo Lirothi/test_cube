@@ -1,5 +1,7 @@
 #include "app/BootSwitches.h"
 
+#include "app/BootParse.h"
+
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -15,28 +17,29 @@ constexpr Switch kSwitches[] = {
     { "--help", "", "print this table (to the console the program was started from, and to the session log) and quit", false },
 
     // --- the level, the camera, the capture ---------------------------------------------------------------------------
-    { "--level", "=<path>", "the level at boot instead of the default demo level", true },
-    { "--cam-pos", "=x,y,z", "the camera's position after the level's freeCameraStart (what the HUD prints)", true },
+    { "--level", "=<path>", "the level at boot instead of the default demo level", true, &parse::Level },
+    { "--cam-pos", "=x,y,z", "the camera's position after the level's freeCameraStart (what the HUD prints)", true, &parse::CamPose },
     { "--cam-rot", "=x,y,z,w", "the camera's orientation quaternion, with --cam-pos (what the HUD prints)", true },
     { "--cam-fly", "=x,z", "drift the camera at a constant world velocity, m/s", false },
     { "--cam-fly-delay", "=<sec>", "hold the camera still this long before the --cam-fly drift starts", false },
     { "--cam-fly-yaw", "=<deg/s>", "a constant yaw rate on top of the drift (headless mouse look)", false },
     { "--cam-orbit", "=<radius m>,<deg/s>[,<sec per frame>]", "circle the start position looking along the tangent", false },
-    { "--shot", "=<path>", "after the warmup (--shot-delay) save the presented frame as a PNG and quit", true },
-    { "--shot-delay", "=<sec>", "the warmup before --shot / --profdump / --trace (default 7)", true },
-    { "--shot-count", "=<n>", "a series of n shots (path suffixed _NN), with --shot-step and --shot-interval", false },
-    { "--shot-step", "=<sec>", "the frozen wind/ocean clock advanced between the shots of a series", false },
-    { "--shot-interval", "=<sec>", "the settle time between the shots of a series (0 = consecutive frames)", false },
-    { "--sweep", "=<setting>:<v0>,<v1>[;<setting>:...]", "one shot per value of a setting (in step for several)", false },
+    { "--shot", "=<path>", "after the warmup (--shot-delay) save the presented frame as a PNG and quit", true, &parse::Shot },
+    { "--shot-delay", "=<sec>", "the warmup before --shot / --profdump / --trace (default 7)", true, &parse::ShotDelay },
+    { "--shot-count", "=<n>", "a series of n shots (path suffixed _NN), with --shot-step and --shot-interval", false, &parse::ShotCount },
+    { "--shot-step", "=<sec>", "the frozen wind/ocean clock advanced between the shots of a series", false, &parse::ShotStep },
+    { "--shot-interval", "=<sec>", "the settle time between the shots of a series (0 = consecutive frames)", false, &parse::ShotInterval },
+    { "--sweep", "=<setting>:<v0>,<v1>[;<setting>:...]", "one shot per value of a setting (in step for several)", false, &parse::Sweep },
     { "--set", "=<name>:<value>[;<name>:<value>...]", "pin settings for the run, by the --sweep / MCP set_settings names", false },
-    { "--profdump", "=<path>", "after the warmup, write the profiler overlay rows to a file and quit", false },
-    { "--settings-dump", "=<path>", "after the warmup, write every readable setting as `name value` and quit (R2)", false },
-    { "--trace", "=<frames>", "after the warmup, capture a profiler trace of that many frames into traces/ and quit", false },
-    { "--window", "=<w>x<h>", "a borderless window whose client area is exactly w x h", true },
-    { "--no-hud", "", "an empty HUD (two runs of one frozen frame then compare the image, not the counters)", false },
-    { "--dlss", "=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>", "the upscaler mode at boot", false },
+    { "--profdump", "=<path>", "after the warmup, write the profiler overlay rows to a file and quit", false, &parse::ProfDump },
+    { "--settings-dump", "=<path>", "after the warmup, write every readable setting as `name value` and quit (R2)", false, &parse::SettingsDump },
+    { "--boot-dump", "=<path>", "write every boot option the command line set as `group.field=value` and quit before the app (R3.2b)", false, &parse::BootDump },
+    { "--trace", "=<frames>", "after the warmup, capture a profiler trace of that many frames into traces/ and quit", false, &parse::Trace },
+    { "--window", "=<w>x<h>", "a borderless window whose client area is exactly w x h", true, &parse::Window },
+    { "--no-hud", "", "an empty HUD (two runs of one frozen frame then compare the image, not the counters)", false, &parse::NoHud },
+    { "--dlss", "=<off|perf|balanced|quality|ultraperf|ultraquality|dlaa>", "the upscaler mode at boot", false, &parse::Dlss },
     { "--dlss-mvec", "=<engine|camera|legacy>", "which motion vectors the upscaler is told about", false },
-    { "--scalability", "=<low|medium|high|ultra|off|auto>", "the graphics preset at boot, over what the player saved", true },
+    { "--scalability", "=<low|medium|high|ultra|off|auto>", "the graphics preset at boot, over what the player saved", true, &parse::Scalability },
     { "--time", "=HH:MM", "the time of day at boot (tod.time)", true },
     { "--date", "=YYYY-MM-DD", "the date at boot (the sun's and the moon's paths)", false },
     { "--time-speed", "=<x>", "the time of day's clock rate (tod.speed)", false },
@@ -50,30 +53,30 @@ constexpr Switch kSwitches[] = {
     { "--no-async-compute", "", "keep every pass on the direct queue", false },
 
     // --- the editor and what opens at boot ----------------------------------------------------------------------------
-    { "--editor", "", "open the Level Editor at boot (WITH_EDITOR builds)", false },
-    { "--play", "", "boot into the play session", true },
-    { "--mcp-port", "=<n>", "serve the editor's MCP on that port instead of editor_state.json's (8128)", false },
-    { "--log-window", "", "open the session-log viewer at boot", false },
-    { "--mem-window", "", "open Developer Controls on the Memory tab at boot", false },
-    { "--dev-tab", "=<label>", "open Developer Controls on that tab at boot (gi, lod, ...)", false },
-    { "--edit-mesh", "=<models/x/x.mesh.json>[#<section>]", "open the Mesh Editor on that asset at boot (implies --editor)", false },
-    { "--show-import", "[=<name>]", "open the Import Assets window at boot with that item selected (implies --editor)", false },
-    { "--inspect", "=<environment type>[#<group>]", "select that environment object at boot and scroll the Inspector to the group", false },
-    { "--settings-menu", "[=display|graphics|image|controls|menu]", "the player's settings screen (or the Esc menu) open at boot", true },
-    { "--build-dist", "[=<profile>[,override-licences][,delete=<build>]]", "the Build Distribution window open at boot (implies --editor)", false },
+    { "--editor", "", "open the Level Editor at boot (WITH_EDITOR builds)", false, &parse::Editor },
+    { "--play", "", "boot into the play session", true, &parse::Play },
+    { "--mcp-port", "=<n>", "serve the editor's MCP on that port instead of editor_state.json's (8128)", false, &parse::McpPort },
+    { "--log-window", "", "open the session-log viewer at boot", false, &parse::LogWindow },
+    { "--mem-window", "", "open Developer Controls on the Memory tab at boot", false, &parse::MemWindow },
+    { "--dev-tab", "=<label>", "open Developer Controls on that tab at boot (gi, lod, ...)", false, &parse::DevTab },
+    { "--edit-mesh", "=<models/x/x.mesh.json>[#<section>]", "open the Mesh Editor on that asset at boot (implies --editor)", false, &parse::EditMesh },
+    { "--show-import", "[=<name>]", "open the Import Assets window at boot with that item selected (implies --editor)", false, &parse::ShowImport },
+    { "--inspect", "=<environment type>[#<group>]", "select that environment object at boot and scroll the Inspector to the group", false, &parse::Inspect },
+    { "--settings-menu", "[=display|graphics|image|controls|menu]", "the player's settings screen (or the Esc menu) open at boot", true, &parse::SettingsMenu },
+    { "--build-dist", "[=<profile>[,override-licences][,delete=<build>]]", "the Build Distribution window open at boot (implies --editor)", false, &parse::BuildDist },
     { "--user-dir", "=<folder>", "a packaged build's user folder (log, settings, caches) instead of %LOCALAPPDATA%", true },
 
     // --- the local model's harnesses ----------------------------------------------------------------------------------
-    { "--intent", "=<phrase>", "run one phrase through the editor's command pipeline, log the verdict, quit (needs the model)", false },
-    { "--intent-run", "", "with --intent: execute the phrase, not only preview it", false },
-    { "--intent-repeat", "=<n>", "with --intent: ask the same phrase n times in one process", false },
-    { "--intent-timeout", "=<sec>", "with --intent: give up after this long (default 180)", false },
-    { "--chat", "=<phrase>", "send one message through the Model Chat panel once the editor is warm", false },
+    { "--intent", "=<phrase>", "run one phrase through the editor's command pipeline, log the verdict, quit (needs the model)", false, &parse::Intent },
+    { "--intent-run", "", "with --intent: execute the phrase, not only preview it", false, &parse::IntentRun },
+    { "--intent-repeat", "=<n>", "with --intent: ask the same phrase n times in one process", false, &parse::IntentRepeat },
+    { "--intent-timeout", "=<sec>", "with --intent: give up after this long (default 180)", false, &parse::IntentTimeout },
+    { "--chat", "=<phrase>", "send one message through the Model Chat panel once the editor is warm", false, &parse::Chat },
     { "--then", "=<phrase>", "with --chat: a second phrase in the same session once the first has answered", false },
 
     // --- gates and self-tests ------------------------------------------------------------------------------------------
     { "--physics-gate", "[=<name>]", "the physics gates (no window); exit code = the failed ones", false },
-    { "--scalability-check", "", "every graphics level applied and every knob read back in a running process; exit = failed reads", false },
+    { "--scalability-check", "", "every graphics level applied and every knob read back in a running process; exit = failed reads", false, &parse::ScalabilityCheck },
     { "--scalability-selftest", "", "the scalability table's self-test", false },
     { "--scene-stress", "[=<iterations>]", "the level-switch churn gate on the real loop; verdict CLEAN or a fault", false },
     { "--scene-stress-gbv", "[=<iterations>]", "the churn gate under GPU-based validation, every pass (minutes: ask the owner)", false },
@@ -274,6 +277,14 @@ const Switch* FindSwitch(std::string_view name)
         if (name == s.name) { return &s; }
     }
     return nullptr;
+}
+
+void ParseSwitches(const char* cmdLine)
+{
+    for (const Switch& s : kSwitches)
+    {
+        if (s.parse) { s.parse(cmdLine); }
+    }
 }
 
 std::string HelpText(bool shippingOnly)

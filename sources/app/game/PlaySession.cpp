@@ -27,6 +27,7 @@ void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::Pla
     Camera& camera = scene.CameraRef();
     physics::PlayerSettings& settings = physics::GameSettings().player;
     settings = settingsBefore_;
+    game::ScriptCamera() = scriptCameraBefore_; // as the player's numbers (its test* fields until R12.3)
     if (start) { game::ApplyPlayerKeys(*start, settings); }
 
     const Math::float3 feet = start ? start->feet : Math::float3(camera.GetPosition().x, camera.GetPosition().y - settings.eyeHeight, camera.GetPosition().z);
@@ -52,6 +53,7 @@ void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, c
     cameraPitch_ = camera.GetPitch();
     cameraRoll_ = camera.GetRoll();
     settingsBefore_ = physics::GameSettings().player;
+    scriptCameraBefore_ = game::ScriptCamera();
     playing_ = true;
     mouseFree_ = !takeMouse;
     mouseTaken_ = false;
@@ -71,6 +73,8 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     scene.RaceRef().End(scene.Physics());
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
+    game::ScriptCamera() = scriptCameraBefore_;
+    input.ClearInjected(); // a script's keys end with the session, as the player's test* fields did until R12.3
     input.SetMouseCapture(false);
     Camera& camera = scene.CameraRef();
     camera.SetPosition(cameraPosition_);
@@ -128,10 +132,10 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     Camera& camera = scene.CameraRef();
     const float yawBefore = camera.GetYaw();
     const float pitchBefore = camera.GetPitch();
-    // W S / A D, or what a script injected in their place (InputManager: the keys count only with `controls`).
+    // W S / A D (InputManager: the keys count only with `controls`) and what a script says at the helm.
     physics::VesselInput order;
-    order.throttle = input.GetActionAxis(actions::kMoveZ);
-    order.rudder = input.GetActionAxis(actions::kMoveX);
+    order.throttle = input.GetActionAxis(actions::kMoveZ) + input.GetActionAxis(actions::kHelmThrottle);
+    order.rudder = input.GetActionAxis(actions::kMoveX) + input.GetActionAxis(actions::kHelmRudder);
     if (controls) { scene.CameraControllerRef().AddLookInput(input); }
     scene.CameraControllerRef().TakeOwedLook(deltaTime); // the mouse's own road, its smoothing and sensitivity: what it turned the camera by is the orbit's
     // The autopilot: B hands this helm to the race's bot (game::Race) and takes it back.
@@ -213,7 +217,8 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     const physics::PlayerState onFoot = world.GetPlayerState();
     RenderableObject* vessel = possessed_ && onFoot.exists ? world.FindVessel(onFoot.feet, kHelmReach) : nullptr;
     vesselInReach_ = vessel != nullptr;
-    if (vessel && input.TakeActionPress(actions::kInteract))
+    const bool interact = input.TakeActionPress(actions::kInteract); // taken on foot, a hull in reach or not
+    if (vessel && interact)
     {
         TakeHelm(scene, vessel);
         if (atHelm_)
@@ -251,6 +256,7 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
         return false;
     }
     PlaceAtStart(renderer, scene, start);
+    input.ClearInjected(); // the player starts again: a script's keys are let go, as PlaceAtStart reset its test* fields
     scene.RaceRef().Begin(course ? *course : game::RaceCourse{});
     return true;
 }
@@ -266,6 +272,8 @@ void PlaySession::StopForLevel(Scene& scene, InputManager& input)
     possessed_ = false;
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
+    game::ScriptCamera() = scriptCameraBefore_;
+    input.ClearInjected();
     input.SetMouseCapture(false);
     LOG_INFO(logging::LogCategory::App, "play: stopped, another level");
 }
