@@ -13,6 +13,7 @@
 
 class Renderer;
 class Frustum;
+class Mesh;
 
 namespace render
 {

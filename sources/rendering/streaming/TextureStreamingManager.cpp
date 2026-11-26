@@ -15,7 +15,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
 #include "materials/Texture2D.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h"
 #include "rendering/streaming/TextureStreaming.h"

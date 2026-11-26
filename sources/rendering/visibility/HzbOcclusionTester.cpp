@@ -4,9 +4,9 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/Renderer.h"
 

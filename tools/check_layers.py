@@ -33,7 +33,7 @@ ALLOW_FILE = REPO / "tools" / "arch_layers_allow.txt"
 EXTENSIONS = (".cpp", ".h", ".hpp", ".inl")
 
 # Section 4, bottom up. (layer rank, layer name, peers, {row: [folder prefixes relative to sources/]}).
-# rhi (1) has no folder yet: R4.5 carves it out of rendering/core, which sits in render-core until then.
+# rhi (1): the device, queues, frames, submission, descriptors, upload, barriers -- sources/rhi/ (R4.5b).
 LAYERS = [
     (0.0, "core", False, {
         "core": ["core/"],
@@ -41,6 +41,9 @@ LAYERS = [
     (0.5, "platform", False, {
         "input": ["input/"],
         "assets": ["assets/"],
+    }),
+    (1.0, "rhi", False, {
+        "rhi": ["rhi/"],
     }),
     (2.0, "render-core", True, {
         "rendering-core": ["rendering/core/", "rendering/descriptors/", "rendering/meshes/",

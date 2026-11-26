@@ -11,7 +11,7 @@
 #include <optional>
 #include <d3d12shader.h>
 #include "core/profiling/Profiler.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "robin_hood.h"
 #include <cassert>
 

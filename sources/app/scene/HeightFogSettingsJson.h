@@ -2,6 +2,8 @@
 
 #include "third_party/json/json.hpp"
 
+#include "core/schema/KeyTable.h" // R9.2: the section's table of keys
+
 #include "rendering/scene/SceneFrameData.h"
 
 // P7: the ONE mapping between HeightFogSettings and JSON. The level reader, the editor's
@@ -13,92 +15,56 @@
 namespace HeightFogSettingsJson
 {
 
+// Architecture plan R9.2: the section's table of keys (core/schema/KeyTable.h); reading and writing walk it.
+inline const schema::Table<HeightFogSettings>& Keys()
+{
+    using S = HeightFogSettings;
+    static const schema::Table<S> table{ {
+        schema::Field("enabled", &S::enabled),
+        schema::Field("density", &S::density),
+        schema::Field("heightFalloff", &S::heightFalloff),
+        schema::Field("referenceHeight", &S::referenceHeight),
+        schema::Field("startDistance", &S::startDistance),
+        schema::Field("maxOpacity", &S::maxOpacity),
+        schema::Field("sunScatterStrength", &S::sunScatterStrength),
+        schema::Field("sunScatterExponent", &S::sunScatterExponent),
+        schema::Field("sunScatterStartDistance", &S::sunScatterStartDistance),
+        schema::Field("skyBlur", &S::skyBlur),
+        schema::Field("nonDirectionalDistance", &S::nonDirectionalDistance),
+        schema::Field("fullyDirectionalDistance", &S::fullyDirectionalDistance),
+        schema::Field("inscatteringLuminance", &S::inscatteringLuminance),
+        schema::Field("skyAmbientContribution", &S::skyAmbientContribution),
+        schema::Field("sunScatterColor", &S::sunScatterColor),
+        schema::Field("volumetric", &S::volumetric),
+        schema::Field("volumetricDistance", &S::volumetricDistance),
+        schema::Field("volumetricStartDistance", &S::volumetricStartDistance),
+        schema::Field("volumetricNearFadeInDistance", &S::volumetricNearFadeInDistance),
+        schema::Field("albedo", &S::albedo),
+        schema::Field("extinctionScale", &S::extinctionScale),
+        schema::Field("phaseG", &S::phaseG),
+        schema::Field("sunScatter", &S::sunScatter),
+        schema::Field("skyScatter", &S::skyScatter),
+        schema::Field("historyWeight", &S::historyWeight),
+        schema::Field("temporal", &S::temporal),
+        schema::Field("jitter", &S::jitter),
+        schema::Field("samplesPerCell", &S::samplesPerCell),
+        schema::Field("conservativeDepth", &S::conservativeDepth),
+        schema::Field("localLights", &S::localLights),
+        schema::Field("localLightScatter", &S::localLightScatter),
+        schema::Field("localSoftFading", &S::localSoftFading),
+        schema::Field("localDistanceBias", &S::localDistanceBias),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, HeightFogSettings& s)
 {
-    if (!j.is_object())
-    {
-        return;
-    }
-    s.enabled = j.value("enabled", s.enabled);
-    s.density = j.value("density", s.density);
-    s.heightFalloff = j.value("heightFalloff", s.heightFalloff);
-    s.referenceHeight = j.value("referenceHeight", s.referenceHeight);
-    s.startDistance = j.value("startDistance", s.startDistance);
-    s.maxOpacity = j.value("maxOpacity", s.maxOpacity);
-    s.sunScatterStrength = j.value("sunScatterStrength", s.sunScatterStrength);
-    s.sunScatterExponent = j.value("sunScatterExponent", s.sunScatterExponent);
-    s.sunScatterStartDistance = j.value("sunScatterStartDistance", s.sunScatterStartDistance);
-    s.skyBlur = j.value("skyBlur", s.skyBlur);
-    s.nonDirectionalDistance = j.value("nonDirectionalDistance", s.nonDirectionalDistance);
-    s.fullyDirectionalDistance = j.value("fullyDirectionalDistance", s.fullyDirectionalDistance);
-    const auto colour = [&j](const char* key, float3& v)
-    {
-        const auto it = j.find(key);
-        if (it != j.end() && it->is_array() && it->size() == 3)
-        {
-            v = float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
-        }
-    };
-    colour("inscatteringLuminance", s.inscatteringLuminance);
-    colour("skyAmbientContribution", s.skyAmbientContribution);
-    colour("sunScatterColor", s.sunScatterColor);
-    s.volumetric = j.value("volumetric", s.volumetric);
-    s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
-    s.volumetricStartDistance = j.value("volumetricStartDistance", s.volumetricStartDistance);
-    s.volumetricNearFadeInDistance = j.value("volumetricNearFadeInDistance", s.volumetricNearFadeInDistance);
-    s.albedo = j.value("albedo", s.albedo);
-    s.extinctionScale = j.value("extinctionScale", s.extinctionScale);
-    s.phaseG = j.value("phaseG", s.phaseG);
-    s.sunScatter = j.value("sunScatter", s.sunScatter);
-    s.skyScatter = j.value("skyScatter", s.skyScatter);
-    s.historyWeight = j.value("historyWeight", s.historyWeight);
-    s.temporal = j.value("temporal", s.temporal);
-    s.jitter = j.value("jitter", s.jitter);
-    s.samplesPerCell = j.value("samplesPerCell", s.samplesPerCell);
-    s.conservativeDepth = j.value("conservativeDepth", s.conservativeDepth);
-    s.localLights = j.value("localLights", s.localLights);
-    s.localLightScatter = j.value("localLightScatter", s.localLightScatter);
-    s.localSoftFading = j.value("localSoftFading", s.localSoftFading);
-    s.localDistanceBias = j.value("localDistanceBias", s.localDistanceBias);
+    Keys().Read(j, s);
 }
 
 inline nlohmann::json ToJson(const HeightFogSettings& s)
 {
-    nlohmann::json j;
-    j["enabled"] = s.enabled;
-    j["density"] = s.density;
-    j["heightFalloff"] = s.heightFalloff;
-    j["referenceHeight"] = s.referenceHeight;
-    j["startDistance"] = s.startDistance;
-    j["maxOpacity"] = s.maxOpacity;
-    j["sunScatterStrength"] = s.sunScatterStrength;
-    j["sunScatterExponent"] = s.sunScatterExponent;
-    j["sunScatterStartDistance"] = s.sunScatterStartDistance;
-    j["skyBlur"] = s.skyBlur;
-    j["nonDirectionalDistance"] = s.nonDirectionalDistance;
-    j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
-    j["inscatteringLuminance"] = { s.inscatteringLuminance.x, s.inscatteringLuminance.y, s.inscatteringLuminance.z };
-    j["skyAmbientContribution"] = { s.skyAmbientContribution.x, s.skyAmbientContribution.y, s.skyAmbientContribution.z };
-    j["sunScatterColor"] = { s.sunScatterColor.x, s.sunScatterColor.y, s.sunScatterColor.z };
-    j["volumetric"] = s.volumetric;
-    j["volumetricDistance"] = s.volumetricDistance;
-    j["volumetricStartDistance"] = s.volumetricStartDistance;
-    j["volumetricNearFadeInDistance"] = s.volumetricNearFadeInDistance;
-    j["albedo"] = s.albedo;
-    j["extinctionScale"] = s.extinctionScale;
-    j["phaseG"] = s.phaseG;
-    j["sunScatter"] = s.sunScatter;
-    j["skyScatter"] = s.skyScatter;
-    j["historyWeight"] = s.historyWeight;
-    j["temporal"] = s.temporal;
-    j["jitter"] = s.jitter;
-    j["samplesPerCell"] = s.samplesPerCell;
-    j["conservativeDepth"] = s.conservativeDepth;
-    j["localLights"] = s.localLights;
-    j["localLightScatter"] = s.localLightScatter;
-    j["localSoftFading"] = s.localSoftFading;
-    j["localDistanceBias"] = s.localDistanceBias;
-    return j;
+    return Keys().Write(s);
 }
 
 } // namespace HeightFogSettingsJson

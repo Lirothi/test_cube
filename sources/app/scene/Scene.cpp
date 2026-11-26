@@ -36,7 +36,7 @@
 #include "core/task/TaskSystem.h"
 #include "core/diagnostics/ThrowSelfTest.h" // --crash-selftest=view-throw: a culling task throws once
 #include "core/threading/ThreadRole.h" // game thread plan: who may touch what, and when
-#include "rendering/core/DeferredRelease.h" // R16.10: a removed object's GPU resources (RetireRemovedObject)
+#include "rhi/DeferredRelease.h" // R16.10: a removed object's GPU resources (RetireRemovedObject)
 #include "core/threading/Knob.h"       // G5: the knobs cross at the hand-over
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"

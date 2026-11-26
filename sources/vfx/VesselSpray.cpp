@@ -284,7 +284,7 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
                 }
                 d.forwardScatter = std::clamp(params.forwardScatter, 0.0f, 1.0f);
                 d.litFlat = std::clamp(params.foamLight, 0.0f, 1.0f);
-                // The soft fade against the depth WITH the water (g_particleDepthWaterSrv): no hard line where a sprite
+                // The soft fade against the depth WITH the water (DirectPassInputs::particleDepthWater): no hard line where a sprite
                 // crosses the sea. The mist's puffs are ~2.5x the drops.
                 d.softFade = std::max(params.softFade, 0.0f) * fadeScale;
                 if (root.valid && burst > 0.0f) { emitter->AddBurst(burst); }

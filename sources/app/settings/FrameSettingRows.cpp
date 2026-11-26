@@ -10,8 +10,8 @@
 #include "core/threading/RenderThread.h"
 #include "ocean/OceanReadback.h"
 #include "rendering/core/DlssHandler.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/GraphicsDevice.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/Device.h"
 #include "rendering/core/Renderer.h"
 
 #include <algorithm>
@@ -51,7 +51,7 @@ const SettingDesc kFrameRows[] = {
                [](SettingContext&, float value) { threading::g_rhiThreadEnabled = value != 0.0f; return true; },
                [](SettingContext&, float& out) { out = AsFloat(threading::g_rhiThreadEnabled); return true; }),
     TC_SETTING("frame.gbvCreationExcludesSubmission", Float, SettingTransient,
-               [](SettingContext&, float value) { gpu::SetCreationExcludesSubmission(value != 0.0f && GraphicsDevice::GbvEnabled()); return true; },
+               [](SettingContext&, float value) { gpu::SetCreationExcludesSubmission(value != 0.0f && rhi::Device::GbvEnabled()); return true; },
                nullptr),
     // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running
     // editor, the other motion a temporal history has to survive.

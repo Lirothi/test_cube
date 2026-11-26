@@ -1,7 +1,7 @@
 #include "rendering/core/UploadBatch.h"
 
 #include "rendering/core/Renderer.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/DeferredRelease.h"
 
 UploadBatch::~UploadBatch()
 {

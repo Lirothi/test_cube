@@ -1,0 +1,734 @@
+#include "rhi/Device.h"
+
+#include <dxgi1_4.h>
+#include <dxgidebug.h>
+#include <d3d12sdklayers.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+
+#include "core/Helpers.h"
+#include "core/diagnostics/BootProfile.h"
+#include "core/diagnostics/ArtifactWriter.h"
+#include "core/logging/Log.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/GbvListMode.h"
+#include "rhi/TextureCreate.h"
+
+namespace rhi
+{
+namespace
+{
+    // Process-global diagnostics toggles (see EnableDred/GbvForStress). Mirror
+    // the rt-force-as-fail static-flag pattern: set once from main.cpp before
+    // device creation, read here.
+    std::atomic<bool> g_dredForStress{ false };
+    std::atomic<bool> g_gbvForStress{ false };
+    std::atomic<bool> g_noDebugLayer{ false }; // --no-d3d-debug: a Debug run without the D3D12 debug layer
+
+    // GBV shader patch mode. GBV works by REWRITING each shader with validation code, and the
+    // rewrite happens the first time a pipeline is used in a command list -- which is why the cost
+    // lands on one frame, on the CPU, inside a pass body, and not at PSO creation where anyone
+    // would look for it. It scales with shader complexity: measured on this project, patching
+    // lighting_cs.hlsl alone costs ~76 s, and the whole first frame ~77 s.
+    //
+    // GUARDED (the D3D12 default) wraps every resource access in bounds-checking control flow.
+    // UNGUARDED still reports the same out-of-bounds and uninitialized-access errors but does not
+    // add the guard branches, so the rewrite is far cheaper. STATE_TRACKING keeps only the
+    // resource-state validation and does no shader rewriting at all.
+    std::atomic<int> g_gbvPatchMode{ 3 }; // 3 = GUARDED (D3D12 default), unchanged unless asked
+    // Step 9: --legacy-barriers. Lives here rather than in render:: because rhi::Device cannot
+    // see Renderer.h — Renderer.h includes THIS header, so the dependency only runs one way.
+    std::atomic<bool> g_forceLegacyBarriers{ false };
+    // Was step 11's opt-in; step 15 made enhanced the default, so nothing reads this any more.
+    // Kept so `--enhanced-barriers` remains an accepted (inert) flag rather than an error.
+    std::atomic<bool> g_enhancedOptIn{ false };
+    // Step 15: --barrier-msg-trace.
+    std::atomic<bool> g_barrierMsgTrace{ false };
+
+#ifdef _DEBUG
+    // Logging plan L4/L7: the two debug-layer callbacks below run on the thread that raised the
+    // message, inside the offending D3D call. They used to fopen/append/close a file per message,
+    // which is filesystem work (and a create_directories) at the worst possible point. Now each
+    // artifact is opened ONCE when its callback is registered and the callback does a single
+    // WriteFile through ArtifactFile::Write (no CRT, no heap, no lock); the one-line event goes
+    // to the session log via WriteRaw (never blocks; a full ring drops and counts). The files
+    // live for the process: a callback can still fire during device teardown, and closing under
+    // it would be a race for nothing the OS does not already do at exit.
+    diag::ArtifactFile g_gbvLog;
+    diag::ArtifactFile g_barrierTrace;
+
+    // The exit-time live-object report (ReportLiveObjects), held back while it runs and judged as a whole. A clean
+    // shutdown still reports ONE object, the device -- the report's own ID3D12DebugDevice and the info queue that
+    // delivers these lines hold it -- and printing that as two WARNINGs made every clean run look leaky, so a real
+    // leak line was one more among the expected ones (owner, 2026-10-20: "I need a clean GBV"). Only the device
+    // alive = one Info line; anything else alive = every line as a Warning, as before.
+    std::atomic<bool> g_liveReportActive{ false };
+    std::atomic_flag g_liveReportLock = ATOMIC_FLAG_INIT;
+    constexpr int kLiveReportMaxLines = 64;
+    int g_liveReportCount = 0;
+    int g_liveReportIds[kLiveReportMaxLines] = {};
+    char g_liveReportText[kLiveReportMaxLines][512] = {};
+
+    // The barrier-interop family. Deliberately NOT every message: the point is to attribute the
+    // legacy/enhanced mixing errors to a MODULE, and a trace of all debug-layer chatter would be
+    // unreadable and would slow the run enough to change what it reproduces.
+    bool IsBarrierInteropMessage(D3D12_MESSAGE_ID id)
+    {
+        switch (static_cast<int>(id)) {
+        case 527:  // before-state does not match
+        case 538:  // invalid state for use
+        case 1334: // barrier layout does not match expected layout (at ExecuteCommandLists)
+        case 1350: // enhanced -> legacy without passing through the common layout
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Return addresses attributed to their MODULE, which is the whole question here. Deliberately
+    // no dbghelp: symbol resolution needs PDBs the third-party modules do not ship, it is slow
+    // inside a debug-layer callback, and "nvngx_dlss.dll+0x1234" already answers "whose code is
+    // this". Our own frames still read as test_cube.exe and can be resolved later if needed.
+    void AppendModuleBacktrace(char* out, size_t cap)
+    {
+        void* frames[24] = {};
+        const USHORT captured = CaptureStackBackTrace(2, 24, frames, nullptr);
+        size_t used = std::strlen(out);
+        for (USHORT i = 0; i < captured && used + 64 < cap; ++i) {
+            HMODULE mod = nullptr;
+            char name[MAX_PATH] = "?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   static_cast<LPCSTR>(frames[i]), &mod) && mod) {
+                char full[MAX_PATH] = "";
+                if (GetModuleFileNameA(mod, full, MAX_PATH) != 0) {
+                    const char* slash = std::strrchr(full, '\\');
+                    strncpy_s(name, slash ? slash + 1 : full, _TRUNCATE);
+                }
+            }
+            const auto offset = static_cast<std::uintptr_t>(
+                reinterpret_cast<std::uintptr_t>(frames[i]) - reinterpret_cast<std::uintptr_t>(mod));
+            const int n = std::snprintf(out + used, cap - used, "    #%02u %s+0x%llx\n",
+                                        static_cast<unsigned>(i), name,
+                                        static_cast<unsigned long long>(offset));
+            if (n <= 0) { break; }
+            used += static_cast<size_t>(n);
+        }
+    }
+
+    void CALLBACK BarrierMessageCallback(D3D12_MESSAGE_CATEGORY,
+                                         D3D12_MESSAGE_SEVERITY,
+                                         D3D12_MESSAGE_ID id,
+                                         LPCSTR description,
+                                         void*)
+    {
+        if (!IsBarrierInteropMessage(id)) { return; }
+
+        static std::atomic_flag lock = ATOMIC_FLAG_INIT;
+        while (lock.test_and_set(std::memory_order_acquire)) {}
+        {
+            // Capped PER RESOURCE NAME, not globally. A flat cap is useless here: the first
+            // offender floods it and everything later — which is where the interesting emitters
+            // are — never gets printed. That mistake cost one run.
+            char resName[96] = "";
+            if (description) {
+                if (const char* open = std::strchr(description, '\'')) {
+                    if (const char* close = std::strchr(open + 1, '\'')) {
+                        const size_t len = static_cast<size_t>(close - open - 1);
+                        strncpy_s(resName, open + 1, (std::min)(len, sizeof(resName) - 1));
+                    }
+                }
+            }
+            static char seen[64][96] = {};
+            static int seenHits[64] = {};
+            static int seenCount = 0;
+            int slot = -1;
+            for (int i = 0; i < seenCount; ++i) {
+                if (std::strcmp(seen[i], resName) == 0) { slot = i; break; }
+            }
+            if (slot < 0 && seenCount < 64) {
+                slot = seenCount++;
+                strncpy_s(seen[slot], resName, _TRUNCATE);
+            }
+            const bool skip = (slot < 0) || (++seenHits[slot] > 2);
+            if (skip) { lock.clear(std::memory_order_release); return; }
+
+            char msg[4096];
+            std::snprintf(msg, sizeof(msg), "\n[msg-trace] id=%d %s\n", static_cast<int>(id),
+                          description ? description : "");
+            AppendModuleBacktrace(msg, sizeof(msg));
+            // The multi-line stack is the artifact; the session log gets the one-line event that
+            // points at it. Never Fatal from here: Fatal flushes synchronously, and this runs
+            // under the callback's own spin lock inside a D3D call.
+            g_barrierTrace.Write(msg);
+            char event[512];
+            std::snprintf(event, sizeof(event),
+                          "barrier msg-trace id=%d %.400s (stack in logs/barrier_msg_trace.log)",
+                          static_cast<int>(id), description ? description : "");
+            logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderValidation, event);
+        }
+        lock.clear(std::memory_order_release);
+    }
+
+    // GBV's own reporting channel. Deliberately NOT filtered to the barrier-interop ids the trace
+    // above cares about: the point of GPU-based validation is the messages nobody predicted.
+    // Identical texts are collapsed for the same reason the barrier log collapses them -- a
+    // per-draw complaint repeats every frame and buries whatever came next.
+    void CALLBACK GbvMessageCallback(D3D12_MESSAGE_CATEGORY,
+                                     D3D12_MESSAGE_SEVERITY severity,
+                                     D3D12_MESSAGE_ID id,
+                                     LPCSTR description,
+                                     void*)
+    {
+        if (severity != D3D12_MESSAGE_SEVERITY_ERROR &&
+            severity != D3D12_MESSAGE_SEVERITY_CORRUPTION &&
+            severity != D3D12_MESSAGE_SEVERITY_WARNING) {
+            return;
+        }
+
+        // The live-object report is judged as a whole when it ends (Device::ReportLiveObjects).
+        if (g_liveReportActive.load(std::memory_order_acquire)) {
+            while (g_liveReportLock.test_and_set(std::memory_order_acquire)) {}
+            if (g_liveReportCount < kLiveReportMaxLines) {
+                g_liveReportIds[g_liveReportCount] = static_cast<int>(id);
+                std::snprintf(g_liveReportText[g_liveReportCount], sizeof(g_liveReportText[0]), "%s",
+                              description ? description : "");
+                ++g_liveReportCount;
+            }
+            g_liveReportLock.clear(std::memory_order_release);
+            return;
+        }
+
+        static std::atomic_flag lock = ATOMIC_FLAG_INIT;
+        while (lock.test_and_set(std::memory_order_acquire)) {}
+        {
+            static char seen[128][160] = {};
+            static int seenCount = 0;
+            char key[160] = "";
+            std::snprintf(key, sizeof(key), "%d:%.140s", static_cast<int>(id),
+                          description ? description : "");
+            bool duplicate = false;
+            for (int i = 0; i < seenCount && !duplicate; ++i) {
+                duplicate = (std::strcmp(seen[i], key) == 0);
+            }
+            if (!duplicate) {
+                if (seenCount < 128) { strncpy_s(seen[seenCount++], key, _TRUNCATE); }
+                const char* sev = (severity == D3D12_MESSAGE_SEVERITY_CORRUPTION) ? "CORRUPTION"
+                                : (severity == D3D12_MESSAGE_SEVERITY_ERROR)      ? "ERROR"
+                                                                                  : "WARNING";
+                char msg[4096];
+                std::snprintf(msg, sizeof(msg), "[gbv] %s id=%d: %s\n", sev, static_cast<int>(id),
+                              description ? description : "");
+                // gbv.log stays: "gbv.log is empty" is a documented verdict
+                // (docs/gbv_startup_profile.md). Same line to the session log as an event, with
+                // the D3D severity mapped onto the log level; the dedupe above is unchanged.
+                g_gbvLog.Write(msg);
+                logging::WriteRaw(severity == D3D12_MESSAGE_SEVERITY_WARNING ? logging::LogLevel::Warning
+                                                                              : logging::LogLevel::Error,
+                                  logging::LogCategory::RenderValidation,
+                                  std::string_view(msg + 6)); // past "[gbv] "; the category column says it
+            }
+        }
+        lock.clear(std::memory_order_release);
+    }
+#endif
+}
+
+void Device::ForceLegacyBarriers(bool enable)
+{
+    g_forceLegacyBarriers.store(enable, std::memory_order_relaxed);
+}
+
+void Device::EnableEnhancedBarriers(bool enable)
+{
+    g_enhancedOptIn.store(enable, std::memory_order_relaxed);
+}
+
+void Device::EnableDredForStress(bool enable)
+{
+    g_dredForStress.store(enable, std::memory_order_relaxed);
+}
+
+void Device::SetGbvShaderPatchMode(int mode)
+{
+    g_gbvPatchMode.store(mode, std::memory_order_relaxed);
+}
+
+void Device::EnableGbvForStress(bool enable)
+{
+    g_gbvForStress.store(enable, std::memory_order_relaxed);
+}
+
+void Device::DisableDebugLayer(bool disable)
+{
+    g_noDebugLayer.store(disable, std::memory_order_relaxed);
+}
+
+bool Device::GbvEnabled()
+{
+#ifdef _DEBUG
+    return g_gbvForStress.load(std::memory_order_relaxed); // InitDevice enables it from this very flag
+#else
+    return false; // no debug layer, no GBV: nothing to make trackable
+#endif
+}
+
+void Device::EnableBarrierMessageTrace(bool enable)
+{
+    g_barrierMsgTrace.store(enable, std::memory_order_relaxed);
+}
+
+void Device::InitDevice(bool (*armGbvPassFilter)(int listedPatchMode))
+{
+    const bool dredStress = g_dredForStress.load(std::memory_order_relaxed);
+    const bool gbvStress = g_gbvForStress.load(std::memory_order_relaxed);
+
+#ifdef _DEBUG
+    // --no-d3d-debug: what the debug layer costs the CPU of a Debug frame (it validates every call recorded), and a
+    // faster Debug session when the validation is not the question. GBV needs the layer, so it wins.
+    if (g_noDebugLayer.load(std::memory_order_relaxed) && !gbvStress) {
+        LOG_INFO(logging::LogCategory::RenderRhi, "D3D12 debug layer: off (--no-d3d-debug)");
+    } else
+    {
+        Microsoft::WRL::ComPtr<ID3D12Debug> dbg;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) {
+            dbg->EnableDebugLayer();
+
+            // GPU-based validation (heavier second signal): reports invalid
+            // resource/descriptor access via the info queue, potentially at the
+            // exact dispatch. OFF unless explicitly requested (--scene-stress-gbv)
+            // because it perturbs timing and can fire on the first frame,
+            // masking the device-hang race.
+            if (gbvStress) {
+                Microsoft::WRL::ComPtr<ID3D12Debug1> dbg1;
+                if (SUCCEEDED(dbg.As(&dbg1))) {
+                    dbg1->SetEnableGPUBasedValidation(TRUE);
+                }
+            }
+        }
+    }
+#endif
+
+    // DRED must be enabled BEFORE device creation. Forced on under --scene-stress
+    // (and always in Debug) so a device removal produces auto-breadcrumbs + a
+    // page-fault allocation report naming the faulting op/resource.
+#if defined(_DEBUG)
+    const bool enableDred = true;
+#else
+    const bool enableDred = dredStress;
+#endif
+    if (enableDred) {
+        Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedDataSettings> dredSettings;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dredSettings)))) {
+            dredSettings->SetAutoBreadcrumbsEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            dredSettings->SetPageFaultEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+
+            // Breadcrumb context strings (op-level annotations) if the newer
+            // settings interface is available.
+            Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedDataSettings1> dredSettings1;
+            if (SUCCEEDED(dredSettings.As(&dredSettings1))) {
+                dredSettings1->SetBreadcrumbContextEnablement(D3D12_DRED_ENABLEMENT_FORCED_ON);
+            }
+        }
+    }
+
+    ThrowIfFailed(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device_)));
+
+#ifdef _DEBUG
+    // The patch mode can only be set on the DEVICE, after creation -- SetEnableGPUBasedValidation
+    // (pre-creation, above) only turns GBV on. Skipped entirely unless GBV is on, so a normal Debug
+    // run never touches the debug device.
+    if (gbvStress) {
+        const int requested = g_gbvPatchMode.load(std::memory_order_relaxed);
+        // `--gbv-passes`: the requested mode moves from the device to the listed passes' command
+        // lists (render::gbv), and the device default becomes the rest mode (`--gbv-rest`,
+        // STATE_TRACKING_ONLY unless asked) so nothing else is fully rewritten. Armed only if a name matched;
+        // otherwise the device keeps patching everything.
+        const bool narrowed = armGbvPassFilter && armGbvPassFilter(requested);
+        const int deviceMode = narrowed ? render::gbv::RestPatchMode() : requested;
+        Microsoft::WRL::ComPtr<ID3D12DebugDevice1> debugDevice;
+        const HRESULT qiHr = device_.As(&debugDevice);
+        HRESULT setHr = E_NOINTERFACE;
+        if (SUCCEEDED(qiHr) && debugDevice) {
+            D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS settings{};
+            settings.MaxMessagesPerCommandList = 256;
+            settings.DefaultShaderPatchMode =
+                static_cast<D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE>(deviceMode);
+            settings.PipelineStateCreateFlags = D3D12_GPU_BASED_VALIDATION_PIPELINE_STATE_CREATE_FLAG_NONE;
+            setHr = debugDevice->SetDebugParameter(
+                D3D12_DEBUG_DEVICE_PARAMETER_GPU_BASED_VALIDATION_SETTINGS,
+                &settings, sizeof(settings));
+        }
+        // Logged UNCONDITIONALLY, failure paths included. A knob whose only evidence is "the run
+        // got faster" proves nothing here: consecutive GBV runs speed up on their own as the
+        // runtime's patched-shader cache warms, which is exactly the shape of a false positive.
+        // The two HRESULTs say whether the request actually reached the debug device.
+        {
+            static const char* kModeNames[] = { "NONE", "STATE_TRACKING_ONLY",
+                                                "UNGUARDED_VALIDATION", "GUARDED_VALIDATION" };
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "[gbv] requested patch mode = %s%s%s | QueryInterface(ID3D12DebugDevice1)=0x%08X"
+                          " | SetDebugParameter=0x%08X | APPLIED=%s\n",
+                          (requested >= 0 && requested <= 3) ? kModeNames[requested] : "?",
+                          narrowed ? " on --gbv-passes lists only, device default = " : "",
+                          narrowed ? ((deviceMode >= 0 && deviceMode <= 3) ? kModeNames[deviceMode] : "?") : "",
+                          static_cast<unsigned>(qiHr), static_cast<unsigned>(setHr),
+                          SUCCEEDED(setHr) ? "yes" : "NO");
+            logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, line);
+            // NOT written here. gbv.log already exists as the GBV message log, and the info-queue
+            // setup further down does `std::remove` on it "fresh per run" -- which ran AFTER this
+            // point and silently deleted the line, making a knob that demonstrably worked look
+            // like dead code. Stashed instead, and written as gbv.log's header after that reset.
+            strncpy_s(gbvModeLine_, line, _TRUNCATE);
+            // Also into the boot profile's counters. Redundant on purpose: a diagnostic that can
+            // only be read from a file which may or may not have been written is not evidence, and
+            // this one has to answer "did the knob reach the device" for a run that costs minutes.
+            boot::AddCount("gbv: patch mode requested", requested);
+            boot::AddCount("gbv: device default patch mode", deviceMode);
+            boot::AddCount("gbv: SetDebugParameter succeeded", SUCCEEDED(setHr) ? 1 : 0);
+            boot::AddCount("gbv: debug-device QI succeeded", SUCCEEDED(qiHr) ? 1 : 0);
+        }
+    }
+#endif
+
+    // DXR capability detection (S1). Both queries are optional: older runtimes
+    // leave device5_ null and the tier at NOT_SUPPORTED, and every RT path is
+    // gated on IsRaytracingSupported(), so this is a no-op on non-RT hardware.
+    if (SUCCEEDED(device_.As(&device5_))) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5)))) {
+            raytracingTier_ = options5.RaytracingTier;
+        }
+    }
+
+    // Enhanced barriers (barrier plan step 9). Same shape as the DXR probe above: both halves are
+    // optional and any failure just leaves the capability false. Detected and LOGGED only —
+    // nothing reads it yet; steps 10-16 build the emission path behind it.
+    if (SUCCEEDED(device_.As(&device10_))) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12)))) {
+            enhancedBarriers_ = options12.EnhancedBarriersSupported != FALSE;
+        }
+    }
+    // Typed UAV loads of the "additional formats" set. The ocean mip chain now READS its source
+    // mip through a UAV (R16G16B16A16_FLOAT) instead of an SRV, so this stopped being trivia and
+    // became a capability the renderer depends on — recorded here rather than assumed.
+    {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+        if (SUCCEEDED(device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options)))) {
+            typedUavLoadAdditionalFormats_ = options.TypedUAVLoadAdditionalFormats != FALSE;
+        }
+    }
+    // Step 15 — THE FLIP. The capability is now the decision: enhanced on a machine that supports
+    // it, legacy on one that does not. `--legacy-barriers` remains the escape hatch and is the
+    // only thing that can turn it off, so a suspected barrier regression stays one flag away from
+    // being bisected. `--enhanced-barriers` survives as a no-op so existing scripts keep working.
+    const bool forceLegacy = g_forceLegacyBarriers.load(std::memory_order_relaxed);
+    if (forceLegacy) { enhancedBarriers_ = false; }
+    enhancedOptIn_ = !forceLegacy;
+    // Publish the resolved decision for the texture-creation helper (step 11). Done here, once,
+    // so the ~11 creation sites need no new parameter and cannot disagree about it.
+    render::SetEnhancedTextureCreation(UseEnhancedBarriers());
+    barriers::SetEnabled(UseEnhancedBarriers()); // step 13: direct sites read the same decision
+    {
+        char msg[288];
+        std::snprintf(msg, sizeof(msg),
+                      "[caps] raytracing tier=%d | enhanced barriers: device10=%s supported=%s in-use=%s%s"
+                      " | typed UAV load additional formats=%s\n",
+                      static_cast<int>(raytracingTier_),
+                      device10_ ? "yes" : "no",
+                      enhancedBarriers_ ? "yes" : "no",
+                      UseEnhancedBarriers() ? "yes" : "no",
+                      forceLegacy ? " (forced off by --legacy-barriers)" : "",
+                      typedUavLoadAdditionalFormats_ ? "yes" : "no");
+        // "Selected GPU/feature mode" is the canonical session-log event (logging plan L4);
+        // device_caps.log stays as the artifact other probes append to.
+        logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, msg);
+        // (device_caps.log, which mirrored this line, was retired: the session log is readable
+        // from a plain run, which is all the file existed for.)
+    }
+}
+
+void Device::SetupDebugBreaks()
+{
+#ifdef _DEBUG
+    {
+        Microsoft::WRL::ComPtr<ID3D12InfoQueue> info;
+        if (SUCCEEDED(device_.As(&info))) {
+            // --scene-stress-gbv asks for "errors logged, not fatal" so the harness can DRAIN the
+            // info queue and print what the debug layer actually said. Breaking on ERROR defeats
+            // that: the process dies inside the offending call and the message is never read. This
+            // cost real time during the enhanced-barrier work — the stack named the call site over
+            // and over but never the reason.
+            const bool breakOnError = !g_gbvForStress.load(std::memory_order_relaxed);
+            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, breakOnError ? TRUE : FALSE);
+            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+            info->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_WARNING, FALSE);
+            // Add filters for noisy messages if desired
+        }
+
+        // GBV on an ordinary run has nowhere to report to: the stress harness drains the info
+        // queue itself, and a normal run does not, so every message would go to a debugger that
+        // is not attached. Break-on-error is already off under GBV (see above), which means
+        // WITHOUT this the validation runs and says nothing at all. One callback, one file.
+        if (g_gbvForStress.load(std::memory_order_relaxed)) {
+            Microsoft::WRL::ComPtr<ID3D12InfoQueue1> gbvQueue;
+            if (SUCCEEDED(device_.As(&gbvQueue))) {
+                // Fresh per run (CREATE_ALWAYS), opened once here so the callback never touches
+                // the filesystem. Header line: which patch mode this run used. Every message below
+                // it costs what that mode costs, and the modes differ by an order of magnitude
+                // in wall time.
+                g_gbvLog.Open("gbv.log", diag::ArtifactMode::PerRunTruncate);
+                if (gbvModeLine_[0]) {
+                    g_gbvLog.Write(gbvModeLine_);
+                }
+                DWORD gbvCookie = 0;
+                gbvQueue->RegisterMessageCallback(&GbvMessageCallback,
+                                                  D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &gbvCookie);
+            }
+        }
+
+        // Step 15: the message CALLBACK runs on the thread that raised the message, at the point
+        // of the offending call — so a stack captured here names the emitter, which the message
+        // text never does. ID3D12InfoQueue1 is optional; without it the flag is simply inert.
+        if (g_barrierMsgTrace.load(std::memory_order_relaxed)) {
+            Microsoft::WRL::ComPtr<ID3D12InfoQueue1> info1;
+            if (SUCCEEDED(device_.As(&info1))) {
+                g_barrierTrace.Open("barrier_msg_trace.log", diag::ArtifactMode::PerRunTruncate);
+                DWORD cookie = 0;
+                info1->RegisterMessageCallback(&BarrierMessageCallback,
+                                               D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+            }
+        }
+    }
+#endif
+}
+
+void Device::InitQueue()
+{
+    D3D12_COMMAND_QUEUE_DESC qd{};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    qd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    ThrowIfFailed(device_->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue_)));
+    queue_->SetName(L"Queue.Direct");
+
+    // Async-compute plan step 1: the second queue. Created here and left IDLE — nothing submits to
+    // it, so this step is judged on the frame being unchanged, not on anything running.
+    //
+    // NOT fatal on failure, unlike the direct queue: a compute queue is a capability, and the
+    // engine's whole existing frame works without one. A driver that refuses it should leave the
+    // renderer running on the direct queue exactly as before rather than failing to boot, which is
+    // also what makes `--no-async-compute` (step 8) a real fallback rather than a fiction.
+    D3D12_COMMAND_QUEUE_DESC cqd{};
+    cqd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
+    cqd.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    const HRESULT computeHr = device_->CreateCommandQueue(&cqd, IID_PPV_ARGS(&computeQueue_));
+    if (SUCCEEDED(computeHr) && computeQueue_) {
+        computeQueue_->SetName(L"Queue.AsyncCompute");
+    }
+    else {
+        computeQueue_.Reset();
+    }
+
+    // APPENDED to what InitDevice wrote (it opens with "w", this opens with "a"): the queue does
+    // not exist yet when the caps line is written, because the caller runs Streamline hooks
+    // between InitDevice and InitQueue.
+    char msg[192];
+    std::snprintf(msg, sizeof(msg), "[caps] async compute queue: %s%s\n",
+                  computeQueue_ ? "created (idle)" : "NOT created",
+                  computeQueue_ ? "" : " — async compute unavailable on this device");
+    logging::WriteRaw(computeQueue_ ? logging::LogLevel::Info : logging::LogLevel::Warning,
+                      logging::LogCategory::RenderRhi, msg);
+}
+
+void Device::ReportLiveObjects()
+{
+#if defined(_DEBUG)
+    // 1) Detailed report from the device.
+    //
+    // THIS RUNS AFTER THE DEVICE IS GONE, ON PURPOSE. The caller is `Renderer::~Renderer`, and by
+    // then `Shutdown()` has released the queue, the swap chain and the device; asking a live device
+    // what is still alive would list the whole running renderer and say nothing. So the report goes
+    // through the debug device captured in `ReleaseDevice()`, which outlives its device.
+    //
+    // The one entry this ADDS is the device itself: `ID3D12DebugDevice` is a QueryInterface on the
+    // device, so holding it holds a reference. Read the report with that one subtracted -- it is
+    // released on the next line and is the reason a completely clean shutdown still prints one.
+    Microsoft::WRL::ComPtr<ID3D12DebugDevice> ddev = reportDevice_;
+    if (!ddev && device_) {
+        device_.As(&ddev); // only reachable if someone calls this while the renderer is up
+    }
+    g_liveReportCount = 0;
+    g_liveReportActive.store(true, std::memory_order_release); // GbvMessageCallback holds the lines back
+    if (ddev) {
+        ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL | D3D12_RLDO_IGNORE_INTERNAL);
+    }
+    reportDevice_.Reset();
+    // 2) DXGI report (optional)
+    {
+        Microsoft::WRL::ComPtr<IDXGIDebug1> dxgiDbg;
+        if (SUCCEEDED(DXGIGetDebugInterface1(0, IID_PPV_ARGS(&dxgiDbg)))) {
+            dxgiDbg->ReportLiveObjects(DXGI_DEBUG_ALL,
+                (DXGI_DEBUG_RLO_FLAGS)(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
+        }
+    }
+    g_liveReportActive.store(false, std::memory_order_release);
+
+    // Judge it: only the device itself alive is the report's own references (see g_liveReportActive); anything else is
+    // a leak and keeps its Warning per line, into gbv.log too.
+    while (g_liveReportLock.test_and_set(std::memory_order_acquire)) {}
+    bool onlyDevice = true;
+    for (int i = 0; i < g_liveReportCount; ++i) {
+        onlyDevice = onlyDevice && g_liveReportIds[i] == static_cast<int>(D3D12_MESSAGE_ID_LIVE_DEVICE);
+    }
+    if (onlyDevice) {
+        if (g_liveReportCount > 0) {
+            LOG_INFO(logging::LogCategory::RenderValidation,
+                     "live objects at exit: none -- only the device, held by the report's own debug interfaces "
+                     "({} report line(s): {})", g_liveReportCount, g_liveReportText[0]);
+        }
+    } else {
+        for (int i = 0; i < g_liveReportCount; ++i) {
+            char msg[640];
+            std::snprintf(msg, sizeof(msg), "[gbv] WARNING id=%d: %s\n", g_liveReportIds[i], g_liveReportText[i]);
+            g_gbvLog.Write(msg);
+            logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderValidation, std::string_view(msg + 6));
+        }
+    }
+    g_liveReportCount = 0;
+    g_liveReportLock.clear(std::memory_order_release);
+#endif
+}
+
+void Device::ReleaseQueue()
+{
+    // The compute queue goes first: it is the one nothing else holds a reference to, and releasing
+    // it before the direct queue keeps the original teardown order for everything that does.
+    if (computeQueue_) {
+        computeQueue_.Reset();
+    }
+    if (queue_) {
+        queue_.Reset();
+    }
+}
+
+void Device::ReleaseDevice()
+{
+#if defined(_DEBUG)
+    // Grab the debug device BEFORE the release, while there is still a device to query. See the
+    // member's comment: without this the detailed live-object report never ran at all.
+    if (device_ && !reportDevice_) {
+        device_.As(&reportDevice_);
+    }
+#endif
+    device5_.Reset();
+    device10_.Reset();
+    enhancedBarriers_ = false;
+    if (device_) {
+        device_.Reset();
+    }
+}
+
+ID3D12CommandSignature* Device::DrawIndexedCommandSignature() {
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
+    if (drawIndexedCmdSig_) {
+        return drawIndexedCmdSig_.Get();
+    }
+    ID3D12Device* device = device_.Get();
+    if (!device) {
+        return nullptr;
+    }
+    // One DRAW_INDEXED argument, no per-draw root-argument changes -> pRootSignature = nullptr.
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawIndexedCmdSig_.GetAddressOf())))) {
+        drawIndexedCmdSig_.Reset();
+        return nullptr;
+    }
+    drawIndexedCmdSig_->SetName(L"Renderer.DrawIndexedIndirectSig");
+    return drawIndexedCmdSig_.Get();
+}
+
+ID3D12CommandSignature* Device::DrawCommandSignature() {
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
+    if (drawCmdSig_) {
+        return drawCmdSig_.Get();
+    }
+    ID3D12Device* device = device_.Get();
+    if (!device) {
+        return nullptr;
+    }
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DRAW_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawCmdSig_.GetAddressOf())))) {
+        drawCmdSig_.Reset();
+        return nullptr;
+    }
+    drawCmdSig_->SetName(L"Renderer.DrawIndirectSig");
+    return drawCmdSig_.Get();
+}
+
+bool Device::SupportsMeshShaders() {
+    int tier = meshShaderTier_.load(std::memory_order_acquire);
+    if (tier < 0) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
+        ID3D12Device* device = device_.Get();
+        const int asked = (device && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7))))
+            ? static_cast<int>(o7.MeshShaderTier) : 0;
+        if (meshShaderTier_.compare_exchange_strong(tier, asked, std::memory_order_acq_rel)) {
+            LOG_INFO(logging::LogCategory::RenderRhi, "mesh shader tier: {}", asked); // once: the thread that stored it
+        }
+        tier = meshShaderTier_.load(std::memory_order_acquire);
+    }
+    return tier > 0;
+}
+
+ID3D12CommandSignature* Device::DispatchMeshCommandSignature() {
+    if (!SupportsMeshShaders()) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
+    if (dispatchMeshCmdSig_) {
+        return dispatchMeshCmdSig_.Get();
+    }
+    ID3D12Device* device = device_.Get();
+    if (!device) {
+        return nullptr;
+    }
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DISPATCH_MESH_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(dispatchMeshCmdSig_.GetAddressOf())))) {
+        dispatchMeshCmdSig_.Reset();
+        return nullptr;
+    }
+    dispatchMeshCmdSig_->SetName(L"Renderer.DispatchMeshIndirectSig");
+    return dispatchMeshCmdSig_.Get();
+}
+
+void Device::ReleaseCommandSignatures()
+{
+    drawIndexedCmdSig_.Reset();
+    drawCmdSig_.Reset();
+    dispatchMeshCmdSig_.Reset();
+}
+} // namespace rhi

@@ -7,7 +7,7 @@
 
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "rendering/renderables/IInstanceable.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h"
@@ -16,7 +16,7 @@
 #include "materials/MaterialData.h"
 #include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/renderables/RenderableObject.h" // plan S8: render::ShadowMaterialIsMasked
-#include "rendering/descriptors/BindlessHeap.h" // A6: the null texture index
+#include "rhi/BindlessHeap.h" // A6: the null texture index
 
 void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_iterator first,
                                    std::vector<RenderableObjectBase*>::const_iterator last,

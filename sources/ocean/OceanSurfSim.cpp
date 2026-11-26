@@ -8,11 +8,11 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderContextPool.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
 
 using Microsoft::WRL::ComPtr;
 

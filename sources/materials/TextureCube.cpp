@@ -1,11 +1,11 @@
 #include "materials/TextureCube.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
-#include "rendering/core/BarrierTranslation.h"
+#include "rhi/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/descriptors/DescriptorAllocator.h"
+#include "rhi/TextureCreate.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/DescriptorAllocator.h"
 #include "core/Helpers.h"
 
 #include <fstream>

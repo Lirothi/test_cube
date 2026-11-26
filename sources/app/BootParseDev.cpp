@@ -19,16 +19,16 @@
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "core/memory/MemTrace.h"
-#include "rendering/core/MemGates.h"
+#include "rhi/MemGates.h"
 #include "core/threading/ThreadRole.h" // --thread-check-selftest (R15.5)
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
-#include "rendering/core/BarrierTranslation.h"
+#include "rhi/BarrierTranslation.h"
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/core/GbvPassFilter.h"
-#include "rendering/core/GraphicsDevice.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/Device.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (R15.3), graphcap (R15.4)
 #include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (R16.1)
 #include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest, --crash-selftest=view-throw (the second review of wave 1)
@@ -43,7 +43,7 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // Tessy N7: --tessy-lod-build
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: --vis-readout
-#include "rendering/core/CommandListBindState.h" // --no-bind-batching
+#include "rhi/CommandListBindState.h" // --no-bind-batching
 #include "rendering/wind/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 #include "rendering/lighting/VolumetricCloud.h"  // render::g_cloudProfilePath (--cloud-profile)
 #include <algorithm>
@@ -104,10 +104,10 @@ void ApplyGbvModeArg(const char* cmd)
 {
     const std::string mode = ExtractArgValue(cmd, "--gbv-mode");
     if (mode.empty()) { return; }
-    if (mode == "none")           { GraphicsDevice::SetGbvShaderPatchMode(0); }
-    else if (mode == "state")     { GraphicsDevice::SetGbvShaderPatchMode(1); }
-    else if (mode == "unguarded") { GraphicsDevice::SetGbvShaderPatchMode(2); }
-    else if (mode == "guarded")   { GraphicsDevice::SetGbvShaderPatchMode(3); }
+    if (mode == "none")           { rhi::Device::SetGbvShaderPatchMode(0); }
+    else if (mode == "state")     { rhi::Device::SetGbvShaderPatchMode(1); }
+    else if (mode == "unguarded") { rhi::Device::SetGbvShaderPatchMode(2); }
+    else if (mode == "guarded")   { rhi::Device::SetGbvShaderPatchMode(3); }
 }
 
 // `--gbv-passes=<name,name,...>` -- the --gbv-mode above on the LISTED passes' command lists only;
@@ -286,7 +286,7 @@ void BarrierFlipTrace(const char* lpCmdLine)
 void LegacyBarriers(const char* lpCmdLine)
 {
         if (lpCmdLine && std::strstr(lpCmdLine, "--legacy-barriers")) {
-            GraphicsDevice::ForceLegacyBarriers(true);
+            rhi::Device::ForceLegacyBarriers(true);
         }
 }
 
@@ -296,7 +296,7 @@ void LegacyBarriers(const char* lpCmdLine)
 void EnhancedBarriers(const char* lpCmdLine)
 {
         if (lpCmdLine && std::strstr(lpCmdLine, "--enhanced-barriers")) {
-            GraphicsDevice::EnableEnhancedBarriers(true);
+            rhi::Device::EnableEnhancedBarriers(true);
         }
 }
 
@@ -306,7 +306,7 @@ void EnhancedBarriers(const char* lpCmdLine)
 void BarrierMsgTrace(const char* lpCmdLine)
 {
         if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-msg-trace")) {
-            GraphicsDevice::EnableBarrierMessageTrace(true);
+            rhi::Device::EnableBarrierMessageTrace(true);
         }
 }
 
@@ -569,7 +569,7 @@ void ShadowMode(const char* lpCmdLine)
 void Dred(const char* lpCmdLine)
 {
         if (std::strstr(lpCmdLine, "--dred")) {
-            GraphicsDevice::EnableDredForStress(true);
+            rhi::Device::EnableDredForStress(true);
         }
 }
 
@@ -578,7 +578,7 @@ void Dred(const char* lpCmdLine)
 void NoD3dDebug(const char* lpCmdLine)
 {
         if (std::strstr(lpCmdLine, "--no-d3d-debug")) {
-            GraphicsDevice::DisableDebugLayer(true);
+            rhi::Device::DisableDebugLayer(true);
         }
 }
 
@@ -591,14 +591,14 @@ void SceneStress(const char* lpCmdLine)
             }
             // DRED before device creation so the driver can name the faulting
             // op/resource on a device removal (cheap; does not perturb the race).
-            GraphicsDevice::EnableDredForStress(true);
+            rhi::Device::EnableDredForStress(true);
             // GPU-based validation is a heavier, opt-in second signal
             // (--scene-stress-gbv); it perturbs timing so it's off by default.
             // In GBV mode, InfoQueue errors are logged-but-not-fatal so the run
             // reaches the actual device-removal with GBV annotating each frame.
             const bool gbv = std::strstr(lpCmdLine, "scene-stress-gbv") != nullptr;
             if (gbv) {
-                GraphicsDevice::EnableGbvForStress(true);
+                rhi::Device::EnableGbvForStress(true);
                 ApplyGbvModeArg(lpCmdLine);
                 ApplyGbvSelfTestArg(lpCmdLine);
                 // The gate's verdict covers the whole frame; a narrowed one would be a false CLEAN
@@ -640,7 +640,7 @@ void SceneStress(const char* lpCmdLine)
 void Gbv(const char* lpCmdLine)
 {
         if (!Boot().harness.sceneStress && std::strstr(lpCmdLine, "--gbv") != nullptr) {
-            GraphicsDevice::EnableGbvForStress(true);
+            rhi::Device::EnableGbvForStress(true);
             ApplyGbvModeArg(lpCmdLine);
             ApplyGbvPassesArg(lpCmdLine);
             // The injector on an ordinary run too: what `--gbv-passes` gives up can only be

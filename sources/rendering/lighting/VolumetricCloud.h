@@ -6,7 +6,7 @@
 #include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/lighting/SkyAtmosphere.h" // SkyEnvironmentOverlay (C4)
 #include "rendering/lighting/VolumetricCloudSettings.h"
 

@@ -13,19 +13,20 @@
 #include <Windows.h>
 
 #include "rendering/view/Camera.h"
-#include "rendering/scene/SceneFrameData.h" // g_skyIrradianceSrv / Scale
+#include "rendering/scene/SceneFrameData.h" // g_particleSoftWater
 #include "core/Helpers.h"
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
 #include "ocean/WaterMask.h" // g_waterMaskFrame: the hulls a collideHulls particle dies in
 #include "rendering/wind/WindState.h" // W8: g_windDriftXZ
-#include "rendering/core/CommandListBindState.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/CommandListBindState.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/UploadManager.h"
+#include "rhi/UploadManager.h"
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/core/RenderContextPool.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -527,12 +528,14 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     // there). Disable the fade if it is somehow unavailable.
     const auto& D = renderer->GetDeferredForFrame();
     const bool haveDepth = D.depthCopy.Get() != nullptr && D.depthCopySRV.ptr != 0;
-    // The depth with the water in it, when Main_Translucent copied it this frame (g_particleDepthWaterSrv): the soft fade
+    // The depth with the water in it, when Main_Translucent copied it this frame (DirectPassInputs::particleDepthWater):
+    // the soft fade
     // then reaches the sea too -- a drop falling into it fades over softFade instead of being cut by the water's depth.
     D3D12_CPU_DESCRIPTOR_HANDLE softDepth = D.depthCopySRV;
     ID3D12Resource* softDepthResource = D.depthCopy.Get();
-    if (g_particleDepthWaterSrv != 0u && D.depthWater.Get() != nullptr &&
-        static_cast<std::uint64_t>(D.depthWaterSRV.ptr) == g_particleDepthWaterSrv)
+    const render::DirectPassInputs& direct = renderer->DirectInputs(); // R4.4
+    if (direct.particleDepthWater.ptr != 0 && D.depthWater.Get() != nullptr &&
+        D.depthWaterSRV.ptr == direct.particleDepthWater.ptr)
     {
         softDepth = D.depthWaterSRV;
         softDepthResource = D.depthWater.Get();
@@ -550,10 +553,9 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     dp.velocityStretch = std::max(desc_.velocityStretch, 0.0f);
     // The air's light on a lit particle: the sky's irradiance cube (t5) and its scale, as lighting_cs fills an opaque
     // surface; without one (or under the A/B) 0: the shader takes the fog's colour.
-    const bool skyFill = g_skyIrradianceSrv != 0u && !vfx::g_litAirFromFog;
-    dp.skyIrradianceScale = skyFill ? g_skyIrradianceScale : 0.0f;
-    D3D12_CPU_DESCRIPTOR_HANDLE skyIrradiance{};
-    skyIrradiance.ptr = static_cast<SIZE_T>(g_skyIrradianceSrv);
+    const bool skyFill = direct.skyIrradiance.ptr != 0 && !vfx::g_litAirFromFog;
+    dp.skyIrradianceScale = skyFill ? direct.skyIrradianceScale : 0.0f;
+    const D3D12_CPU_DESCRIPTOR_HANDLE skyIrradiance = direct.skyIrradiance;
     // The hulls no pixel of this emitter is drawn over (EmitterDesc::collideHulls): the frame's, as the ocean packed them
     // -- the rows the update tested the centres against, and their columns at t6.
     const ocean::WaterMaskFrame& hulls = ocean::g_waterMaskFrame;

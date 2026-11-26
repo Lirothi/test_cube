@@ -11,7 +11,7 @@
 
 #include "third_party/robin_hood.h"
 #include "rendering/core/RenderConstants.h" // render::kFrameCount
-#include "rendering/core/DeferredRelease.h" // R16.4: retired buffers
+#include "rhi/DeferredRelease.h" // R16.4: retired buffers
 
 class Mesh;
 

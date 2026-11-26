@@ -2,7 +2,7 @@
 #include "app/App.h"
 #include "app/AppResources.h"
 #include "app/BuildVersion.h"
-#include "rendering/core/MemoryReport.h"    // the memory line in the session log
+#include "rhi/MemoryReport.h"    // the memory line in the session log
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
@@ -14,7 +14,7 @@
 #include "materials/TextureDecodeCache.h"    // --throw-selftest=texdecode (texdecode::ThrowSelfTestFrame)
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
-#include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
+#include "rhi/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/logging/Log.h"
@@ -72,6 +72,9 @@ BootOptions& Boot()
 #include "core/settings/SettingsSeries.h" // MCP set_settings / reset_settings (R2.n)
 #include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
 #include <fstream>
+#include "rendering/debug/DebugDraw.h"
+#include "materials/MaterialDataManager.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 #if WITH_EDITOR
 #include "editor/EditorController.h"
 #include "editor/intent/EditorMcpServer.h" // Claude Code's screenshots, taken at the --shot point
@@ -596,7 +599,7 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
 
     if (app && app->systems_) {
         auto& renderer = app->systems_->renderer;
-        renderer.HandleImGuiWndProc(hWnd, message, wParam, lParam);
+        renderer.ImGui().HandleWndProc(hWnd, message, wParam, lParam);
 
         const bool mouseMessage = message >= WM_MOUSEFIRST && message <= WM_MOUSELAST;
         const bool keyMessage = message >= WM_KEYFIRST && message <= WM_KEYLAST;
@@ -606,8 +609,8 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         // arrived there (2026-11-03, owner: "F9 does not work"). AppController gates their actions the same way.
         const bool functionKey = keyMessage && wParam >= VK_F1 && wParam <= VK_F24;
         const bool consumedByImGui =
-            (mouseMessage && renderer.ImGuiWantsMouse()) ||
-            (keyMessage && (functionKey ? renderer.ImGuiWantsTextInput() : renderer.ImGuiWantsKeyboard()));
+            (mouseMessage && renderer.ImGui().WantsMouse()) ||
+            (keyMessage && (functionKey ? renderer.ImGui().WantsTextInput() : renderer.ImGui().WantsKeyboard()));
         const bool inputStateRelease =
             message == WM_KEYUP ||
             message == WM_SYSKEYUP ||
@@ -637,7 +640,7 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
     {
         // Another monitor's DPI (docs/scalability_plan.md §6.3, S6): the UI rescales at its next frame. A windowed window
         // dragged across takes the size Windows suggests for it there; one display::Apply placed is where it was put.
-        if (app && app->systems_) { app->systems_->renderer.RequestImGuiDpi(HIWORD(wParam)); }
+        if (app && app->systems_) { app->systems_->renderer.ImGui().RequestDpi(HIWORD(wParam)); }
         const bool popup = (GetWindowLongPtrW(hWnd, GWL_STYLE) & WS_POPUP) != 0;
         if (!display::Applying() && !popup && lParam)
         {
@@ -1234,7 +1237,7 @@ namespace
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
                 char uiItem[96];
                 std::snprintf(uiItem, sizeof(uiItem), ",\"ui\":{\"wantsKeyboard\":%s,\"wantsMouse\":%s,\"typing\":%s}",
-                              renderer_.ImGuiWantsKeyboard() ? "true" : "false", renderer_.ImGuiWantsMouse() ? "true" : "false", renderer_.ImGuiWantsTextInput() ? "true" : "false");
+                              renderer_.ImGui().WantsKeyboard() ? "true" : "false", renderer_.ImGui().WantsMouse() ? "true" : "false", renderer_.ImGui().WantsTextInput() ? "true" : "false");
                 out += uiItem;
             }
             // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
@@ -1666,7 +1669,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             {
                 CPU_SCOPE(ProfilerScopes::kBeginImGuiFrame);
                 MEM_SCOPE(MemTag::Ui);
-                renderer.BeginImGuiFrame();
+                renderer.ImGui().BeginFrame();
             }
             {
                 CPU_SCOPE(ProfilerScopes::kProfilerTick);
@@ -1807,7 +1810,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         const auto closeUi = [&]()
         {
             appController_.WaitForHudBuild();
-            renderer.EndImGuiFrame(); // the UI frame is final here; the hand-over gives it to the render half
+            renderer.ImGui().EndFrame(); // the UI frame is final here; the hand-over gives it to the render half
         };
         const auto handOver = [&]()
         {

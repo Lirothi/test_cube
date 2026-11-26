@@ -26,7 +26,7 @@
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/cascade_hzb.h" // GpuParams's fields, once (R5.3)
 

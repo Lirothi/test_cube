@@ -6,7 +6,7 @@
 #include "core/math/Math.h" // AerialConstants
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/lighting/SkyAtmosphereSettings.h"
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 

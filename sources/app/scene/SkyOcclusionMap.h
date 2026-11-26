@@ -7,7 +7,7 @@
 
 #include "core/math/Math.h"
 #include "app/scene/SceneView.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 
 class Material;
 class Renderer;

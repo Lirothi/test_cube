@@ -50,6 +50,7 @@
 #include "rendering/shadows/ShadowSettings.h" // local-light plan S8: which bias the shadow fields drive
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "materials/MaterialDataManager.h"
 
 namespace
 {

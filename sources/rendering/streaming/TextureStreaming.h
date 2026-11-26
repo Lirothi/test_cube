@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/streaming/MipBiasFade.h"
 #include "rendering/streaming/TextureStreamingIo.h"
 #include "rendering/streaming/TextureStreamingManager.h"

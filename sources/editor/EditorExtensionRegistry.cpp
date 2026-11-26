@@ -42,6 +42,7 @@
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
 #include "vfx/ParticleEmitterObject.h"
+#include "materials/MaterialDataManager.h"
 
 namespace
 {

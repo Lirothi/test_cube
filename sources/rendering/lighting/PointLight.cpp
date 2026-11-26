@@ -5,6 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include "rendering/descriptors/SamplerManager.h"
+#include "rendering/core/RenderContextPool.h"
+#include "rendering/meshes/MeshManager.h"
 
 using namespace Math;
 

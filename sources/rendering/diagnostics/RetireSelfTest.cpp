@@ -3,8 +3,8 @@
 #include "core/logging/Log.h"
 #include "core/memory/MemTags.h"
 #include "core/threading/ThreadRole.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h" // the pass arm: render::g_passSelfTestHook
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"

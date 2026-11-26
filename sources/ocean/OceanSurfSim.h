@@ -21,7 +21,7 @@
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Renderer;

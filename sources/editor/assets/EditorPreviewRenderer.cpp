@@ -1,9 +1,9 @@
 #include "editor/assets/EditorPreviewRenderer.h"
 #include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/TextureCreate.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/TextureCreate.h"
+#include "rhi/GpuAlloc.h"
 #if WITH_EDITOR
 
 #include <algorithm>

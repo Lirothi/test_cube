@@ -128,7 +128,7 @@ change to what the game half touches -- for coverage over time: `--scene-stress=
 (verdict at the harness's end), and an editor run with `--rt-audit=<s>` rides an MCP script; 600 s on one static view
 adds rare timing windows, not code paths. `frame.rhiThread` (default 1 since 2026-11-03, UE's `r.RHIThread.Enable`; plan G10b) moves the
 frame's submission -- ExecuteCommandLists, the waits between the queues, Present, the frame fences -- to a thread named
-`RHI` (`rendering/core/RhiQueue.h`): every queue operation of a frame in flight goes through `Renderer::Rhi().Run`, never
+`RHI` (`rhi/RhiQueue.h`): every queue operation of a frame in flight goes through `Renderer::Rhi().Run`, never
 to the queue directly, and anything that needs them done waits with `Flush` (`WaitForPreviousFrame` does). A level
 switch's phases are in the boot profile's dump as `Level switch (runtime)` (its tree is Debug: `--log-level=debug`;
 `--scene-stress=<n> --stress-level=<level.json>` boots into that level and reloads it first, plan G10d). A `--trace`
@@ -144,7 +144,7 @@ the owner said so (2026-09-03) after `s14_assert.log` / `hzb_cull_selftest.log` 
 the session log. A headless gate reads its verdict line from the session log (`Select-String` for
 `cull validation PASS`, `hzb cull self-test: PASS`, ...) and the exit code.
 
-The `mem:` line (Info, `core`, every 5 s; `rendering/core/MemoryReport.h`) puts process private
+The `mem:` line (Info, `core`, every 5 s; `rhi/MemoryReport.h`) puts process private
 bytes, VRAM and mimalloc commit beside per-owner byte counts (`heaps` / `other` only under `--memtrack`: `HeapSummary` holds the driver's heap lock ~21 ms, on any thread a spike in the frame; `--memreport`, `get_memory` and the Memory tab read it on demand); a subsystem that owns memory the
 process counters cannot attribute registers a provider (`RegisterMemoryProvider`). A number that
 grows while the others stay flat names the owner -- read it before reaching for a profiler

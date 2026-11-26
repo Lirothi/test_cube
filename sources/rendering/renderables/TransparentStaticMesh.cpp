@@ -190,7 +190,7 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
 
     // The pass's table (render::GlassPassSrvs, gathered once by Pass_Translucent); null = a shadow
     // map was missing this frame, skip the draw as before.
-    const render::GlassPassSrvs* passSrvs = renderer->GetGlassPassSrvs();
+    const render::GlassPassSrvs* passSrvs = renderer->DirectInputs().Glass();
     if (!passSrvs)
     {
         return false;

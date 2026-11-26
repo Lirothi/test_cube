@@ -1,9 +1,9 @@
 #include "rendering/meshes/InstanceBuffer.h"
 
 #include "core/Helpers.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/UploadManager.h"
+#include "rhi/UploadManager.h"
 
 void InstanceBuffer::Create(ID3D12Device* device, ResourceDeclarations decls, UINT numInstances,
     ID3D12GraphicsCommandList* uploadCmdList,

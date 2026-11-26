@@ -12,12 +12,13 @@
 #include "materials/Material.h"
 #include "ocean/BuoyancyLayout.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderContextPool.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/ocean_wake.h" // WakeCB's fields, once (R5.3)
+#include "materials/Texture2D.h"
 
 using Microsoft::WRL::ComPtr;
 

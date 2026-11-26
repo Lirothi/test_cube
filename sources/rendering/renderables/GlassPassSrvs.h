@@ -16,7 +16,7 @@ namespace render
 // sky, the light lists, the glass reflection, the VSM page table + pool, the prefiltered sky, the fog
 // volume, the SDSM partitions and the local shadow pool. t6 (the normal map) is the DRAW's and is left
 // empty here. Gathered once per Main_Translucent by SceneRenderer::Pass_Translucent and published on
-// the renderer (Renderer::SetGlassPassSrvs) for every glass draw -- the TransparentStaticMesh panes and
+// the renderer (Renderer::DirectInputs().glass) for every glass draw -- the TransparentStaticMesh panes and
 // the glass material slots of opaque objects (GBufferRenderable::RenderTranslucent) -- which have no
 // frame access of their own. Was built per pane in TransparentStaticMesh::RecordGraphics.
 inline constexpr size_t kGlassPassSrvCount = GLASS_PASS_SRV_COUNT; // shaders/shared/glass_slots.h (R5.3)

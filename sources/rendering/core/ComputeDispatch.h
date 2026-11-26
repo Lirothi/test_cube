@@ -9,7 +9,7 @@
 #include <d3d12.h>
 
 #include "rendering/core/Renderer.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "materials/Material.h"
 

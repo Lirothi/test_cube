@@ -1,4 +1,7 @@
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderServices.h" // R4.2: the managers behind services_
+#include "rendering/core/GbvPassFilter.h" // R4.5a: the device arms --gbv-passes through it
+#include "ui/ImGuiRenderer.h" // R4.3: the UI's renderer behind imgui_
 #include <unordered_set>
 #include "core/diagnostics/CrashHandler.h"
 #include "core/diagnostics/BootProfile.h"
@@ -7,13 +10,13 @@
 #include <chrono>
 #include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
-#include "rendering/core/RendererInvariantFailure.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/CommandListBindState.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/MemoryReport.h"
-#include "rendering/core/DeviceRemovalWatch.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/RendererInvariantFailure.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/CommandListBindState.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/MemoryReport.h"
+#include "rhi/DeviceRemovalWatch.h"
+#include "rhi/GpuAlloc.h"
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
@@ -45,8 +48,34 @@
 
 Renderer::Renderer()
     : dlssHandler_(std::make_unique<DlssHandler>(*this))
+    , services_(std::make_unique<RenderServices>())
+    , imgui_(std::make_unique<ui::ImGuiRenderer>(*this))
 {
 }
+
+// R4.2: the facade over RenderServices, out of line so Renderer.h names the managers without including them.
+SamplerManager* Renderer::GetSamplerManager() { return &services_->samplers; }
+MaterialManager* Renderer::GetMaterialManager() { return &services_->materials; }
+InputLayoutManager* Renderer::GetInputLayoutManager() { return &services_->inputLayouts; }
+MeshManager* Renderer::GetMeshManager()
+{
+    threading::WaitRenderForGame("Renderer::GetMeshManager");
+    return &services_->meshes;
+}
+TextManager* Renderer::GetTextManager()
+{
+    threading::WaitRenderForGame("Renderer::GetTextManager");
+    return &services_->text;
+}
+FontManager* Renderer::GetFontManager() { return &services_->fonts; }
+MaterialDataManager* Renderer::GetMaterialDataManager()
+{
+    threading::WaitRenderForGame("Renderer::GetMaterialDataManager");
+    return &services_->materialData;
+}
+RenderContextPool* Renderer::GetRenderContextPool() { return &services_->contexts; }
+DebugDrawSystem* Renderer::GetDebugDrawSystem() { return &services_->debugDraw; }
+const DebugDrawSystem* Renderer::GetDebugDrawSystem() const { return &services_->debugDraw; }
 
 Renderer::~Renderer() {
     // Report after everything has been reset
@@ -111,13 +140,13 @@ void Renderer::Shutdown()
     // Nothing to do if the device is missing
     const bool hasDevice = (GetDevice() != nullptr);
     const bool hasQueue = (GetCommandQueue() != nullptr);
-    const bool hasFence = frameScheduler_.HasFence();
+    const bool hasFence = frame_.Scheduler().HasFence();
 
     // 0) Fully wait for the GPU (and close all outstanding command lists)
     if (hasDevice && hasQueue && hasFence) {
         WaitForPreviousFrame(); // your full-synchronization helper :contentReference[oaicite:2]{index=2}
     }
-    rhi_.SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
+    frame_.Queue().SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
     // R16.1: the GPU is idle -- what still waits for its frame goes now, and what the teardown below retires goes at once.
     render::deferred::Shutdown();
     render::UnregisterMemoryProvider(&g_retireProviderKey);
@@ -143,10 +172,10 @@ void Renderer::Shutdown()
         streamlineInitialized_ = false;
     }
 
-    ShutdownImGui();
+    imgui_->Shutdown();
 
-    debugDrawSystem_.Shutdown();
-    materialManager_.Clear();
+    services_->debugDraw.Shutdown();
+    services_->materials.Clear();
     // Report the shared-texture cache BEFORE the material caches drop their last references, or
     // the live-entry count is always zero and the line says nothing.
     {
@@ -167,7 +196,7 @@ void Renderer::Shutdown()
                       streamable, nonStreamable, png);
         logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, line);
     }
-    materialDataManager_.ClearAll();
+    services_->materialData.ClearAll();
     Texture2D::ClearCache();
     // A2: after the material textures are gone (they unregister in their destructors), before the
     // device goes; a texture that outlives this (editor thumbnails) is detached here.
@@ -178,10 +207,10 @@ void Renderer::Shutdown()
     // A6: after the level's textures retired their slots (the frame rings are views of this heap,
     // released with the frame resources further down).
     bindlessHeap_.Shutdown();
-    meshManager_.Clear();
-    textManager_.Clear();
-    fontManager_.Clear();
-    samplerManager_.Clear();
+    services_->meshes.Clear();
+    services_->text.Clear();
+    services_->fonts.Clear();
+    services_->samplers.Clear();
 
     // 1) Stop the command “timeline”: prevent further submissions. Real clear —
     // releases the pooled per-batch memory (batches refer only to command lists
@@ -208,7 +237,7 @@ void Renderer::Shutdown()
 
     // 6) Frame resources: reset pool usage and clear the upload ring
     // (the actual ComPtrs release when Renderer is destroyed, but this removes dependencies)
-    frameScheduler_.ResetFrameState(GetDevice());
+    frame_.Scheduler().ResetFrameState(GetDevice());
 
     // 6b) The two lazily-created, renderer-lifetime objects. Left to ~Renderer they were still
     // alive when ReportLiveObjects() runs — that call sits in the DESTRUCTOR BODY, which executes
@@ -219,9 +248,7 @@ void Renderer::Shutdown()
     // downstream depends on them surviving this far.
     vsmDummyReady_.store(false, std::memory_order_release);
     vsmDummyHeap_.Reset();
-    drawIndexedCmdSig_.Reset();
-    drawCmdSig_.Reset();
-    dispatchMeshCmdSig_.Reset();
+    graphicsDevice_.ReleaseCommandSignatures();
     // ...and the bindless G-buffer command signatures (A6), for the same reason: each holds its root signature, so a
     // debug run ended with id=582 (Renderer.BindlessGBufferIndirectSig) + id=577 (its root signature) and the device's
     // refcount two higher (2026-10-20).
@@ -231,7 +258,7 @@ void Renderer::Shutdown()
     }
 
     // 7) Fence/Queue
-    frameScheduler_.ReleaseFence();
+    frame_.Scheduler().ReleaseFence();
     graphicsDevice_.ReleaseQueue();
 
     // 8) Release the device last
@@ -306,8 +333,8 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     // --- Device (debug layer enabled inside, in debug builds) ---
     {
-        BOOT_SCOPE("GraphicsDevice::InitDevice");
-        graphicsDevice_.InitDevice();
+        BOOT_SCOPE("rhi::Device::InitDevice");
+        graphicsDevice_.InitDevice(&render::gbv::ArmPassFilter);
     }
 
     if (streamlineInitialized_)
@@ -329,13 +356,13 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     //}
 
     {
-        BOOT_SCOPE("GraphicsDevice::SetupDebugBreaks");
+        BOOT_SCOPE("rhi::Device::SetupDebugBreaks");
         graphicsDevice_.SetupDebugBreaks();
     }
 
     // --- Queue ---
     {
-        BOOT_SCOPE("GraphicsDevice::InitQueue");
+        BOOT_SCOPE("rhi::Device::InitQueue");
         graphicsDevice_.InitQueue();
     }
 
@@ -370,9 +397,9 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     }
 
     // --- Fence + event ---
-    frameScheduler_.InitFence(GetDevice());
-    render::StartDeviceRemovalWatch(GetDevice(), GraphicsDevice::GbvEnabled() || render::g_deviceRemovalCheck);
-    gpu::SetCreationExcludesSubmission(GraphicsDevice::GbvEnabled());
+    frame_.Scheduler().InitFence(GetDevice());
+    render::StartDeviceRemovalWatch(GetDevice(), rhi::Device::GbvEnabled() || render::g_deviceRemovalCheck);
+    gpu::SetCreationExcludesSubmission(rhi::Device::GbvEnabled());
     if (render::g_uploadRingCheck || render::g_rtConstantsProbe) {
         LOG_INFO(logging::LogCategory::RenderRhi, "upload ring check: {}{}",
                  render::g_uploadRingCheck ? "on" : "the RT constants' GPU copies only",
@@ -382,7 +409,7 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     // --- Frame resources ---
     {
         BOOT_SCOPE("CreateFrameResources");
-        frameScheduler_.CreateFrameResources(GetDevice(), &bindlessHeap_);
+        frame_.Scheduler().CreateFrameResources(GetDevice(), &bindlessHeap_);
     }
 
     {
@@ -394,11 +421,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     {
         BOOT_SCOPE("SamplerManager::Init");
-        samplerManager_.Init(GetDevice(), 512);
+        services_->samplers.Init(GetDevice(), 512);
     }
     {
         BOOT_SCOPE("InitImGui");
-        InitImGui();
+        imgui_->Init();
     }
 
     // P1: the persistent exposure buffers. Created unconditionally rather than when the feature is
@@ -414,29 +441,29 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
 void Renderer::InitFence() {
     // Compatibility with your main.cpp — safe no-op if initialization already happened
-    frameScheduler_.InitFence(GetDevice());
+    frame_.Scheduler().InitFence(GetDevice());
 }
 
 void Renderer::InitTextSystem(ID3D12GraphicsCommandList* uploadCl,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const std::wstring& folder)
 {
-    fontManager_.Init(this);
-    fontManager_.LoadFromFolder(this, uploadCl, uploadKeepAlive, folder);
+    services_->fonts.Init(this);
+    services_->fonts.LoadFromFolder(this, uploadCl, uploadKeepAlive, folder);
 
-    textManager_.Init(this);
-    if (auto* def = fontManager_.Get(L"Consolas_32"))
-    //if (auto* def = fontManager_.Get(L"Consolas_32_coverage"))
-    //if (auto* def = fontManager_.Get(L"cons_32"))
+    services_->text.Init(this);
+    if (auto* def = services_->fonts.Get(L"Consolas_32"))
+    //if (auto* def = services_->fonts.Get(L"Consolas_32_coverage"))
+    //if (auto* def = services_->fonts.Get(L"cons_32"))
     {
-        textManager_.SetFont(def);
+        services_->text.SetFont(def);
     }
     auto shadowDesc = TextManager::ShadowDesc();
     shadowDesc.offsetX = 2.0f;
     shadowDesc.offsetY = 2.0f;
     shadowDesc.color.w = 0.9f;
     shadowDesc.scaleWithTextSize = true;
-    textManager_.SetShadow(shadowDesc);
+    services_->text.SetShadow(shadowDesc);
 }
 
 void Renderer::CreateSwapChainAndRTVs(UINT width, UINT height) {
@@ -462,16 +489,6 @@ void Renderer::CreateDepthResources(UINT width, UINT height) {
     swapchain_.CreateDepth(GetDevice(), width, height, render::kDepthBufferResourceFormat, render::kDepthBufferViewFormat);
 }
 
-void Renderer::WaitForFrame(UINT frameIndex) {
-    frameScheduler_.WaitForFrame(frameIndex);
-}
-
-void Renderer::SignalFrame(UINT frameIndex, std::uint64_t frameNumber) {
-    // Step 2: both queues, one value. GetComputeQueue() is null when the device refused one, which
-    // FrameScheduler handles by advancing the compute fence from the CPU instead.
-    frameScheduler_.SignalFrame(GetCommandQueue(), GetComputeQueue(), frameIndex, frameNumber);
-}
-
 void Renderer::RefreshCurrentFrameCaches() {
     currentFrameResource_ = nullptr;
     currentFrameDescriptorHeapCount_ = 0;
@@ -481,7 +498,7 @@ void Renderer::RefreshCurrentFrameCaches() {
         return;
     }
 
-    FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
+    FrameResource* fr = frame_.Scheduler().GetFrameResource(currentFrameIndex_);
     currentFrameResource_ = fr;
     if (!fr) {
         return;
@@ -813,20 +830,20 @@ void Renderer::BeginFrame() {
     // the last one handed over must have reached the queues: the RHI thread at most one frame behind (UE's GTSyncType 0
     // -- game N + 2, render N + 1, RHI N), and this slot's last submission, whose SignalFrame is the fence value
     // WaitForFrame waits for, is older still.
-    if (rhi_.Threaded() != threading::g_rhiThreadEnabled)
+    if (frame_.Queue().Threaded() != threading::g_rhiThreadEnabled)
     {
-        rhi_.SetThreaded(threading::g_rhiThreadEnabled);
+        frame_.Queue().SetThreaded(threading::g_rhiThreadEnabled);
     }
-    rhi_.WaitFor(prevSubmit_);
-    if ((GraphicsDevice::GbvEnabled() || render::g_deviceRemovalCheck) && totalFrameNumber_ <= 64 && (totalFrameNumber_ & (totalFrameNumber_ - 1)) == 0)
+    frame_.WaitForSubmissionBeforeLast();
+    if ((rhi::Device::GbvEnabled() || render::g_deviceRemovalCheck) && totalFrameNumber_ <= 64 && (totalFrameNumber_ & (totalFrameNumber_ - 1)) == 0)
     {
         render::RefreshDeviceRemovalWatch();
     }
 
     // Wait for the GPU using its back buffer fence value
-    WaitForFrame(currentFrameIndex_);
+    frame_.WaitForFrame(currentFrameIndex_);
     if (render::g_uploadRingCheck) {
-        frameScheduler_.GetFrameResource(currentFrameIndex_)->VerifyUpload("while the GPU had it");
+        frame_.Scheduler().GetFrameResource(currentFrameIndex_)->VerifyUpload("while the GPU had it");
     }
 
     // GPU pipeline statistics: freeze how many queries the slot just recorded handed out, publish
@@ -881,7 +898,7 @@ void Renderer::BeginFrame() {
     // path that resets the pools without having waited would corrupt silently: the symptom is a
     // descriptor address handed out twice, which GBV reports as a wrong descriptor TYPE somewhere
     // else entirely. Debug-only; WaitForFrame above is what makes it true.
-    assert(frameScheduler_.IsFrameComplete(currentFrameIndex_) &&
+    assert(frame_.Scheduler().IsFrameComplete(currentFrameIndex_) &&
            "BeginFrame: per-frame pools reused before BOTH queues passed this slot's fence");
 
     // Reset per-frame pools
@@ -906,9 +923,9 @@ void Renderer::BeginFrame() {
         textureStreaming_->OnFrameBegin(this, totalFrameNumber_);
     }
 
-    ctxPool_.ResetForFrame();
-    debugDrawSystem_.BeginFrame();
-    pendingImGuiTextureResources_.clear();
+    services_->contexts.ResetForFrame();
+    services_->debugDraw.BeginFrame();
+    imgui_->BeginRenderFrame();
 
     // Async-compute step 1. Last thing in BeginFrame: the pools have just been reset and the
     // frame's descriptor heaps are published, which is exactly the state a real compute pass would
@@ -1141,67 +1158,6 @@ void Renderer::ResetObjectIdPickState()
 }
 #endif
 
-void Renderer::InitImGui()
-{
-    if (imguiLayer_.IsInitialized())
-    {
-        return;
-    }
-
-    if (!hWnd_ || !GetDevice() || !GetCommandQueue())
-    {
-        return;
-    }
-
-    imguiLayer_.Init(hWnd_, *this);
-}
-
-void Renderer::BeginImGuiFrame()
-{
-    imguiLayer_.BeginFrame();
-}
-
-void Renderer::EndImGuiFrame()
-{
-    TC_CHECK_GAME("Renderer::EndImGuiFrame");
-    CPU_SCOPE(ProfilerScopes::kImGuiEndFrame);
-    imguiLayer_.EndFrame();
-}
-
-void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
-{
-    // Step 7 — out-of-graph, explicit before state. The list holds two kinds: editor-owned
-    // textures (created shader-readable, so this is a no-op) and engine render targets shown by
-    // TextureDebugViewer (left at their canonical by the frame's graph work, since the overlay
-    // runs last). Both answers come from the canonical registry, so no tracker is involved.
-    // G8b: what is drawn is the frame the hand-over gave the render half (HandOverImGui) -- never ImGui's own state,
-    // which the game half's next UI frame may be writing now. A loop that never hands over draws no UI.
-    for (ID3D12Resource* resource : pendingImGuiTextureResources_)
-    {
-        TransitionExplicit(commandList, resource, GetCanonicalState(resource),
-                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
-    imguiLayer_.Render(commandList);
-    // ...and put every one of them BACK. This used to be left undone, which was silently fine only
-    // while every previewable target rested in a state sharing PIXEL_SHADER_RESOURCE's barrier
-    // LAYOUT — NON_PIXEL_SHADER_RESOURCE does (both are D3D12_BARRIER_LAYOUT_SHADER_RESOURCE), so
-    // the leftover state was invisible to the enhanced-barrier validator. It is NOT fine for a
-    // target resting in UNORDERED_ACCESS (tonemap, fxaa, and briefly the GTAO output): the next
-    // frame's compiled barrier claims a UAV before-state against a resource the inspector left in
-    // the SHADER_RESOURCE layout, which is INCOMPATIBLE_BARRIER_LAYOUT and a debug-layer break.
-    //
-    // Restoring here rather than constraining what a target may rest in keeps the rule where it
-    // belongs: the graph decides resting states, and this out-of-graph peek borrows and returns.
-    // For editor-owned textures the canonical IS PixelShaderResource, so both calls are no-ops.
-    for (ID3D12Resource* resource : pendingImGuiTextureResources_)
-    {
-        TransitionExplicit(commandList, resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                           GetCanonicalState(resource));
-    }
-    pendingImGuiTextureResources_.clear();
-    imguiKeepAlive_.clear(); // recorded: the frame's list holds them now, and their owners idle the GPU to free them
-}
-
 void Renderer::RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* commandList)
 {
     if (!commandList)
@@ -1217,28 +1173,6 @@ void Renderer::RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* 
     render::g_clBindState.Reset();
 }
 
-ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
-{
-    if (!resource)
-    {
-        return ImTextureID_Invalid;
-    }
-    // G8b: the game half gets a VIRTUAL ID, made real at the hand-over (HandOverImGui) in the slot of the frame that
-    // draws it -- the UI may run while the render thread draws the previous frame, before this frame's slot is free.
-    if (threading::CurrentRole() == threading::ThreadRole::Game)
-    {
-        return imguiLayer_.RequestTexture(resource, srvDesc);
-    }
-
-    if (std::find(pendingImGuiTextureResources_.begin(),
-            pendingImGuiTextureResources_.end(),
-            resource) == pendingImGuiTextureResources_.end())
-    {
-        pendingImGuiTextureResources_.push_back(resource);
-    }
-    return imguiLayer_.CreateTextureIdForSrv(GetDevice(), resource, srvDesc, currentFrameIndex_);
-}
-
 void Renderer::HandOverImGui()
 {
     TC_CHECK_RENDER("Renderer::HandOverImGui");
@@ -1246,90 +1180,7 @@ void Renderer::HandOverImGui()
     exposureView_.readback = exposureMetering_.LatestReadback();
     exposureView_.histogramValid = exposureMetering_.LatestHistogram(
         exposureView_.histogram.data(), ExposureMetering::kHistogramBins, &exposureView_.histogramTotal);
-    for (ID3D12Resource* resource : gameReadableMarks_)
-    {
-        SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
-    gameReadableMarks_.clear();
-    if (imguiLayer_.HasTextureUpdates())
-    {
-        rhi_.Flush(); // G10: the backend's upload submits on the queue itself -- after everything already handed over
-    }
-    std::vector<ID3D12Resource*> shown;
-    imguiLayer_.HandOver(GetDevice(), currentFrameIndex_, shown, imguiKeepAlive_);
-    for (ID3D12Resource* resource : shown)
-    {
-        if (std::find(pendingImGuiTextureResources_.begin(), pendingImGuiTextureResources_.end(), resource) ==
-            pendingImGuiTextureResources_.end())
-        {
-            pendingImGuiTextureResources_.push_back(resource);
-        }
-    }
-}
-
-#if WITH_EDITOR
-void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
-{
-    threading::WaitRenderForGame("Renderer::ReleaseImGuiTextureDescriptors");
-    imguiLayer_.DropTextureRequests(resource); // a request of this frame draws nothing (G8b)
-    gameReadableMarks_.erase(std::remove(gameReadableMarks_.begin(), gameReadableMarks_.end(), resource),
-                             gameReadableMarks_.end());
-    imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
-    canonicalStates_.Forget(resource);
-}
-#endif
-
-void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
-{
-    // Editor textures shown through CreateImGuiTextureId (icon atlas, asset
-    // thumbnails, viewport billboards) are created in a pixel-shader-readable
-    // state outside the state tracker. Register that so RenderImGui does not
-    // record a COMMON->PSR barrier with a wrong before-state, which the D3D12
-    // debug layer rejects. Call each frame before RenderImGui, since a resize
-    // clears all known states. Engine render targets go through TextureDebugViewer
-    // instead and keep their real tracked state, so they are unaffected.
-    if (resource)
-    {
-        // G8b: from the game half it is declared at the hand-over (HandOverImGui) -- the canonical registry is the
-        // frame in flight's.
-        if (threading::CurrentRole() == threading::ThreadRole::Game)
-        {
-            if (std::find(gameReadableMarks_.begin(), gameReadableMarks_.end(), resource) == gameReadableMarks_.end())
-            {
-                gameReadableMarks_.push_back(resource);
-            }
-            return;
-        }
-        // Step 7: this now DECLARES the texture's canonical (it is created shader-readable and
-        // stays there), rather than papering over the tracker's global map. That is why it
-        // survives the tracker's deletion instead of going with it as D2 assumed.
-        SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    }
-}
-
-void Renderer::ShutdownImGui()
-{
-    imguiLayer_.Shutdown();
-}
-
-bool Renderer::HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    return imguiLayer_.HandleWndProc(hwnd, message, wParam, lParam);
-}
-
-bool Renderer::ImGuiWantsMouse() const
-{
-    return imguiLayer_.WantsMouse();
-}
-
-bool Renderer::ImGuiWantsKeyboard() const
-{
-    return imguiLayer_.WantsKeyboard();
-}
-
-bool Renderer::ImGuiWantsTextInput() const
-{
-    return imguiLayer_.WantsTextInput();
+    imgui_->HandOver(); // R4.3: the UI's own hand-over (ui::ImGuiRenderer)
 }
 
 void Renderer::ReportLiveObjects()
@@ -1357,8 +1208,8 @@ void Renderer::Tick(float dt)
         // 1) Every N seconds — launch a one-off background task to scan the filesystem
         if (shaderWatchAccumSec_ >= shaderWatchIntervalSec_) {
             // Prevent overlapping scans
-            if (!materialManager_.IsProbeInFlight()) {
-                (void)materialManager_.RequestFSProbeAsync();
+            if (!services_->materials.IsProbeInFlight()) {
+                (void)services_->materials.RequestFSProbeAsync();
             }
             // Keep the fractional remainder so we do not lose time
             shaderWatchAccumSec_ -= shaderWatchIntervalSec_;
@@ -1371,13 +1222,13 @@ void Renderer::Tick(float dt)
     // frames in flight. The same path the shader watcher uses, so it works with the watcher off.
     if (rasterBindlessApplied_ != render::g_rasterBindless) {
         rasterBindlessApplied_ = render::g_rasterBindless;
-        const unsigned flagged = materialManager_.RequestReloadWhere(&Material::IsBindlessTextureShader);
+        const unsigned flagged = services_->materials.RequestReloadWhere(&Material::IsBindlessTextureShader);
         LOG_INFO(logging::LogCategory::Render, "[bindless] raster.bindless = {} -> {} material PSOs rebuild (dynamic resources {})",
                  render::g_rasterBindless ? 1 : 0, flagged, bindlessHeap_.DynamicResourcesSupported() ? "supported" : "UNSUPPORTED, staying on tables");
     }
 
     // 2) Apply pending rebuilds (the scan found changes, or the toggle above flagged them)
-    if (materialManager_.ApplyPendingHotReloads(this, totalFrameNumber_)) {
+    if (services_->materials.ApplyPendingHotReloads(this, totalFrameNumber_)) {
         materialsHotReloaded_ = true;
     }
 }
@@ -1576,7 +1427,7 @@ Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type
     ID3D12CommandAllocator* alloc = 0;
     FrameResource* fr = currentFrameResource_;
     if (!fr) {
-        fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
+        fr = frame_.Scheduler().GetFrameResource(currentFrameIndex_);
     }
     if (!fr) {
         return {};
@@ -1714,7 +1565,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         CPU_SCOPE(ProfilerScopes::kService1);
         submitTimeline_.GatherFrameLists(segments, [this]() {
             // Fallback: a batch has bundles but no driver — create a temporary one
-            FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
+            FrameResource* fr = frame_.Scheduler().GetFrameResource(currentFrameIndex_);
             ID3D12CommandAllocator* alloc =
                 fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
             ID3D12GraphicsCommandList* cl =
@@ -1745,7 +1596,7 @@ void Renderer::ExecuteTimelineAndPresent() {
 
     // Acquire a fresh, open DIRECT command list from this frame's pool.
     auto acquireDirectCL = [this]() -> ID3D12GraphicsCommandList* {
-        FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
+        FrameResource* fr = frame_.Scheduler().GetFrameResource(currentFrameIndex_);
         ID3D12CommandAllocator* alloc =
             fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT);
         return fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_DIRECT, alloc);
@@ -1825,7 +1676,7 @@ void Renderer::ExecuteTimelineAndPresent() {
     }
 
     // Game thread plan G10a: the queue's half of the frame -- every wait, signal and ExecuteCommandLists, Present and the
-    // frame fences -- as ONE operation of rhi_, the road every queue operation of a frame in flight takes. Run at once
+    // frame fences -- as ONE operation of the RHI road (rhi::Frame::Queue), the road every queue operation of a frame in flight takes. Run at once
     // today; an RHI thread (G10b) runs it while the next frame records. The next frame's slot: FLIP_DISCARD goes round
     // the kFrameCount buffers, so it is known before Present (SubmitFrame_ checks the swapchain agrees).
     FrameSubmit submit;
@@ -1840,15 +1691,14 @@ void Renderer::ExecuteTimelineAndPresent() {
     if (render::g_uploadRingCheck) {
         GetFrameResource()->SealUpload(totalFrameNumber_); // the frame's recording has ended: what it wrote is final
     }
-    prevSubmit_ = lastSubmit_;
-    lastSubmit_ = rhi_.Run([this, submit]() { SubmitFrame_(submit); });
-    currentFrameIndex_ = rhi_.Threaded() ? submit.predictedNext : swapchain_.CurrentBackBufferIndex();
+    frame_.NoteSubmission(frame_.Queue().Run([this, submit]() { SubmitFrame_(submit); }));
+    currentFrameIndex_ = frame_.Queue().Threaded() ? submit.predictedNext : swapchain_.CurrentBackBufferIndex();
     RefreshCurrentFrameCaches();
 }
 
 void Renderer::SubmitFrame_(const FrameSubmit& submit)
 {
-    FrameResource* ringChecked = render::g_uploadRingCheck ? frameScheduler_.GetFrameResource(submit.frameIndex) : nullptr;
+    FrameResource* ringChecked = render::g_uploadRingCheck ? frame_.Scheduler().GetFrameResource(submit.frameIndex) : nullptr;
     if (ringChecked) {
         ringChecked->VerifyUpload("before the queue took it");
     }
@@ -1859,7 +1709,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
         // is from the previous frame, so the signal was always submitted before this wait and the
         // pair can never deadlock.
         if (submit.orderProbe && asyncOrderProbeValue_.valid()) {
-            frameScheduler_.WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
+            frame_.Scheduler().WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
         }
 
         // --- Step 6: per-queue submission with the graph's cross-queue fence edges (D2) ---
@@ -1905,7 +1755,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
                     RendererInvariantFailure("Renderer::ExecuteTimelineAndPresent: cross-queue wait "
                                              "for a batch that was never signalled (segment order broken)");
                 }
-                frameScheduler_.WaitCrossQueue(q, value);
+                frame_.Scheduler().WaitCrossQueue(q, value);
                 ++render::g_crossQueueWaits;
                 edgeWait = value.value;
             }
@@ -1927,7 +1777,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
                 }
             }
             if (seg.signalAfter) {
-                const FrameScheduler::CrossQueuePoint sig = frameScheduler_.SignalCrossQueue(q);
+                const FrameScheduler::CrossQueuePoint sig = frame_.Scheduler().SignalCrossQueue(q);
                 crossQueueSignals_.emplace_back(seg.lastBatch, sig);
                 edgeSignal = sig.value;
             }
@@ -1965,7 +1815,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
         //
         // This deliberately SERIALISES the two queues, so it is its own flag and never on by default.
         if (submit.orderProbe) {
-            asyncOrderProbeValue_ = frameScheduler_.SignalCrossQueue(GetComputeQueue());
+            asyncOrderProbeValue_ = frame_.Scheduler().SignalCrossQueue(GetComputeQueue());
         }
     }
 
@@ -1992,7 +1842,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
             throw;
         }
     }
-    SignalFrame(submit.frameIndex, submit.totalFrame);
+    frame_.SignalFrame(submit.frameIndex, submit.totalFrame);
     // G10a: the slot ExecuteTimelineAndPresent predicted for the next frame is the swapchain's (an RHI thread's next
     // frame records into it before this Present runs).
     const UINT actualNext = swapchain_.CurrentBackBufferIndex();
@@ -2061,204 +1911,12 @@ ID3D12CommandList* Renderer::RecordEmptyComputeWork()
     return cl;
 }
 
-namespace
-{
-// R16.10: WaitForPreviousFrame by call site. Rare (idle points), so a mutex and a short vector.
-struct GpuIdleSite
-{
-    const char* file = nullptr;
-    std::uint32_t line = 0;
-    std::uint32_t count = 0;
-    std::uint32_t fromGame = 0; // of them, from the game half (a park as well as the idle)
-    double ms = 0.0;
-};
-std::mutex g_gpuIdleMutex;
-std::vector<GpuIdleSite> g_gpuIdleSites;
-std::uint64_t g_gpuIdleSessionCount = 0;
-double g_gpuIdleSessionMs = 0.0;
-
-// "sources/editor/commands/SpawnMeshCommand.cpp" -> "editor/commands/SpawnMeshCommand.cpp" (the compiler's full path).
-std::string_view ShortSourcePath(const char* file)
-{
-    std::string_view p(file ? file : "?");
-    for (const std::string_view root : { std::string_view("sources\\"), std::string_view("sources/") })
-    {
-        const size_t at = p.rfind(root);
-        if (at != std::string_view::npos) { return p.substr(at + root.size()); }
-    }
-    return p;
-}
-
-void NoteGpuIdleWait(const std::source_location& where, bool fromGame, double ms)
-{
-    std::lock_guard<std::mutex> lock(g_gpuIdleMutex);
-    ++g_gpuIdleSessionCount;
-    g_gpuIdleSessionMs += ms;
-    auto it = std::find_if(g_gpuIdleSites.begin(), g_gpuIdleSites.end(), [&](const GpuIdleSite& s) {
-        return s.line == where.line() && std::strcmp(s.file, where.file_name()) == 0;
-    });
-    if (it == g_gpuIdleSites.end())
-    {
-        g_gpuIdleSites.push_back(GpuIdleSite{ where.file_name(), where.line(), 0u, 0u, 0.0 });
-        it = g_gpuIdleSites.end() - 1;
-    }
-    ++it->count;
-    if (fromGame) { ++it->fromGame; }
-    it->ms += ms;
-}
-} // namespace
-
-void Renderer::LogGpuIdleWaits(double seconds)
-{
-    std::vector<GpuIdleSite> sites;
-    std::uint64_t sessionCount = 0;
-    double sessionMs = 0.0;
-    {
-        std::lock_guard<std::mutex> lock(g_gpuIdleMutex);
-        sites.swap(g_gpuIdleSites);
-        sessionCount = g_gpuIdleSessionCount;
-        sessionMs = g_gpuIdleSessionMs;
-    }
-    if (sites.empty()) { return; }
-    std::sort(sites.begin(), sites.end(), [](const GpuIdleSite& a, const GpuIdleSite& b) { return a.ms > b.ms; });
-    std::uint32_t total = 0;
-    double totalMs = 0.0;
-    std::string list;
-    for (const GpuIdleSite& s : sites)
-    {
-        total += s.count;
-        totalMs += s.ms;
-        if (!list.empty()) { list += ", "; }
-        list += std::format("{}:{} x{}{} ({:.1f} ms)", ShortSourcePath(s.file), s.line, s.count,
-                            s.fromGame != 0u ? std::format(" ({} game)", s.fromGame) : std::string(), s.ms);
-    }
-    LOG_INFO(logging::LogCategory::RenderRhi, "gpu idle waits: {} in {:.0f} s, {:.1f} ms (session: {}, {:.1f} ms): {}", total,
-             seconds, totalMs, sessionCount, sessionMs, list);
-}
-
-void Renderer::WaitForPreviousFrame(std::source_location where) {
-    // R16.10: counted and timed by its caller (LogGpuIdleWaits), whatever it waits for.
-    CPU_SCOPE(ProfilerScopes::kGpuIdleWait);
-    const auto waitStart = std::chrono::steady_clock::now();
-    struct Note
-    {
-        const std::source_location& where;
-        bool fromGame;
-        std::chrono::steady_clock::time_point start;
-        ~Note()
-        {
-            NoteGpuIdleWait(where, fromGame,
-                            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-        }
-    } note{ where, threading::CurrentRole() == threading::ThreadRole::Game, waitStart };
-    // Fully wait for the GPU (for resize/destructor) — step 2: BOTH queues.
-    //
-    // This is the ONE function every idle path in the engine funnels through: ~50 call sites across
-    // level switch, resize, editor commands, thumbnail eviction, screenshots and shutdown all call
-    // it rather than touching the scheduler. That is why making it queue-correct here makes all of
-    // them queue-correct, and why the plan puts this in step 2 instead of the hardening step — the
-    // gates for every step in between are exactly that churn.
-    // Game thread plan section 3.7: from the game half this is also where the render half PARKS -- until the next
-    // hand-over the game may change what the render half walks (the scene's membership, the targets, the queue).
-    const bool fromGame = threading::CurrentRole() == threading::ThreadRole::Game;
-    if (fromGame)
-    {
-        threading::ParkRender(); // G8: a render thread finishes its frame in flight first (no thread: nothing)
-        threading::NoteRenderParked();
-    }
-    FlushHandOverSubmits(); // G7: the game's deferred GPU work goes first, so the idle below covers it
-    rhi_.Flush();           // G10: everything handed to the queues' road has reached them
-    frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
-    if (fromGame)
-    {
-        // G5: a parked render half takes the game's knobs at once -- a live setter that parks (a target rebuild)
-        // reads the value the game half just set.
-        knob::Exchange();
-    }
-}
-
-bool Renderer::HandOverSubmitsGoNow() const
-{
-    const threading::ThreadRole role = threading::CurrentRole();
-    return role == threading::ThreadRole::Render || role == threading::ThreadRole::Sync ||
-           (role == threading::ThreadRole::Game && threading::RenderParked());
-}
-
-void Renderer::ExecuteOrDefer(ID3D12CommandList* list)
-{
-    if (!list) { return; }
-    if (HandOverSubmitsGoNow())
-    {
-        FlushHandOverSubmits(); // keep the queue order: anything deferred before this goes first
-        Microsoft::WRL::ComPtr<ID3D12CommandList> keep(list);
-        rhi_.Run([this, keep]()
-        {
-            ID3D12CommandList* l = keep.Get();
-            GetCommandQueue()->ExecuteCommandLists(1, &l);
-        });
-        return;
-    }
-    std::lock_guard<std::mutex> lock(handOverMutex_);
-    HandOverOp op;
-    op.list = list;
-    handOverOps_.push_back(std::move(op));
-}
-
-bool Renderer::SignalOrDefer(ID3D12Fence* fence, UINT64 value)
-{
-    if (!fence) { return false; }
-    if (HandOverSubmitsGoNow())
-    {
-        FlushHandOverSubmits();
-        if (!rhi_.Threaded())
-        {
-            return SUCCEEDED(GetCommandQueue()->Signal(fence, value));
-        }
-        Microsoft::WRL::ComPtr<ID3D12Fence> keep(fence);
-        rhi_.Run([this, keep, value]()
-        {
-            if (FAILED(GetCommandQueue()->Signal(keep.Get(), value)))
-            {
-                LOG_ERROR(logging::LogCategory::RenderRhi, "a fence signal failed (value {})", value);
-            }
-        });
-        return true;
-    }
-    std::lock_guard<std::mutex> lock(handOverMutex_);
-    HandOverOp op;
-    op.fence = fence;
-    op.value = value;
-    handOverOps_.push_back(std::move(op));
-    return true;
-}
-
-void Renderer::FlushHandOverSubmits()
-{
-    std::vector<HandOverOp> ops;
-    {
-        std::lock_guard<std::mutex> lock(handOverMutex_);
-        if (handOverOps_.empty()) { return; }
-        ops.swap(handOverOps_);
-    }
-    TC_CHECK_THREAD(HandOverSubmitsGoNow(), "render|sync, or game with the render half parked",
-                    "Renderer::FlushHandOverSubmits");
-    rhi_.Run([this, ops = std::move(ops)]()
-    {
-        for (const HandOverOp& op : ops)
-        {
-            if (op.list)
-            {
-                ID3D12CommandList* list = op.list.Get();
-                GetCommandQueue()->ExecuteCommandLists(1, &list);
-            }
-            else if (op.fence && FAILED(GetCommandQueue()->Signal(op.fence.Get(), op.value)))
-            {
-                LOG_ERROR(logging::LogCategory::RenderRhi, "hand-over: a deferred fence signal failed (value {})",
-                          op.value);
-            }
-        }
-    });
-}
+// R4.5d: the frame's synchronization is rhi::Frame's (rhi/Frame.h); these forward.
+void Renderer::WaitForPreviousFrame(std::source_location where) { frame_.WaitForPreviousFrame(where); }
+void Renderer::LogGpuIdleWaits(double seconds) { rhi::Frame::LogGpuIdleWaits(seconds); }
+void Renderer::ExecuteOrDefer(ID3D12CommandList* list) { frame_.ExecuteOrDefer(list); }
+bool Renderer::SignalOrDefer(ID3D12Fence* fence, UINT64 value) { return frame_.SignalOrDefer(fence, value); }
+void Renderer::FlushHandOverSubmits() { frame_.FlushHandOverSubmits(); }
 
 void Renderer::OnResize(UINT width, UINT height) {
     if (width == 0 || height == 0) {
@@ -2815,97 +2473,6 @@ void Renderer::EnsureVsmDummySrvs() {
         dev->CreateShaderResourceView(nullptr, &d, nullMaterialTexSrv_);
     }
     vsmDummyReady_.store(true, std::memory_order_release); // the handles above are published with it
-}
-
-ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
-    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
-    if (drawIndexedCmdSig_) {
-        return drawIndexedCmdSig_.Get();
-    }
-    ID3D12Device* device = GetDevice();
-    if (!device) {
-        return nullptr;
-    }
-    // One DRAW_INDEXED argument, no per-draw root-argument changes -> pRootSignature = nullptr.
-    D3D12_INDIRECT_ARGUMENT_DESC arg{};
-    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
-    D3D12_COMMAND_SIGNATURE_DESC desc{};
-    desc.ByteStride = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS);
-    desc.NumArgumentDescs = 1;
-    desc.pArgumentDescs = &arg;
-    desc.NodeMask = 0;
-    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawIndexedCmdSig_.GetAddressOf())))) {
-        drawIndexedCmdSig_.Reset();
-        return nullptr;
-    }
-    drawIndexedCmdSig_->SetName(L"Renderer.DrawIndexedIndirectSig");
-    return drawIndexedCmdSig_.Get();
-}
-
-ID3D12CommandSignature* Renderer::GetDrawCommandSignature() {
-    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
-    if (drawCmdSig_) {
-        return drawCmdSig_.Get();
-    }
-    ID3D12Device* device = GetDevice();
-    if (!device) {
-        return nullptr;
-    }
-    D3D12_INDIRECT_ARGUMENT_DESC arg{};
-    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
-    D3D12_COMMAND_SIGNATURE_DESC desc{};
-    desc.ByteStride = sizeof(D3D12_DRAW_ARGUMENTS);
-    desc.NumArgumentDescs = 1;
-    desc.pArgumentDescs = &arg;
-    desc.NodeMask = 0;
-    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawCmdSig_.GetAddressOf())))) {
-        drawCmdSig_.Reset();
-        return nullptr;
-    }
-    drawCmdSig_->SetName(L"Renderer.DrawIndirectSig");
-    return drawCmdSig_.Get();
-}
-
-bool Renderer::SupportsMeshShaders() {
-    int tier = meshShaderTier_.load(std::memory_order_acquire);
-    if (tier < 0) {
-        D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
-        ID3D12Device* device = GetDevice();
-        const int asked = (device && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7))))
-            ? static_cast<int>(o7.MeshShaderTier) : 0;
-        if (meshShaderTier_.compare_exchange_strong(tier, asked, std::memory_order_acq_rel)) {
-            LOG_INFO(logging::LogCategory::RenderRhi, "mesh shader tier: {}", asked); // once: the thread that stored it
-        }
-        tier = meshShaderTier_.load(std::memory_order_acquire);
-    }
-    return tier > 0;
-}
-
-ID3D12CommandSignature* Renderer::GetDispatchMeshCommandSignature() {
-    if (!SupportsMeshShaders()) {
-        return nullptr;
-    }
-    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
-    if (dispatchMeshCmdSig_) {
-        return dispatchMeshCmdSig_.Get();
-    }
-    ID3D12Device* device = GetDevice();
-    if (!device) {
-        return nullptr;
-    }
-    D3D12_INDIRECT_ARGUMENT_DESC arg{};
-    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
-    D3D12_COMMAND_SIGNATURE_DESC desc{};
-    desc.ByteStride = sizeof(D3D12_DISPATCH_MESH_ARGUMENTS);
-    desc.NumArgumentDescs = 1;
-    desc.pArgumentDescs = &arg;
-    desc.NodeMask = 0;
-    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(dispatchMeshCmdSig_.GetAddressOf())))) {
-        dispatchMeshCmdSig_.Reset();
-        return nullptr;
-    }
-    dispatchMeshCmdSig_->SetName(L"Renderer.DispatchMeshIndirectSig");
-    return dispatchMeshCmdSig_.Get();
 }
 
 ID3D12CommandSignature* Renderer::GetBindlessIndirectCommandSignature(const Material* mat) {

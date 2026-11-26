@@ -6,8 +6,8 @@
 
 #include "core/math/Frustum.h"
 #include "core/profiling/ProfilerScopes.h"
-#include "rendering/core/DeferredRelease.h" // a grown light ring's old buffer (R16.10)
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h" // a grown light ring's old buffer (R16.10)
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/shadows/ShadowSettings.h" // plan S4: kLocalShadowMinRes
 #include "rendering/shadows/ShadowAtlasPacker.h" // plan S9

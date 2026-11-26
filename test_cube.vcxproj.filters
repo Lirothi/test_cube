@@ -70,6 +70,9 @@
     <Filter Include="sources\core">
       <UniqueIdentifier>{e4ee6e35-a54a-4795-9849-d685ff1589ed}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\schema">
+      <UniqueIdentifier>{03cf7097-378a-46be-9dc0-84e9fdfe39be}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\profiling">
       <UniqueIdentifier>{b159312f-ce29-4185-896e-c90bf9c9e7a1}</UniqueIdentifier>
     </Filter>
@@ -114,6 +117,9 @@
     </Filter>
     <Filter Include="sources\rendering">
       <UniqueIdentifier>{d7a549b3-2575-456d-869c-0c11ead713a3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\rhi">
+      <UniqueIdentifier>{920d0e98-59d7-4964-a1c5-ca8aae088d3a}</UniqueIdentifier>
     </Filter>
     <Filter Include="sources\rendering\core">
       <UniqueIdentifier>{dc6790ce-276e-4f46-8000-f893062b29a2}</UniqueIdentifier>
@@ -861,8 +867,8 @@
     <ClCompile Include="sources/ocean/OceanSpectrum.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/FrameResource.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/FrameResource.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/RenderContextPool.cpp">
       <Filter>sources\rendering\core</Filter>
@@ -873,29 +879,29 @@
     <ClCompile Include="sources/rendering/core/UploadBatch.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/FrameScheduler.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/FrameScheduler.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/DeferredRelease.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/DeferredRelease.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/Device.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/GbvPassFilter.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/SwapchainManager.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/SwapchainManager.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/BarrierTranslation.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/BarrierTranslation.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/TextureCreate.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/TextureCreate.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/ExposureMetering.cpp">
       <Filter>sources\rendering\core</Filter>
@@ -906,8 +912,8 @@
     <ClCompile Include="sources/rendering/core/StreamlineSignature.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/RhiQueue.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/RhiQueue.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/Screenshot.cpp">
       <Filter>sources\rendering\core</Filter>
@@ -933,23 +939,26 @@
     <ClCompile Include="sources/rendering/visibility/HzbOcclusionTester.cpp">
       <Filter>sources\rendering\visibility</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/MemoryReport.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/MemoryReport.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/GpuAlloc.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/GpuAlloc.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/GpuProfiler.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/DeviceRemovalWatch.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/DeviceRemovalWatch.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/MemGates.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/Frame.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
-      <Filter>sources\rendering\core</Filter>
+    <ClCompile Include="sources/rhi/MemGates.cpp">
+      <Filter>sources\rhi</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rhi/SubmitTimeline.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/rt/AccelerationStructure.cpp">
       <Filter>sources\rendering\rt</Filter>
@@ -990,8 +999,8 @@
     <ClCompile Include="sources/rendering/debug/TextureDebugViewer.cpp">
       <Filter>sources\rendering\debug</Filter>
     </ClCompile>
-    <ClCompile Include="sources/rendering/descriptors/BindlessHeap.cpp">
-      <Filter>sources\rendering\descriptors</Filter>
+    <ClCompile Include="sources/rhi/BindlessHeap.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/descriptors/InputLayoutManager.cpp">
       <Filter>sources\rendering\descriptors</Filter>
@@ -1087,6 +1096,9 @@
       <Filter>sources\text</Filter>
     </ClCompile>
     <ClCompile Include="sources/ui/ImGuiLayer.cpp">
+      <Filter>sources\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/ui/ImGuiRenderer.cpp">
       <Filter>sources\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/assets/AssetImporter.cpp">
@@ -1556,6 +1568,9 @@
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h">
       <Filter>sources\core\profiling</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/schema/KeyTable.h">
+      <Filter>sources\core\schema</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
@@ -1676,8 +1691,8 @@
     <ClInclude Include="sources/materials/TextureCube.h">
       <Filter>sources\materials</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/UploadManager.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/UploadManager.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanRenderConfigJson.h">
       <Filter>sources\ocean</Filter>
@@ -1796,14 +1811,14 @@
     <ClInclude Include="sources/rendering/streaming/TextureStreamingManager.h">
       <Filter>sources\rendering\streaming</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/FrameResource.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/FrameResource.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/CommandListBindState.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/CommandListBindState.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/RenderContext.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/RenderContext.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/RenderContextPool.h">
       <Filter>sources\rendering\core</Filter>
@@ -1815,6 +1830,12 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/RenderPass.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/RenderQueue.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/RenderServices.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/UploadBatch.h">
@@ -1829,44 +1850,53 @@
     <ClInclude Include="sources/rendering/core/VisibilityStats.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/MemoryReport.h">
+    <ClInclude Include="sources/rhi/MemoryReport.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/GpuAlloc.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/DeviceRemovalWatch.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/Frame.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/DirectPassInputs.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/GpuAlloc.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/MemGates.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/DeviceRemovalWatch.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/FrameScheduler.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/MemGates.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/DeferredRelease.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/FrameScheduler.h">
-      <Filter>sources\rendering\core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/DeferredRelease.h">
-      <Filter>sources\rendering\core</Filter>
-    </ClInclude>
-    <ClInclude Include="sources/rendering/core/GraphicsDevice.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/Device.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/GbvPassFilter.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/SwapchainManager.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/SwapchainManager.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/ResourceDeclarations.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/ResourceDeclarations.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/RhiConstants.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/BarrierTranslation.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/BarrierTranslation.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/TextureCreate.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/TextureCreate.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">
       <Filter>sources\rendering\core</Filter>
@@ -1874,8 +1904,8 @@
     <ClInclude Include="sources/rendering/core/StreamlineSignature.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/RendererInvariantFailure.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h">
       <Filter>sources\rendering\diagnostics</Filter>
@@ -1901,11 +1931,14 @@
     <ClInclude Include="sources/rendering/visibility/HzbOcclusionTester.h">
       <Filter>sources\rendering\visibility</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/SubmitTimeline.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/SubmitTimeline.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/core/RhiQueue.h">
-      <Filter>sources\rendering\core</Filter>
+    <ClInclude Include="sources/rhi/SubmitTopology.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rhi/RhiQueue.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/debug/DebugGrid.h">
       <Filter>sources\rendering\debug</Filter>
@@ -1922,14 +1955,14 @@
     <ClInclude Include="sources/rendering/core/RasterSettings.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/BindlessHeap.h">
-      <Filter>sources\rendering\descriptors</Filter>
+    <ClInclude Include="sources/rhi/BindlessHeap.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/DescriptorAllocator.h">
-      <Filter>sources\rendering\descriptors</Filter>
+    <ClInclude Include="sources/rhi/DescriptorAllocator.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
-    <ClInclude Include="sources/rendering/descriptors/DescriptorHeapGPU.h">
-      <Filter>sources\rendering\descriptors</Filter>
+    <ClInclude Include="sources/rhi/DescriptorHeapGPU.h">
+      <Filter>sources\rhi</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/descriptors/InputLayoutManager.h">
       <Filter>sources\rendering\descriptors</Filter>
@@ -2054,8 +2087,14 @@
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rhi/GbvListMode.h">
+      <Filter>sources\rhi</Filter>
+    </ClInclude>
     <ClCompile Include="sources/rendering/core/GBufferBindingGuard.cpp">
       <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rhi/GbvListMode.cpp">
+      <Filter>sources\rhi</Filter>
     </ClCompile>
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h">
       <Filter>sources\rendering\shadows</Filter>
@@ -2091,6 +2130,9 @@
       <Filter>sources\text</Filter>
     </ClInclude>
     <ClInclude Include="sources/ui/ImGuiLayer.h">
+      <Filter>sources\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/ui/ImGuiRenderer.h">
       <Filter>sources\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/ui/ImGuiWindowUtils.h">

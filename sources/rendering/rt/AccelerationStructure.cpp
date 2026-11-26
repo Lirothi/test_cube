@@ -4,8 +4,8 @@
 #include <atomic>
 #include <vector>
 
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
 #include "core/logging/Log.h"
 

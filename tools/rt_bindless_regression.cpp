@@ -2,7 +2,7 @@
 // Uses the production BindlessTable, with real GPU reads delayed until three CPU frames have
 // updated it. Null Mesh skips only VB/IB creation; material records, SRVs and uploads are real.
 #include "rendering/rt/BindlessTable.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/DeferredRelease.h"
 #include "rendering/streaming/TextureUploadRing.h"
 #include <d3d12sdklayers.h>
 #include <d3dcompiler.h>

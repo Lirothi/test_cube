@@ -16,6 +16,7 @@
 #include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
 #include "core/math/Frustum.h"
 #include "rendering/view/Camera.h"
+#include "rendering/core/RenderContextPool.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;

@@ -13,7 +13,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/VisibilityStats.h" // S1: g_visChunkMask
-#include "rendering/descriptors/BindlessHeap.h" // A6: the null texture index
+#include "rhi/BindlessHeap.h" // A6: the null texture index
 #include "core/math/Frustum.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -23,6 +23,8 @@
 #include "rendering/view/Camera.h"
 #include <cstdio>
 #include <cstring>
+#include "rendering/core/RenderContextPool.h"
+#include "rendering/meshes/MeshManager.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;

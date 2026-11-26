@@ -1,8 +1,6 @@
 #include "rendering/core/GbvPassFilter.h"
 
 #include <d3d12.h>
-#include <d3d12sdklayers.h>
-#include <wrl/client.h>
 
 #include <atomic>
 #include <string_view>
@@ -22,20 +20,6 @@ std::string g_requested;
 // recording thread. Atomic so a group joining on one thread is not a data race with a list being
 // named on another.
 std::atomic<bool> g_listed[kPassCount]; // static storage: all false
-int g_listedMode = 3; // D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE_GUARDED_VALIDATION
-// Every unlisted list and the device default. STATE_TRACKING_ONLY (1) unless `--gbv-rest=none`:
-// measured on wind_test it costs +1..3.5 s to the first frame (16.2 -> 17.0/19.6 s), and in exchange
-// GBV's resource-state tracking stays as exact as in a full run -- under NONE the runtime declares
-// it "possibly imprecise" from the first unpatched list on (id=1044).
-int g_restMode = 1;
-
-const char* ModeName(int mode)
-{
-    static const char* kNames[] = { "NONE", "STATE_TRACKING_ONLY", "UNGUARDED_VALIDATION",
-                                     "GUARDED_VALIDATION" };
-    return (mode >= 0 && mode <= 3) ? kNames[mode] : "?";
-}
-
 std::string PassName(RenderPass pass)
 {
     const std::wstring_view wide = RenderPassToWString(pass);
@@ -80,34 +64,6 @@ void LogAllPassNames()
     logging::WriteRawLines(logging::LogLevel::Info, logging::LogCategory::RenderRhi, text);
 }
 
-void SetListMode(ID3D12GraphicsCommandList* cl, bool patched)
-{
-#ifdef _DEBUG
-    Microsoft::WRL::ComPtr<ID3D12DebugCommandList1> debugList;
-    HRESULT hr = cl->QueryInterface(IID_PPV_ARGS(&debugList));
-    if (SUCCEEDED(hr)) {
-        D3D12_DEBUG_COMMAND_LIST_GPU_BASED_VALIDATION_SETTINGS settings{};
-        settings.ShaderPatchMode =
-            static_cast<D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE>(patched ? g_listedMode : g_restMode);
-        hr = debugList->SetDebugParameter(D3D12_DEBUG_COMMAND_LIST_PARAMETER_GPU_BASED_VALIDATION_SETTINGS,
-                                          &settings, sizeof(settings));
-    }
-    if (FAILED(hr)) {
-        LOG_WARNING_ONCE(logging::LogCategory::RenderRhi,
-                         "--gbv-passes: SetDebugParameter on a command list failed (hr=0x{:08X}) -- that list keeps "
-                         "its previous patch mode, so what is validated is no longer what was listed",
-                         static_cast<unsigned>(hr));
-        return;
-    }
-    // The evidence that the per-list half reached the runtime, beside the device half's counters:
-    // a narrowed run that patches nothing would otherwise look exactly like a fast, clean one.
-    // CALLS, not lists: a BeginCL list is set twice (BeginCL, then SetCommandListName).
-    if (patched) { boot::AddCount("gbv-passes: patched-mode SetDebugParameter calls"); }
-#else
-    (void)cl;
-    (void)patched;
-#endif
-}
 } // namespace
 
 void RequestPassFilter(std::string list)
@@ -120,20 +76,10 @@ void RequestPassFilter(std::string list)
 #endif
 }
 
-void RequestRestPatchMode(int mode)
-{
-    g_restMode = mode;
-}
-
-int RestPatchMode()
-{
-    return g_restMode;
-}
-
 bool ArmPassFilter(int listedPatchMode)
 {
     if (g_requested.empty()) { return false; }
-    g_listedMode = listedPatchMode;
+    SetListedPatchMode(listedPatchMode);
 
     std::string patched;
     std::size_t count = 0;
@@ -177,8 +123,8 @@ bool ArmPassFilter(int listedPatchMode)
              "--gbv-passes: shader patching ({}) ONLY on the command lists of {} pass(es): {}. Every other "
              "list is {} -- {}. A CL group shares one list, so one listed member patches the whole group "
              "(logged when a group joins).",
-             ModeName(listedPatchMode), count, patched, ModeName(g_restMode),
-             g_restMode == 1 ? "patched for resource-state tracking only, its shaders not validated"
+             PatchModeName(listedPatchMode), count, patched, PatchModeName(RestPatchMode()),
+             RestPatchMode() == 1 ? "patched for resource-state tracking only, its shaders not validated"
                              : "not rewritten, its shaders not validated");
     boot::AddCount("gbv-passes: passes listed", static_cast<long long>(count));
     return true;
@@ -187,11 +133,6 @@ bool ArmPassFilter(int listedPatchMode)
 void ApplyPassPatchModeSlow(ID3D12GraphicsCommandList* cl, RenderPass pass)
 {
     SetListMode(cl, IsListed(pass));
-}
-
-void ResetListPatchModeSlow(ID3D12GraphicsCommandList* cl)
-{
-    SetListMode(cl, false);
 }
 
 void JoinCLGroup(const RenderPass* members, std::size_t count)

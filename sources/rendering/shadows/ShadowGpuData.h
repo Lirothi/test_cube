@@ -12,7 +12,7 @@
 
 #include "core/containers/inl_vector.h"
 #include "rendering/core/RenderConstants.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/CascadeHzb.h"       // occlusion plan S5b: the cascade light-space pyramids
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups (the per-group override table)

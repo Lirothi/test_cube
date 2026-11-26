@@ -8,7 +8,7 @@
 #include <wrl/client.h>
 
 #include "core/math/Math.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 
 class Material;
 class Renderer;

@@ -5,12 +5,13 @@
 #include <cstring>
 
 #include "core/logging/Log.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
 #include "rendering/shadows/ShadowSettings.h"
+#include "materials/Material.h"
 
 namespace render {
 

@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "rendering/core/MemoryReport.h"
+#include "rhi/MemoryReport.h"
 
 struct ID3D12Device;
 

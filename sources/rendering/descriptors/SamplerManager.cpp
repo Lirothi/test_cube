@@ -1,7 +1,7 @@
 #include "rendering/descriptors/SamplerManager.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/descriptors/DescriptorAllocator.h" // for DescriptorAllocatorSampler
+#include "rhi/DescriptorAllocator.h" // for DescriptorAllocatorSampler
 
 #include <array>
 

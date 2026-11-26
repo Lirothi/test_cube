@@ -5,10 +5,11 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
+#include "materials/Texture2D.h"
 
 namespace
 {

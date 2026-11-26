@@ -1,6 +1,7 @@
 #pragma once
 
 #include "third_party/json/json.hpp"
+#include "core/schema/KeyTable.h" // R9.2: the section's table of keys
 
 #include "app/scene/DirectionalLightJson.h"
 #include "rendering/lighting/Astronomy.h"
@@ -56,170 +57,172 @@ inline void ApplySun(const nlohmann::json& j, DirectionalLight& sun)
     }
 }
 
+namespace detail
+{
+// A colour of three (or more) numbers: each element a number or left as it was, then raised to 0 -- or clamped into
+// [0, hi] when hi > 0. The moon's, the airglow's and the twilight's tints.
+inline void Tint(const nlohmann::json& j, const char* key, float* out, float hi = 0.0f)
+{
+    if (const auto it = j.find(key); it != j.end() && it->is_array() && it->size() >= 3)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            if (!(*it)[c].is_number()) { continue; }
+            const float v = (*it)[c].get<float>();
+            out[c] = hi > 0.0f ? std::clamp(v, 0.0f, hi) : std::max(v, 0.0f);
+        }
+    }
+}
+inline nlohmann::json Three(const float* v) { return nlohmann::json::array({ v[0], v[1], v[2] }); }
+} // namespace detail
+
+// Architecture plan R9.2: the section's table of keys (core/schema/KeyTable.h) -- every number and flag read the
+// tolerant way (DirectionalLightJson's Number / Flag: a value of another type is skipped), the five nested objects as
+// tables of their own. The `sun` object is a DirectionalLight's, read by ApplySun beside the table.
+inline const schema::Table<TimeOfDaySettings>& Keys()
+{
+    using S = TimeOfDaySettings;
+    using J = nlohmann::json;
+    static const schema::Table<S> moon{ {
+        schema::Field("enabled", &S::moonEnabled).Tolerant(),
+        schema::Field("illuminanceLux", &S::moonIlluminanceLux).Tolerant().Clamp(0.0f, 1000.0f),
+        schema::Field("newMoonBrightness", &S::moonNewBrightness).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("udsMoon", &S::udsMoon).Tolerant(),
+        schema::Custom<S>("lightColor", [](const J& m, S& s) { detail::Tint(m, "lightColor", s.moonLightColor); },
+                          [](J& m, const S& s) { m["lightColor"] = detail::Three(s.moonLightColor); }),
+        schema::Custom<S>("discColor", [](const J& m, S& s) { detail::Tint(m, "discColor", s.moonDiscColor); },
+                          [](J& m, const S& s) { m["discColor"] = detail::Three(s.moonDiscColor); }),
+        schema::Custom<S>("lightShaftBloomTint", [](const J& m, S& s) { detail::Tint(m, "lightShaftBloomTint", s.moonLightShaftTint); },
+                          [](J& m, const S& s) { m["lightShaftBloomTint"] = detail::Three(s.moonLightShaftTint); }),
+        schema::Field("lightSourceAngle", &S::moonAngleDeg).Tolerant().Clamp(0.0f, 20.0f),
+        schema::Field("lightSourceSoftAngle", &S::moonSoftAngleDeg).Tolerant().Clamp(0.0f, 20.0f),
+        schema::Field("glow", &S::moonGlow).Tolerant().Clamp(0.0f, 10.0f),
+        schema::Field("glowRadiusDeg", &S::moonGlowRadiusDeg).Tolerant().Clamp(0.1f, 90.0f),
+        schema::Field("discAdaptation", &S::moonDiscAdaptation).Tolerant().Clamp(0.0f, 1.0f),
+        // The moon's own UE bloom properties, named as the sun's are (DirectionalLightJson).
+        schema::Field("lightShaftBloomScale", &S::moonLightShaftBloomScale).Tolerant().Clamp(0.0f, 10.0f),
+        schema::Field("lightShaftBloomThreshold", &S::moonLightShaftBloomThreshold).Tolerant().Clamp(0.0f, 50.0f),
+        schema::Field("lightShaftBloomMaxBrightness", &S::moonLightShaftBloomMaxBrightness).Tolerant().Clamp(0.0f, 1000.0f),
+        schema::Field("glintPhaseFalloff", &S::moonGlintPhaseFalloff).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("earthshine", &S::moonEarthshine).Tolerant().Clamp(0.0f, 100.0f),
+        schema::Field("pathYawDeg", &S::moonPathYawDeg).Tolerant(),
+        schema::Field("pathTiltDeg", &S::moonPathTiltDeg).Tolerant().Clamp(-89.0f, 89.0f),
+        schema::Field("orbitOffsetDeg", &S::moonOrbitOffsetDeg).Tolerant(),
+        schema::Custom<S>("phase",
+            [](const J& m, S& s) {
+                s.moonPhase = DirectionalLightJson::detail::Number(m, "phase", s.moonPhase);
+                s.moonPhase = s.moonPhase - std::floor(s.moonPhase);
+            },
+            [](J& m, const S& s) { m["phase"] = s.moonPhase; }),
+        schema::Field("phaseAuto", &S::moonPhaseAuto).Tolerant(),
+    } };
+    // N2: the night sky's layers.
+    static const schema::Table<S> nightSky{ {
+        schema::Field("enabled", &S::nightSkyEnabled).Tolerant(),
+        schema::Field("airglowZenith", &S::airglowZenith).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Custom<S>("airglowColor", [](const J& n, S& s) { detail::Tint(n, "airglowColor", s.airglowColor); },
+                          [](J& n, const S& s) { n["airglowColor"] = detail::Three(s.airglowColor); }),
+        schema::Field("stars", &S::starsBrightness).Tolerant().Clamp(0.0f, 1000.0f),
+        schema::Field("milkyWay", &S::milkyWayBrightness).Tolerant().Clamp(0.0f, 1000.0f),
+        schema::Field("twinkle", &S::starTwinkle).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("siderealAtMidnight", &S::siderealAtMidnightHours).Tolerant(),
+    } };
+    // Plan L: the night lamps' switch.
+    static const schema::Table<S> lamps{ {
+        schema::Field("sunElevationDeg", &S::lampSunElevationDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("randomDelaySec", &S::lampRandomDelaySec).Tolerant().Clamp(0.0f, 600.0f),
+        schema::Field("turnOnSec", &S::lampTurnOnSec).Tolerant().Clamp(0.0f, 600.0f),
+        schema::Field("turnOnFlicker", &S::lampTurnOnFlicker).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("turnOnExponent", &S::lampTurnOnExponent).Tolerant().Clamp(0.01f, 10.0f),
+        schema::Field("dayBrightness", &S::lampDayBrightness).Tolerant().Clamp(0.0f, 100000.0f),
+    } };
+    // The height fog's density by the sun's height (multipliers on heightFog.density).
+    static const schema::Table<S> fog{ {
+        schema::Field("dayDensity", &S::fogDayDensity).Tolerant().Clamp(0.0f, 100.0f),
+        schema::Field("duskDensity", &S::fogDuskDensity).Tolerant().Clamp(0.0f, 100.0f),
+        schema::Field("nightDensity", &S::fogNightDensity).Tolerant().Clamp(0.0f, 100.0f),
+        schema::Field("dayFullDeg", &S::fogDayFullDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("duskDeg", &S::fogDuskDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("nightFullDeg", &S::fogNightFullDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("udsColor", &S::fogUdsColor).Tolerant(),
+    } };
+    // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
+    static const schema::Table<S> twilight{ {
+        schema::Field("sunSkyStartDeg", &S::sunSkyStartDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("sunSkyFullDeg", &S::sunSkyFullDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Custom<S>("rayleighNightTint", [](const J& w, S& s) { detail::Tint(w, "rayleighNightTint", s.rayleighNightTint, 10.0f); },
+                          [](J& w, const S& s) { w["rayleighNightTint"] = detail::Three(s.rayleighNightTint); }),
+        schema::Field("rayleighDayStartDeg", &S::rayleighDayStartDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("rayleighDayFullDeg", &S::rayleighDayFullDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Custom<S>("ozoneNightTint", [](const J& w, S& s) { detail::Tint(w, "ozoneNightTint", s.ozoneNightTint, 20.0f); },
+                          [](J& w, const S& s) { w["ozoneNightTint"] = detail::Three(s.ozoneNightTint); }),
+        schema::Custom<S>("ozoneSunriseTint", [](const J& w, S& s) { detail::Tint(w, "ozoneSunriseTint", s.ozoneSunriseTint, 20.0f); },
+                          [](J& w, const S& s) { w["ozoneSunriseTint"] = detail::Three(s.ozoneSunriseTint); }),
+        schema::Field("ozoneBlendDeg", &S::ozoneBlendDeg).Tolerant().Clamp(0.001f, 90.0f),
+        schema::Field("mieNightScale", &S::mieNightScale).Tolerant().Clamp(0.0f, 10.0f),
+        schema::Field("udsSkyMaterial", &S::skyUdsMaterial).Tolerant(),
+        schema::Field("lightHandOverDeg", &S::lightHandOverDeg).Tolerant().Clamp(0.0f, 20.0f),
+    } };
+    static const schema::Table<S> table{ {
+        schema::Custom<S>("time",
+            [](const J& j, S& s) {
+                s.timeHours = DirectionalLightJson::detail::Number(j, "time", s.timeHours);
+                s.timeHours = s.timeHours - 24.0f * std::floor(s.timeHours / 24.0f);
+            },
+            [](J& j, const S& s) { j["time"] = s.timeHours; }),
+        schema::Field("animate", &S::animate).Tolerant(),
+        schema::Field("dayLengthMin", &S::dayLengthMin).Tolerant().Clamp(0.01f, 10000.0f),
+        schema::Field("nightLengthMin", &S::nightLengthMin).Tolerant().Clamp(0.01f, 10000.0f),
+        schema::Field("timeScale", &S::timeScale).Tolerant().Clamp(0.0f, 1.0e6f),
+        schema::Field("realPositions", &S::realPositions).Tolerant(),
+        schema::Field("dawn", &S::dawnHours).Tolerant().Clamp(0.0f, 24.0f),
+        schema::Field("dusk", &S::duskHours).Tolerant().Clamp(0.0f, 24.0f),
+        schema::Field("pathYawDeg", &S::pathYawDeg).Tolerant(),
+        schema::Field("pathTiltDeg", &S::pathTiltDeg).Tolerant().Clamp(-89.0f, 89.0f),
+        schema::Field("heightOffset", &S::heightOffset).Tolerant().Clamp(-1.0f, 1.0f),
+        schema::Field("extendTwilight", &S::extendTwilight).Tolerant().Clamp(0.0f, 1.0f),
+        // Any numbers, rounded: an MCP setEnvironment writes [2026.0, 6.0, 21.0] as readily as integers,
+        // and a date that silently stopped being read would be a control that lies.
+        schema::Custom<S>("date",
+            [](const J& j, S& s) {
+                if (const auto it = j.find("date"); it != j.end() && it->is_array() && it->size() >= 3 &&
+                    (*it)[0].is_number() && (*it)[1].is_number() && (*it)[2].is_number())
+                {
+                    s.year = std::clamp(static_cast<int>(std::lround((*it)[0].get<double>())), 1, 9999);
+                    s.month = std::clamp(static_cast<int>(std::lround((*it)[1].get<double>())), 1, 12);
+                    s.day = std::clamp(static_cast<int>(std::lround((*it)[2].get<double>())), 1, 31);
+                }
+            },
+            [](J& j, const S& s) { j["date"] = J::array({ s.year, s.month, s.day }); }),
+        schema::Field("latitude", &S::latitudeDeg).Tolerant().Clamp(-90.0f, 90.0f),
+        schema::Field("longitude", &S::longitudeDeg).Tolerant().Clamp(-180.0f, 180.0f),
+        schema::Field("utcOffset", &S::utcOffsetHours).Tolerant().Clamp(-14.0f, 14.0f),
+        schema::Field("northYawDeg", &S::northYawDeg).Tolerant(),
+        schema::Field("nightBrightness", &S::nightBrightness).Tolerant().Clamp(0.0f, 100000.0f),
+        schema::Field("daySkyBrightness", &S::daySkyBrightness).Tolerant().Clamp(0.0f, 10.0f),
+        schema::Field("nightExposureEv", &S::nightExposureEv).Tolerant().Clamp(-10.0f, 10.0f),
+        schema::Field("nightCameraEv100", &S::nightCameraEv100).Tolerant().Clamp(-20.0f, 30.0f),
+        schema::Field("nightCameraFollow", &S::nightCameraFollow).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("nightCameraOpenFrom", &S::nightCameraOpenFrom).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("nightCameraOpenFull", &S::nightCameraOpenFull).Tolerant().Clamp(0.0f, 1.0f),
+        schema::Field("nightCameraIndoorLift", &S::nightCameraIndoorLift).Tolerant().Clamp(0.0f, 30.0f),
+        schema::Field("lightUpdateThresholdDeg", &S::lightUpdateThresholdDeg).Tolerant().Clamp(0.0f, 5.0f),
+        schema::Nested<S>("moon", moon),
+        schema::Nested<S>("nightSky", nightSky),
+        schema::Nested<S>("lamps", lamps),
+        schema::Nested<S>("fog", fog),
+        schema::Nested<S>("twilight", twilight),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, DirectionalLight& sun)
 {
-    using DirectionalLightJson::detail::Number;
-    using DirectionalLightJson::detail::Flag;
     s.present = true;
-    s.timeHours = Number(j, "time", s.timeHours);
-    s.timeHours = s.timeHours - 24.0f * std::floor(s.timeHours / 24.0f);
-    s.animate = Flag(j, "animate", s.animate);
-    s.dayLengthMin = std::clamp(Number(j, "dayLengthMin", s.dayLengthMin), 0.01f, 10000.0f);
-    s.nightLengthMin = std::clamp(Number(j, "nightLengthMin", s.nightLengthMin), 0.01f, 10000.0f);
-    s.timeScale = std::clamp(Number(j, "timeScale", s.timeScale), 0.0f, 1.0e6f);
-    s.realPositions = Flag(j, "realPositions", s.realPositions);
-    s.dawnHours = std::clamp(Number(j, "dawn", s.dawnHours), 0.0f, 24.0f);
-    s.duskHours = std::clamp(Number(j, "dusk", s.duskHours), 0.0f, 24.0f);
-    s.pathYawDeg = Number(j, "pathYawDeg", s.pathYawDeg);
-    s.pathTiltDeg = std::clamp(Number(j, "pathTiltDeg", s.pathTiltDeg), -89.0f, 89.0f);
-    s.heightOffset = std::clamp(Number(j, "heightOffset", s.heightOffset), -1.0f, 1.0f);
-    s.extendTwilight = std::clamp(Number(j, "extendTwilight", s.extendTwilight), 0.0f, 1.0f);
-    // Any numbers, rounded: an MCP setEnvironment writes [2026.0, 6.0, 21.0] as readily as integers,
-    // and a date that silently stopped being read would be a control that lies.
-    if (const auto it = j.find("date"); it != j.end() && it->is_array() && it->size() >= 3 &&
-        (*it)[0].is_number() && (*it)[1].is_number() && (*it)[2].is_number())
-    {
-        s.year = std::clamp(static_cast<int>(std::lround((*it)[0].get<double>())), 1, 9999);
-        s.month = std::clamp(static_cast<int>(std::lround((*it)[1].get<double>())), 1, 12);
-        s.day = std::clamp(static_cast<int>(std::lround((*it)[2].get<double>())), 1, 31);
-    }
-    s.latitudeDeg = std::clamp(Number(j, "latitude", s.latitudeDeg), -90.0f, 90.0f);
-    s.longitudeDeg = std::clamp(Number(j, "longitude", s.longitudeDeg), -180.0f, 180.0f);
-    s.utcOffsetHours = std::clamp(Number(j, "utcOffset", s.utcOffsetHours), -14.0f, 14.0f);
-    s.northYawDeg = Number(j, "northYawDeg", s.northYawDeg);
-    s.nightBrightness = std::clamp(Number(j, "nightBrightness", s.nightBrightness), 0.0f, 100000.0f);
-    s.daySkyBrightness = std::clamp(Number(j, "daySkyBrightness", s.daySkyBrightness), 0.0f, 10.0f);
-    s.nightExposureEv = std::clamp(Number(j, "nightExposureEv", s.nightExposureEv), -10.0f, 10.0f);
-    s.nightCameraEv100 = std::clamp(Number(j, "nightCameraEv100", s.nightCameraEv100), -20.0f, 30.0f);
-    s.nightCameraFollow = std::clamp(Number(j, "nightCameraFollow", s.nightCameraFollow), 0.0f, 1.0f);
-    s.nightCameraOpenFrom = std::clamp(Number(j, "nightCameraOpenFrom", s.nightCameraOpenFrom), 0.0f, 1.0f);
-    s.nightCameraOpenFull = std::clamp(Number(j, "nightCameraOpenFull", s.nightCameraOpenFull), 0.0f, 1.0f);
-    s.nightCameraIndoorLift = std::clamp(Number(j, "nightCameraIndoorLift", s.nightCameraIndoorLift), 0.0f, 30.0f);
-    s.lightUpdateThresholdDeg = std::clamp(Number(j, "lightUpdateThresholdDeg", s.lightUpdateThresholdDeg), 0.0f, 5.0f);
-
+    Keys().Read(j, s);
     if (const auto it = j.find("sun"); it != j.end() && it->is_object())
     {
         ApplySun(*it, sun);
-    }
-    if (const auto it = j.find("moon"); it != j.end() && it->is_object())
-    {
-        const nlohmann::json& m = *it;
-        s.moonEnabled = Flag(m, "enabled", s.moonEnabled);
-        s.moonIlluminanceLux = std::clamp(Number(m, "illuminanceLux", s.moonIlluminanceLux), 0.0f, 1000.0f);
-        s.moonNewBrightness = std::clamp(Number(m, "newMoonBrightness", s.moonNewBrightness), 0.0f, 1.0f);
-        if (const auto u = m.find("udsMoon"); u != m.end() && u->is_boolean()) { s.udsMoon = u->get<bool>(); }
-        if (const auto lc = m.find("lightColor"); lc != m.end() && lc->is_array() && lc->size() >= 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                s.moonLightColor[c] = (*lc)[c].is_number() ? std::max((*lc)[c].get<float>(), 0.0f) : s.moonLightColor[c];
-            }
-        }
-        if (const auto dc = m.find("discColor"); dc != m.end() && dc->is_array() && dc->size() >= 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                s.moonDiscColor[c] = (*dc)[c].is_number() ? std::max((*dc)[c].get<float>(), 0.0f) : s.moonDiscColor[c];
-            }
-        }
-        if (const auto st = m.find("lightShaftBloomTint"); st != m.end() && st->is_array() && st->size() >= 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                s.moonLightShaftTint[c] = (*st)[c].is_number() ? std::max((*st)[c].get<float>(), 0.0f) : s.moonLightShaftTint[c];
-            }
-        }
-        s.moonAngleDeg = std::clamp(Number(m, "lightSourceAngle", s.moonAngleDeg), 0.0f, 20.0f);
-        s.moonSoftAngleDeg = std::clamp(Number(m, "lightSourceSoftAngle", s.moonSoftAngleDeg), 0.0f, 20.0f);
-        s.moonGlow = std::clamp(Number(m, "glow", s.moonGlow), 0.0f, 10.0f);
-        s.moonGlowRadiusDeg = std::clamp(Number(m, "glowRadiusDeg", s.moonGlowRadiusDeg), 0.1f, 90.0f);
-        s.moonDiscAdaptation = std::clamp(Number(m, "discAdaptation", s.moonDiscAdaptation), 0.0f, 1.0f);
-        // The moon's own UE bloom properties, named as the sun's are (DirectionalLightJson).
-        s.moonLightShaftBloomScale = std::clamp(Number(m, "lightShaftBloomScale", s.moonLightShaftBloomScale), 0.0f, 10.0f);
-        s.moonLightShaftBloomThreshold = std::clamp(Number(m, "lightShaftBloomThreshold", s.moonLightShaftBloomThreshold), 0.0f, 50.0f);
-        s.moonLightShaftBloomMaxBrightness =
-            std::clamp(Number(m, "lightShaftBloomMaxBrightness", s.moonLightShaftBloomMaxBrightness), 0.0f, 1000.0f);
-        s.moonGlintPhaseFalloff = std::clamp(Number(m, "glintPhaseFalloff", s.moonGlintPhaseFalloff), 0.0f, 1.0f);
-        s.moonEarthshine = std::clamp(Number(m, "earthshine", s.moonEarthshine), 0.0f, 100.0f);
-        s.moonPathYawDeg = Number(m, "pathYawDeg", s.moonPathYawDeg);
-        s.moonPathTiltDeg = std::clamp(Number(m, "pathTiltDeg", s.moonPathTiltDeg), -89.0f, 89.0f);
-        s.moonOrbitOffsetDeg = Number(m, "orbitOffsetDeg", s.moonOrbitOffsetDeg);
-        s.moonPhase = Number(m, "phase", s.moonPhase);
-        s.moonPhase = s.moonPhase - std::floor(s.moonPhase);
-        s.moonPhaseAuto = Flag(m, "phaseAuto", s.moonPhaseAuto);
-    }
-    // N2: the night sky's layers.
-    if (const auto it = j.find("nightSky"); it != j.end() && it->is_object())
-    {
-        const nlohmann::json& n = *it;
-        s.nightSkyEnabled = Flag(n, "enabled", s.nightSkyEnabled);
-        s.airglowZenith = std::clamp(Number(n, "airglowZenith", s.airglowZenith), 0.0f, 1.0f);
-        if (const auto ac = n.find("airglowColor"); ac != n.end() && ac->is_array() && ac->size() >= 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                s.airglowColor[c] = (*ac)[c].is_number() ? std::max((*ac)[c].get<float>(), 0.0f) : s.airglowColor[c];
-            }
-        }
-        s.starsBrightness = std::clamp(Number(n, "stars", s.starsBrightness), 0.0f, 1000.0f);
-        s.milkyWayBrightness = std::clamp(Number(n, "milkyWay", s.milkyWayBrightness), 0.0f, 1000.0f);
-        s.starTwinkle = std::clamp(Number(n, "twinkle", s.starTwinkle), 0.0f, 1.0f);
-        s.siderealAtMidnightHours = Number(n, "siderealAtMidnight", s.siderealAtMidnightHours);
-    }
-    // Plan L: the night lamps' switch.
-    if (const auto it = j.find("lamps"); it != j.end() && it->is_object())
-    {
-        const nlohmann::json& l = *it;
-        s.lampSunElevationDeg = std::clamp(Number(l, "sunElevationDeg", s.lampSunElevationDeg), -90.0f, 90.0f);
-        s.lampRandomDelaySec = std::clamp(Number(l, "randomDelaySec", s.lampRandomDelaySec), 0.0f, 600.0f);
-        s.lampTurnOnSec = std::clamp(Number(l, "turnOnSec", s.lampTurnOnSec), 0.0f, 600.0f);
-        s.lampTurnOnFlicker = std::clamp(Number(l, "turnOnFlicker", s.lampTurnOnFlicker), 0.0f, 1.0f);
-        s.lampTurnOnExponent = std::clamp(Number(l, "turnOnExponent", s.lampTurnOnExponent), 0.01f, 10.0f);
-        s.lampDayBrightness = std::clamp(Number(l, "dayBrightness", s.lampDayBrightness), 0.0f, 100000.0f);
-    }
-    // The height fog's density by the sun's height (multipliers on heightFog.density).
-    if (const auto it = j.find("fog"); it != j.end() && it->is_object())
-    {
-        const nlohmann::json& f = *it;
-        s.fogDayDensity = std::clamp(Number(f, "dayDensity", s.fogDayDensity), 0.0f, 100.0f);
-        s.fogDuskDensity = std::clamp(Number(f, "duskDensity", s.fogDuskDensity), 0.0f, 100.0f);
-        s.fogNightDensity = std::clamp(Number(f, "nightDensity", s.fogNightDensity), 0.0f, 100.0f);
-        s.fogDayFullDeg = std::clamp(Number(f, "dayFullDeg", s.fogDayFullDeg), -90.0f, 90.0f);
-        s.fogDuskDeg = std::clamp(Number(f, "duskDeg", s.fogDuskDeg), -90.0f, 90.0f);
-        s.fogNightFullDeg = std::clamp(Number(f, "nightFullDeg", s.fogNightFullDeg), -90.0f, 90.0f);
-        if (const auto u = f.find("udsColor"); u != f.end() && u->is_boolean()) { s.fogUdsColor = u->get<bool>(); }
-    }
-    // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
-    if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
-    {
-        const nlohmann::json& w = *it;
-        s.sunSkyStartDeg = std::clamp(Number(w, "sunSkyStartDeg", s.sunSkyStartDeg), -90.0f, 90.0f);
-        s.sunSkyFullDeg = std::clamp(Number(w, "sunSkyFullDeg", s.sunSkyFullDeg), -90.0f, 90.0f);
-        if (const auto rt = w.find("rayleighNightTint"); rt != w.end() && rt->is_array() && rt->size() >= 3)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                s.rayleighNightTint[c] = (*rt)[c].is_number() ? std::clamp((*rt)[c].get<float>(), 0.0f, 10.0f)
-                                                              : s.rayleighNightTint[c];
-            }
-        }
-        s.rayleighDayStartDeg = std::clamp(Number(w, "rayleighDayStartDeg", s.rayleighDayStartDeg), -90.0f, 90.0f);
-        s.rayleighDayFullDeg = std::clamp(Number(w, "rayleighDayFullDeg", s.rayleighDayFullDeg), -90.0f, 90.0f);
-        const auto tint3 = [&w](const char* key, float* out) {
-            if (const auto t = w.find(key); t != w.end() && t->is_array() && t->size() >= 3)
-            {
-                for (int c = 0; c < 3; ++c)
-                {
-                    out[c] = (*t)[c].is_number() ? std::clamp((*t)[c].get<float>(), 0.0f, 20.0f) : out[c];
-                }
-            }
-        };
-        tint3("ozoneNightTint", s.ozoneNightTint);
-        tint3("ozoneSunriseTint", s.ozoneSunriseTint);
-        s.ozoneBlendDeg = std::clamp(Number(w, "ozoneBlendDeg", s.ozoneBlendDeg), 0.001f, 90.0f);
-        s.mieNightScale = std::clamp(Number(w, "mieNightScale", s.mieNightScale), 0.0f, 10.0f);
-        if (const auto u = w.find("udsSkyMaterial"); u != w.end() && u->is_boolean()) { s.skyUdsMaterial = u->get<bool>(); }
-        s.lightHandOverDeg = std::clamp(Number(w, "lightHandOverDeg", s.lightHandOverDeg), 0.0f, 20.0f);
     }
 }
 
@@ -265,33 +268,7 @@ inline nlohmann::json FromDirectionalLight(const nlohmann::json& dl)
 inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight& sun)
 {
     const auto f3 = [](const Math::float3& v) { return nlohmann::json::array({ v.x, v.y, v.z }); };
-    nlohmann::json j = nlohmann::json::object();
-    j["time"] = s.timeHours;
-    j["animate"] = s.animate;
-    j["dayLengthMin"] = s.dayLengthMin;
-    j["nightLengthMin"] = s.nightLengthMin;
-    j["timeScale"] = s.timeScale;
-    j["realPositions"] = s.realPositions;
-    j["dawn"] = s.dawnHours;
-    j["dusk"] = s.duskHours;
-    j["pathYawDeg"] = s.pathYawDeg;
-    j["pathTiltDeg"] = s.pathTiltDeg;
-    j["heightOffset"] = s.heightOffset;
-    j["extendTwilight"] = s.extendTwilight;
-    j["date"] = nlohmann::json::array({ s.year, s.month, s.day });
-    j["latitude"] = s.latitudeDeg;
-    j["longitude"] = s.longitudeDeg;
-    j["utcOffset"] = s.utcOffsetHours;
-    j["northYawDeg"] = s.northYawDeg;
-    j["nightBrightness"] = s.nightBrightness;
-    j["daySkyBrightness"] = s.daySkyBrightness;
-    j["nightExposureEv"] = s.nightExposureEv;
-    j["nightCameraEv100"] = s.nightCameraEv100;
-    j["nightCameraFollow"] = s.nightCameraFollow;
-    j["nightCameraOpenFrom"] = s.nightCameraOpenFrom;
-    j["nightCameraOpenFull"] = s.nightCameraOpenFull;
-    j["nightCameraIndoorLift"] = s.nightCameraIndoorLift;
-    j["lightUpdateThresholdDeg"] = s.lightUpdateThresholdDeg;
+    nlohmann::json j = Keys().Write(s);
     j["sun"] = {
         { "enabled", true },
         { "color", f3(sun.GetColor()) },
@@ -311,69 +288,6 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "lightShaftLength", sun.GetLightShaftLength() },
         { "lightSourceAngle", sun.GetLightSourceAngleDegrees() },
         { "lightSourceSoftAngle", sun.GetLightSourceSoftAngleDegrees() },
-    };
-    j["moon"] = {
-        { "enabled", s.moonEnabled },
-        { "illuminanceLux", s.moonIlluminanceLux },
-        { "newMoonBrightness", s.moonNewBrightness },
-        { "udsMoon", s.udsMoon },
-        { "lightColor", { s.moonLightColor[0], s.moonLightColor[1], s.moonLightColor[2] } },
-        { "discColor", { s.moonDiscColor[0], s.moonDiscColor[1], s.moonDiscColor[2] } },
-        { "glow", s.moonGlow },
-        { "glowRadiusDeg", s.moonGlowRadiusDeg },
-        { "lightShaftBloomScale", s.moonLightShaftBloomScale },
-        { "lightShaftBloomThreshold", s.moonLightShaftBloomThreshold },
-        { "lightShaftBloomMaxBrightness", s.moonLightShaftBloomMaxBrightness },
-        { "lightShaftBloomTint", { s.moonLightShaftTint[0], s.moonLightShaftTint[1], s.moonLightShaftTint[2] } },
-        { "lightSourceAngle", s.moonAngleDeg },
-        { "lightSourceSoftAngle", s.moonSoftAngleDeg },
-        { "discAdaptation", s.moonDiscAdaptation },
-        { "glintPhaseFalloff", s.moonGlintPhaseFalloff },
-        { "earthshine", s.moonEarthshine },
-        { "pathYawDeg", s.moonPathYawDeg },
-        { "pathTiltDeg", s.moonPathTiltDeg },
-        { "orbitOffsetDeg", s.moonOrbitOffsetDeg },
-        { "phase", s.moonPhase },
-        { "phaseAuto", s.moonPhaseAuto },
-    };
-    j["nightSky"] = {
-        { "enabled", s.nightSkyEnabled },
-        { "airglowZenith", s.airglowZenith },
-        { "airglowColor", { s.airglowColor[0], s.airglowColor[1], s.airglowColor[2] } },
-        { "stars", s.starsBrightness },
-        { "milkyWay", s.milkyWayBrightness },
-        { "twinkle", s.starTwinkle },
-        { "siderealAtMidnight", s.siderealAtMidnightHours },
-    };
-    j["twilight"] = {
-        { "sunSkyStartDeg", s.sunSkyStartDeg },
-        { "sunSkyFullDeg", s.sunSkyFullDeg },
-        { "rayleighNightTint", { s.rayleighNightTint[0], s.rayleighNightTint[1], s.rayleighNightTint[2] } },
-        { "rayleighDayStartDeg", s.rayleighDayStartDeg },
-        { "rayleighDayFullDeg", s.rayleighDayFullDeg },
-        { "ozoneNightTint", { s.ozoneNightTint[0], s.ozoneNightTint[1], s.ozoneNightTint[2] } },
-        { "ozoneSunriseTint", { s.ozoneSunriseTint[0], s.ozoneSunriseTint[1], s.ozoneSunriseTint[2] } },
-        { "ozoneBlendDeg", s.ozoneBlendDeg },
-        { "mieNightScale", s.mieNightScale },
-        { "udsSkyMaterial", s.skyUdsMaterial },
-        { "lightHandOverDeg", s.lightHandOverDeg },
-    };
-    j["lamps"] = {
-        { "sunElevationDeg", s.lampSunElevationDeg },
-        { "randomDelaySec", s.lampRandomDelaySec },
-        { "turnOnSec", s.lampTurnOnSec },
-        { "turnOnFlicker", s.lampTurnOnFlicker },
-        { "turnOnExponent", s.lampTurnOnExponent },
-        { "dayBrightness", s.lampDayBrightness },
-    };
-    j["fog"] = {
-        { "dayDensity", s.fogDayDensity },
-        { "duskDensity", s.fogDuskDensity },
-        { "nightDensity", s.fogNightDensity },
-        { "dayFullDeg", s.fogDayFullDeg },
-        { "duskDeg", s.fogDuskDeg },
-        { "nightFullDeg", s.fogNightFullDeg },
-        { "udsColor", s.fogUdsColor },
     };
     return j;
 }

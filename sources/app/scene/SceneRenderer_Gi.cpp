@@ -11,7 +11,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"

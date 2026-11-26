@@ -2,7 +2,7 @@
 #include <wrl.h>
 #include <d3d12.h>
 
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include <cstdint>
 #include <string>
 #include <vector>

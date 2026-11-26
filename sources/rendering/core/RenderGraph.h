@@ -14,8 +14,8 @@
 #include <stdexcept>
 #include <utility>
 #include "rendering/core/Renderer.h"
-#include "rendering/core/RendererInvariantFailure.h"
-#include "rendering/core/BarrierTranslation.h"
+#include "rhi/RendererInvariantFailure.h"
+#include "rhi/BarrierTranslation.h"
 #include "rendering/core/GbvPassFilter.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"

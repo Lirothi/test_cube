@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cwchar>
+#include "rendering/debug/DebugDraw.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 
 void AppController::InitializeGraphicsSettings(Renderer& renderer, Scene& scene)
 {
@@ -55,8 +57,8 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 {
     CPU_SCOPE(ProfilerScopes::kAppControllerTick);
 
-    const bool uiCapturingMouse = renderer.ImGuiWantsMouse();
-    const bool uiCapturingKeyboard = renderer.ImGuiWantsKeyboard();
+    const bool uiCapturingMouse = renderer.ImGui().WantsMouse();
+    const bool uiCapturingKeyboard = renderer.ImGui().WantsKeyboard();
     const bool uiCapturingInput = uiCapturingMouse || uiCapturingKeyboard;
     // A shipped build has no developer keys (docs/distribution_build_plan.md §7): no Developer Controls (F1), texture
     // inspector (F4), ocean window (F7), profiler overlay (F9), A/B toggles (F2-F10, Ctrl+I/G/V), DLSS modes (Ctrl+1..7).
@@ -136,7 +138,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // WantCaptureKeyboard -- true whenever an ImGui window has the focus, i.e. nearly always with the editor's panels
     // open -- F9 (the profiler overlay), F3, F5, F6, F10 and F12 did nothing in the editor (2026-11-03, owner: "F9 does
     // not work for the overlay"). The Ctrl combinations below still yield to any keyboard focus (Ctrl+V pastes).
-    if (kDeveloperKeys && !renderer.ImGuiWantsTextInput())
+    if (kDeveloperKeys && !renderer.ImGui().WantsTextInput())
     {
         if (input.WasActionPressed(actions::kToggleProfiler))
         {
@@ -337,7 +339,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 
 void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed)
 {
-    const bool typing = renderer.ImGuiWantsTextInput();
+    const bool typing = renderer.ImGui().WantsTextInput();
     // Through ImGui as well: a panel with the keyboard's focus keeps a letter from InputManager (App::WndProc).
     const bool escape = !typing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || input.TakeActionPress(actions::kStopPlay));
     const bool eject = !typing && input.TakeActionPress(actions::kPossessEject);

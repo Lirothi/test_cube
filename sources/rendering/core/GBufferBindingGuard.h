@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 
 #include <atomic>
 #include <cstddef>

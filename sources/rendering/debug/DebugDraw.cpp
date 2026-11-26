@@ -1,5 +1,5 @@
 #include "rendering/debug/DebugDraw.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderStats.h"
 
 #include <algorithm>
@@ -14,7 +14,7 @@
 #include "materials/Material.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
-#include "rendering/core/FrameResource.h"
+#include "rhi/FrameResource.h"
 #include "rendering/core/RenderContextPool.h"
 
 namespace {

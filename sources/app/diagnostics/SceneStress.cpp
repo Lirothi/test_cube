@@ -15,8 +15,8 @@
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/wind/WindState.h"
 #include <cmath>
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 
@@ -38,7 +38,7 @@
 #include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
 #include "core/threading/Knob.h"
 #include "app/diagnostics/RtAudit.h"     // G9: --rt-audit over the level churn
-#include "rendering/core/MemGates.h"
+#include "rhi/MemGates.h"
 #include "core/logging/Log.h"
 
 #include <chrono>

@@ -17,36 +17,27 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
-#include "shaders/shared/glass_slots.h" // GLASS_PASS_SRV_COUNT: glass.hlsl's per-pass table
+#include "rendering/core/DirectPassInputs.h" // R4.4: the direct draws' frame inputs
 #include "core/threading/ThreadRole.h" // game thread plan G8b: WaitRenderForGame in the game-reachable accessors
 
 namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWriter.h)
 
 #include "core/math/Math.h"
-#include "rendering/descriptors/DescriptorAllocator.h"
-#include "rendering/descriptors/BindlessHeap.h"
-#include "rendering/core/FrameResource.h"
-#include "rendering/core/GraphicsDevice.h"
-#include "rendering/core/SwapchainManager.h"
-#include "rendering/core/FrameScheduler.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/DescriptorAllocator.h"
+#include "rhi/BindlessHeap.h"
+#include "rhi/FrameResource.h"
+#include "rhi/Device.h"
+#include "rhi/SwapchainManager.h"
+#include "rhi/FrameScheduler.h"
+#include "rhi/Frame.h" // R4.5d
+#include "rhi/SubmitTopology.h" // R4.5a: g_submitEdgeRing, g_crossQueueWaits
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/RenderTargetManager.h"
-#include "rendering/core/SubmitTimeline.h"
-#include "rendering/core/RhiQueue.h"
+#include "rhi/SubmitTimeline.h"
+#include "rhi/RhiQueue.h"
 #include "rendering/core/RenderConstants.h"
 #include "third_party/robin_hood.h"
-#include "rendering/descriptors/SamplerManager.h"
-#include "materials/Material.h"
-#include "rendering/descriptors/InputLayoutManager.h"
-#include "rendering/meshes/MeshManager.h"
-#include "text/TextManager.h"
-#include "text/FontManager.h"
-#include "materials/MaterialDataManager.h"
-#include "rendering/core/RenderContextPool.h"
-#include "rendering/lighting/LightManager.h"
-#include "rendering/debug/DebugDraw.h"
-#include "ui/ImGuiLayer.h"
 #include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
@@ -57,6 +48,20 @@ using Microsoft::WRL::ComPtr;
 class Camera;
 
 class DlssHandler;
+
+// R4.2: the services are named, not included -- a consumer includes the manager it uses (RenderServices.h has them all).
+struct RenderServices;
+class SamplerManager;
+class Material;
+class MaterialManager;
+class InputLayoutManager;
+class MeshManager;
+class FontManager;
+class TextManager;
+class MaterialDataManager;
+class RenderContextPool;
+class DebugDrawSystem;
+namespace ui { class ImGuiRenderer; } // R4.3
 
 namespace render {
 // Barrier plan step 6: at the end of every frame, diff each resource's tracked state against
@@ -138,28 +143,6 @@ inline bool g_asyncOrderProbe = false;
 inline bool g_asyncOrderProbe_game = false;
 inline const bool g_asyncOrderProbe_knob = ::knob::Register(g_asyncOrderProbe_game, g_asyncOrderProbe, "render::g_asyncOrderProbe");
 
-// The last frame's per-queue submission TOPOLOGY, recorded so a fence stall can print the exact
-// cross-queue edge it is parked on. The command-list dump (--dump-submit-order) shows WHAT was
-// submitted; this shows the WAIT/SIGNAL pairs between the queues, which is the only thing that
-// explains a deadlock where both queues are idle and the driver never calls it a hang.
-// Plain globals for the same reason g_crossQueueWaits is one: the reporter lives in FrameScheduler,
-// which knows nothing about the render graph.
-struct SubmitEdge
-{
-    unsigned long long frame = 0;       // which frame submitted this segment
-    bool     compute = false;           // which queue this segment went to
-    unsigned lists = 0;                 // command lists executed
-    unsigned long long waitValue = 0;   // cross-queue value waited for (0 = no wait)
-    unsigned long long signalValue = 0; // cross-queue value signalled after (0 = none)
-};
-// A RING across frames, not just the last one: the first UNSIGNALLED cross-queue value usually
-// belongs to an EARLIER frame than the one that was submitted last, and a single-frame snapshot
-// therefore shows a topology that is perfectly satisfiable while the actual cycle sits off-screen.
-inline constexpr unsigned kSubmitEdgeRing = 64;
-inline SubmitEdge g_submitEdgeRing[kSubmitEdgeRing];
-inline unsigned   g_submitEdgeNext = 0;   // write cursor, wraps
-inline unsigned   g_submitEdgeCount = 0;  // saturates at kSubmitEdgeRing
-
 // Async-compute plan step 6: `--dump-submit-order` writes the frame's SUBMITTED command-list arrays
 // — by debug name, in submission order, per queue — to logs/submit_order.log, once, then stops.
 //
@@ -215,13 +198,6 @@ inline const bool g_asyncPassCloudTrace_knob = ::knob::Register(g_asyncPassCloud
 inline bool g_noAsyncCompute = false;
 inline bool g_noAsyncCompute_game = false;
 inline const bool g_noAsyncCompute_knob = ::knob::Register(g_noAsyncCompute_game, g_noAsyncCompute, "render::g_noAsyncCompute");
-
-// What the switch above actually PRODUCED on the GPU last frame: command lists submitted to the
-// compute queue, and cross-queue waits the graph asked for. Written by the submit loop, read by the
-// developer window. A checkbox for a scheduling decision is worth nothing without the number that
-// says the decision reached the queue — with every pass on Graphics both are 0 by construction.
-inline std::uint32_t g_asyncComputeLists = 0;
-inline std::uint32_t g_crossQueueWaits = 0;
 
 // Frame pacing: UE's two independent switches, both default off exactly as UE ships them.
 //   g_vsync  = r.VSync (ConsoleManager.cpp:4330, default 0) with rhi.SyncInterval 1
@@ -295,13 +271,11 @@ public:
     // Frame cycle
     void BeginFrame();                 // waits for its frame, resets allocator and command list
     void EndFrame();                   // barrier RT->Present, Execute, Present, signal fence
-    void InitImGui();
-    void BeginImGuiFrame();
-    void EndImGuiFrame(); // game thread plan G1: the game half closes the UI frame; RenderImGui records it
-    // Plan G8b, at the hand-over (after BeginFrame, nothing rendering): the UI's texture requests become descriptors in
-    // this frame's slot and real IDs in its draw lists, the textures it marked readable are declared, and the atlas
-    // textures ImGui changed are uploaded. The UI may have run while the render thread drew the previous frame. The
-    // readouts it shows next frame are copied here too (ExposureForGame).
+    // R4.3: the UI's renderer (ui/ImGuiRenderer.h) -- its frame, textures and draw.
+    ui::ImGuiRenderer& ImGui() { return *imgui_; }
+    // Plan G8b, at the hand-over (after BeginFrame, nothing rendering): the readouts the UI shows next frame are copied
+    // (ExposureForGame), then the UI's own hand-over runs (ui::ImGuiRenderer::HandOver: its texture requests become
+    // descriptors in this frame's slot, the textures it marked readable are declared, the changed atlas is uploaded).
     void HandOverImGui();
     // Game thread plan G7: GPU work the game half records outside the frame (a thumbnail, the Mesh Editor's preview,
     // an upload batch) goes to the queue at the hand-over -- never while the render half records -- in the order it
@@ -309,28 +283,9 @@ public:
     void ExecuteOrDefer(ID3D12CommandList* list);
     bool SignalOrDefer(ID3D12Fence* fence, UINT64 value);
     void FlushHandOverSubmits(); // Scene::Sync, and where the game half parks the render half
-    void RenderImGui(ID3D12GraphicsCommandList* commandList);
     // ImGui and other external renderers replace descriptor heaps, root state,
     // viewport, and scissor. Call before recording engine-native draws afterward.
     void RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* commandList);
-    ImTextureID CreateImGuiTextureId(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
-#if WITH_EDITOR
-    // Drop the cached ImGui preview descriptors for a resource (editor thumbnail
-    // cache eviction). The caller idles the GPU before freeing the resource.
-    void ReleaseImGuiTextureDescriptors(ID3D12Resource* resource);
-#endif
-    // Register an ImGui texture as pixel-shader-readable so RenderImGui does not emit a bogus
-    // COMMON->PSR barrier. Call each frame the resource is displayed, before RenderImGui. Not
-    // editor-only: the DeveloperWindow's reset-icon atlas (every config) uses it too, and the
-    // Release build failed on the guard.
-    void MarkImGuiTextureShaderReadable(ID3D12Resource* resource);
-    void ShutdownImGui();
-    bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    // WM_DPICHANGED: the UI rescaled at the next UI frame (ImGuiLayer::RequestDpi).
-    void RequestImGuiDpi(UINT dpi) { imguiLayer_.RequestDpi(dpi); }
-    bool ImGuiWantsMouse() const;
-    bool ImGuiWantsKeyboard() const;
-    bool ImGuiWantsTextInput() const;
 
     void Tick(float dt);
     bool ConsumeMaterialHotReloadFlag();
@@ -418,50 +373,11 @@ public:
     UINT LocalSpotShadowPages() const { return rtManager_.LocalSpotShadowPages(); }
     UINT LocalPointShadowPages() const { return rtManager_.LocalPointShadowPages(); }
 
-    // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
-    // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.
-    // Step 24b: when VSM is off/freed (Legacy mode) a null handle is passed — substitute an inert
-    // DUMMY SRV so the glass draw still binds valid descriptors (glass.hlsl reads them only when
-    // vsmParams.x != 0) instead of skipping. The light passes use VsmDummy*Srv() the same way.
-    void SetVsmShadowSrvs(D3D12_CPU_DESCRIPTOR_HANDLE pageTable, D3D12_CPU_DESCRIPTOR_HANDLE pool)
-    {
-        EnsureVsmDummySrvs();
-        vsmPageTableSrv_ = pageTable.ptr ? pageTable : vsmDummyBufferSrv_;
-        vsmPoolSrv_      = pool.ptr      ? pool      : vsmDummyTexSrv_;
-    }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPageTableSrv() const { return vsmPageTableSrv_; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPoolSrv() const { return vsmPoolSrv_; }
-    // Local-light plan S7, the direct read: the shadow cache pool for glass.hlsl's t14, the same transport (set by
-    // SceneRenderer::Pass_Transparent / Pass_Translucent each frame; null = no pool, the glass draw binds its spot atlas
-    // there instead).
-    void SetLocalShadowPoolSrv(D3D12_CPU_DESCRIPTOR_HANDLE pool) { localShadowPoolSrv_ = pool; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetLocalShadowPoolSrv() const { return localShadowPoolSrv_; }
-    // glass.hlsl's per-pass table (rendering/renderables/GlassPassSrvs.h), gathered once by
-    // SceneRenderer::Pass_Translucent; null = not this frame (a shadow map was missing), the glass
-    // draws skip. Read by the recording workers after the pass set it.
-    void SetGlassPassSrvs(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT>* srvs)
-    {
-        glassPassSrvsValid_ = srvs != nullptr;
-        if (srvs) { glassPassSrvs_ = *srvs; }
-    }
-    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT>* GetGlassPassSrvs() const
-    {
-        return glassPassSrvsValid_ ? &glassPassSrvs_ : nullptr;
-    }
-    // S15: the same transport for the SDSM partition buffer (t13 of glass.hlsl). The glass draws
-    // have no frame access either, and a null handle here substitutes the inert dummy buffer -- the
-    // shader reads it only when csmSdsmParams.x != 0.
-    void SetSdsmPartitionSrv(D3D12_CPU_DESCRIPTOR_HANDLE partitions)
-    {
-        EnsureVsmDummySrvs();
-        sdsmPartitionSrv_ = partitions.ptr ? partitions : vsmDummyBufferSrv_;
-    }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetSdsmPartitionSrv() const { return sdsmPartitionSrv_; }
-    // S16: what the glass draws should bind in the SUN ATLAS slot (t1 of glass.hlsl). Under EVSM
-    // that slot holds MOMENTS, not depth -- the same swap the light and fog passes make, routed
-    // the same way because the glass draws have no frame access. Null = the depth atlas.
-    void SetSdsmMomentsSrv(D3D12_CPU_DESCRIPTOR_HANDLE moments) { sdsmMomentsSrv_ = moments; }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetSdsmMomentsSrv() const { return sdsmMomentsSrv_; }
+    // R4.4: what the direct draws (glass, water, lit particles) read of the frame -- the shadow transports, the glass
+    // table, the particles' sky fill and water depth (DirectPassInputs.h). The scene renderer's passes write it before
+    // they draw (a buffer or texture slot then holds VsmDummy*Srv() when its source is absent); the draws read it.
+    render::DirectPassInputs& DirectInputs() { return directInputs_; }
+    const render::DirectPassInputs& DirectInputs() const { return directInputs_; }
     // Inert stand-in SRVs (null StructuredBuffer / null Texture2D) for the VSM t7/t8 slots when VSM
     // isn't resident (Legacy mode) — valid to bind, never sampled (useVsm=0). See the spot/point passes.
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
@@ -491,11 +407,11 @@ public:
     // The last frame handed over first reaches the queues: under the RHI thread the slot of the frame before this one
     // still holds the fence of the frame kFrameCount before it until its submission runs (BeginFrame waits only for
     // the frame before that one), and the wait would return at once on a frame the GPU had not been given.
-    void WaitForFrameSlot(UINT frameIndex) { rhi_.WaitFor(lastSubmit_); WaitForFrame(frameIndex); }
+    void WaitForFrameSlot(UINT frameIndex) { frame_.WaitForFrameSlot(frameIndex); }
     // The non-blocking half: has the GPU finished the frame of this NUMBER (GetTotalFrameNumber while it recorded)? A
     // reader that can use ANY finished copy (the ocean readback) asks this instead of waiting. By number, never by slot:
     // under the RHI thread a slot answers for the frame kFrameCount before until its own submission signals.
-    bool IsFrameNumberComplete(std::uint64_t frameNumber) const { return frameScheduler_.IsFrameNumberComplete(frameNumber); }
+    bool IsFrameNumberComplete(std::uint64_t frameNumber) const { return frame_.IsFrameNumberComplete(frameNumber); }
     // Main/window thread: coalesce notifications; apply before recycling the next frame slot.
     void OnResize(UINT width, UINT height);
 
@@ -514,7 +430,9 @@ public:
     void SetSubmitBatchCrossQueueWait(size_t batchIndex, size_t waitForBatch);
     void ExecuteTimelineAndPresent();
     // Game thread plan G10: the one road to the GPU queues for a frame in flight (RhiQueue.h).
-    RhiQueue& Rhi() { return rhi_; }
+    RhiQueue& Rhi() { return frame_.Queue(); }
+    // R4.5d: the frame's synchronization -- fences, the road, the hand-over, the GPU waits (rhi/Frame.h).
+    rhi::Frame& RhiFrame() { return frame_; }
     void RecordBindAndClear(ID3D12GraphicsCommandList* cl);
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);
     void RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex);
@@ -532,7 +450,7 @@ public:
     void SplitListStats(ID3D12GraphicsCommandList* cl) { EndListStats(cl); BeginListStats(cl); }
 
     // Getters
-    ID3D12Device* GetDevice() const { return graphicsDevice_.Device(); }
+    ID3D12Device* GetDevice() const { return graphicsDevice_.Native(); }
     ID3D12CommandQueue* GetCommandQueue() const { return graphicsDevice_.Queue(); }
     // Async-compute step 1: the second queue, created and idle. Null when the device refused it,
     // which every later step must treat as "async compute is unavailable", not as an error.
@@ -591,9 +509,9 @@ public:
     ID3D12Resource* GetLastPresentedBackbuffer() const { return lastPresentedIndex_ < render::kFrameCount ? swapchain_.Backbuffer(lastPresentedIndex_) : nullptr; }
 
     // Access the global descriptor allocator and current frame
-    DescriptorAllocator& GetDescAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetDescAlloc(); }
-    DescriptorAllocator& GetSamplerAlloc() { return frameScheduler_.GetFrameResource(currentFrameIndex_)->GetSamplerAlloc(); }
-    FrameResource* GetFrameResource() { return frameScheduler_.GetFrameResource(currentFrameIndex_); }
+    DescriptorAllocator& GetDescAlloc() { return frame_.Scheduler().GetFrameResource(currentFrameIndex_)->GetDescAlloc(); }
+    DescriptorAllocator& GetSamplerAlloc() { return frame_.Scheduler().GetFrameResource(currentFrameIndex_)->GetSamplerAlloc(); }
+    FrameResource* GetFrameResource() { return frame_.Scheduler().GetFrameResource(currentFrameIndex_); }
 
     UINT GetCurrentFrameIndex() const { return currentFrameIndex_; }
     uint64_t GetTotalFrameNumber() const { return totalFrameNumber_; }
@@ -605,12 +523,14 @@ public:
 
     void InitTextSystem(ID3D12GraphicsCommandList* uploadCl, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, const std::wstring& folder);
 
-    SamplerManager* GetSamplerManager() { return &samplerManager_; }
-    MaterialManager* GetMaterialManager() { return &materialManager_; }
-    InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
+    // R4.1: the managers, whole (RenderServices.h). The getters below are the facade over it while R4 moves.
+    RenderServices& Services() { return *services_; }
+    SamplerManager* GetSamplerManager();
+    MaterialManager* GetMaterialManager();
+    InputLayoutManager* GetInputLayoutManager();
     // Game thread plan G8b: from the game half these wait for the render thread's frame in flight first
     // (threading::WaitRenderForGame) -- the editor and the developer window change what that frame walks.
-    MeshManager* GetMeshManager() { threading::WaitRenderForGame("Renderer::GetMeshManager"); return &meshManager_; }
+    MeshManager* GetMeshManager();
     // Texture streaming A2 (null before the device exists and after Shutdown).
     streaming::TextureStreaming* GetTextureStreaming()
     {
@@ -619,16 +539,12 @@ public:
     }
     // A6: the one shader-visible CBV_SRV_UAV heap (frame rings + RT region + texture slots).
     render::BindlessHeap* GetBindlessHeap() { return &bindlessHeap_; }
-    TextManager* GetTextManager() { threading::WaitRenderForGame("Renderer::GetTextManager"); return &textManager_; }
-    FontManager* GetFontManager() { return &fontManager_; }
-    MaterialDataManager* GetMaterialDataManager()
-    {
-        threading::WaitRenderForGame("Renderer::GetMaterialDataManager");
-        return &materialDataManager_;
-    }
-    RenderContextPool* GetRenderContextPool() { return &ctxPool_; }
-    DebugDrawSystem* GetDebugDrawSystem() { return &debugDrawSystem_; }
-    const DebugDrawSystem* GetDebugDrawSystem() const { return &debugDrawSystem_; }
+    TextManager* GetTextManager();
+    FontManager* GetFontManager();
+    MaterialDataManager* GetMaterialDataManager();
+    RenderContextPool* GetRenderContextPool();
+    DebugDrawSystem* GetDebugDrawSystem();
+    const DebugDrawSystem* GetDebugDrawSystem() const;
 
 	float GetFPS() const { return fps_; }
     void SetWireframeMode(bool w) { threading::WaitRenderForGame("Renderer::SetWireframeMode"); wireframeMode_ = w; }
@@ -806,17 +722,9 @@ public:
     };
     void UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res);
 
-    // Rung 0 GPU-driven shadows (Step 3): a shared, lazily-created command signature for a
-    // single DRAW_INDEXED indirect argument with no per-draw root arguments (instance data
-    // comes from a bound SRV indexed by SV_InstanceID + the arg's StartInstanceLocation).
-    // Independent of any root signature (pRootSignature = nullptr at creation). Null on
-    // failure. Owned by the Renderer for the lifetime of the device.
-    ID3D12CommandSignature* GetDrawIndexedCommandSignature();
-    // Tessy N3: the same for one non-indexed DRAW (the VSM page render's cluster draw, DrawInstanced(128 * 3, N)).
-    ID3D12CommandSignature* GetDrawCommandSignature();
-    // Tessy N6: one DISPATCH_MESH (the cluster draw's mesh shader path); null without a mesh shader tier.
-    ID3D12CommandSignature* GetDispatchMeshCommandSignature();
-    bool SupportsMeshShaders(); // D3D12_OPTIONS7 MeshShaderTier, asked once
+    // R4.5c: the device -- its fixed command signatures (DRAW_INDEXED, DRAW, DISPATCH_MESH), the mesh shader tier,
+    // the queues and the capabilities (rhi/Device.h).
+    rhi::Device& RhiDevice() { return graphicsDevice_; }
     // Texture streaming plan A6: the command signature of the bindless G-buffer indirect draw --
     // {CONSTANT(b0, two dwords), VBV(slot 0), IBV, CBV(b2), DRAW_INDEXED}, kBindlessIndirectCommandBytes
     // per command (root arguments have to come in increasing root-parameter order, which is why the
@@ -921,7 +829,7 @@ public:
         // a std::array), so the sources can be pointed at directly rather than gathered.
         UINT dstRangeSize = count;
         const D3D12_CPU_DESCRIPTOR_HANDLE* srcStarts = &(*first);
-        graphicsDevice_.Device()->CopyDescriptors(
+        graphicsDevice_.Native()->CopyDescriptors(
             1, &block.cpu, &dstRangeSize,
             count, srcStarts, nullptr,
             heapType);
@@ -977,8 +885,6 @@ private:
     void ApplyPendingResize();
     void CreateSwapChainAndRTVs(UINT width, UINT height);
     void CreateDepthResources(UINT width, UINT height);
-    void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
-    void SignalFrame(UINT frameIndex, std::uint64_t frameNumber); // signal the fence for a frame
     void RefreshCurrentFrameCaches();
     // Async-compute step 1: the one-shot COMPUTE-lane probe (see render::g_computeLaneProbe).
     // Runs at the end of the first BeginFrame that has frame resources, then never again.
@@ -1026,7 +932,7 @@ private:
     // batch -> the edge that batch signalled. Carries the FENCE too, because there is one per
     // producing queue now (FrameScheduler: a fence with two writers is not monotonic).
     std::vector<std::pair<size_t, FrameScheduler::CrossQueuePoint>> crossQueueSignals_;
-    // G10a: the queue's half of ExecuteTimelineAndPresent -- one operation of rhi_. What it needs of the frame that
+    // G10a: the queue's half of ExecuteTimelineAndPresent -- one operation of the RHI road (rhi::Frame::Queue). What it needs of the frame that
     // recorded it travels with it (the RHI thread of G10b runs it while the next frame records).
     struct FrameSubmit
     {
@@ -1038,12 +944,6 @@ private:
         ID3D12CommandList* emptyCompute = nullptr; // --async-empty-submit's list, from the slot's pool
     };
     void SubmitFrame_(const FrameSubmit& submit);
-    RhiQueue rhi_;
-    // G10b: the newest frame's SubmitFrame_ op and the one before it. BeginFrame waits for the one before: the RHI
-    // thread at most one frame behind the recording (UE's GTSyncType 0), and that frame's slot (kFrameCount - 1 back,
-    // or less) long submitted.
-    RhiQueue::Ticket lastSubmit_ = 0;
-    RhiQueue::Ticket prevSubmit_ = 0;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;
@@ -1086,9 +986,6 @@ private:
     UINT oceanReflectionTextureHeight_ = 1;
 
     bool wireframeMode_ = false;
-    std::vector<ID3D12Resource*> pendingImGuiTextureResources_;
-    std::vector<ID3D12Resource*> gameReadableMarks_; // G8b: MarkImGuiTextureShaderReadable from the game half
-    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> imguiKeepAlive_; // G8b: the frame's shown textures, until drawn
     ExposureView exposureView_; // G8b: ExposureForGame, written at the hand-over
 
     float fps_ = 0.0f;
@@ -1105,20 +1002,16 @@ private:
     bool computeLaneProbed_ = false;  // async-compute step 1: the probe runs at most once
     FrameScheduler::CrossQueuePoint asyncOrderProbeValue_{}; // last frame's edge (--async-order-probe)
 
-    GraphicsDevice                    graphicsDevice_;
+    rhi::Device                       graphicsDevice_;
     SwapchainManager                  swapchain_;
-    FrameScheduler                    frameScheduler_;
+    // R4.5d: the frame's synchronization (FrameScheduler, the RHI road, the tickets, the hand-over) -- after the
+    // device it holds, destroyed before it.
+    rhi::Frame                        frame_{ graphicsDevice_ };
 
     UINT                              currentFrameIndex_ = 0;                   // 0..render::kFrameCount-1
     UINT                              lastPresentedIndex_ = 0;                  // backbuffer last shown (screenshots)
     FrameResource*                    currentFrameResource_ = nullptr;
-    D3D12_CPU_DESCRIPTOR_HANDLE       sdsmPartitionSrv_{};                      // S15: glass SDSM sampling
-    D3D12_CPU_DESCRIPTOR_HANDLE       sdsmMomentsSrv_{};                        // S16: glass EVSM atlas slot
-    D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
-    D3D12_CPU_DESCRIPTOR_HANDLE       localShadowPoolSrv_{};                    // S7 direct read: glass's t14
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT> glassPassSrvs_{};               // render::GlassPassSrvs
-    bool                              glassPassSrvsValid_ = false;
-    D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
+    render::DirectPassInputs          directInputs_{};                          // R4.4, see DirectInputs
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyTexSrv_{};                        // null Texture2D (t8/t10)
@@ -1159,23 +1052,6 @@ private:
     unsigned canonicalLastDrift_ = ~0u;    // summary prints on change only — see the note there
     unsigned canonicalLastDeclared_ = ~0u;
 
-    // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
-    ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
-    ComPtr<ID3D12CommandSignature> drawCmdSig_; // Tessy N3 (lazy), see GetDrawCommandSignature
-    ComPtr<ID3D12CommandSignature> dispatchMeshCmdSig_; // Tessy N6 (lazy)
-    // The three above are built on first use by whichever thread asks -- pass bodies record on workers.
-    std::mutex fixedCmdSigMtx_;
-    // G7: the game half's deferred queue work (ExecuteOrDefer / SignalOrDefer), in submission order.
-    struct HandOverOp
-    {
-        ComPtr<ID3D12CommandList> list;
-        ComPtr<ID3D12Fence> fence;
-        UINT64 value = 0;
-    };
-    std::mutex handOverMutex_;
-    std::vector<HandOverOp> handOverOps_;
-    bool HandOverSubmitsGoNow() const;
-    std::atomic<int> meshShaderTier_{-1}; // -1 = not asked yet
     // A6: bindless G-buffer command signatures per root signature (see getter).
     struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };
     std::unordered_map<ID3D12RootSignature*, BindlessCmdSig> bindlessCmdSigs_;
@@ -1193,16 +1069,11 @@ private:
     void AllocateDlssResourcesIfNeeded();
 
 
-    SamplerManager samplerManager_;
-    MaterialManager materialManager_;
-    InputLayoutManager inputLayoutManager_;
-    MeshManager meshManager_;
-    FontManager fontManager_;
-    TextManager textManager_;
-    MaterialDataManager materialDataManager_;
-    RenderContextPool ctxPool_;
-    DebugDrawSystem debugDrawSystem_;
-    ImGuiLayer imguiLayer_;
+    // R4.1: the managers (RenderServices.h), where they stood as members -- constructed with the renderer, destroyed
+    // after imgui_ and before bindlessHeap_.
+    std::unique_ptr<RenderServices> services_;
+    // R4.3: the UI's renderer, where the ImGui layer stood -- destroyed first of the renderer's members, as it was.
+    std::unique_ptr<ui::ImGuiRenderer> imgui_;
 
     friend class DlssHandler;
 };

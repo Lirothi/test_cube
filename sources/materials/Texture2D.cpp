@@ -6,13 +6,13 @@
 
 #include <chrono>
 #include <new> // Release: the default-constructed object in place
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/TextureCreate.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/TextureCreate.h"
+#include "rhi/GpuAlloc.h"
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/descriptors/DescriptorAllocator.h"
-#include "rendering/descriptors/BindlessHeap.h"
+#include "rhi/DescriptorAllocator.h"
+#include "rhi/BindlessHeap.h"
 #include "rendering/streaming/TextureStreaming.h"
 #include "core/Helpers.h"
 

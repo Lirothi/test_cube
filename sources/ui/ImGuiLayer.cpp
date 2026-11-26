@@ -13,7 +13,7 @@
 #include "backends/imgui_impl_win32.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 

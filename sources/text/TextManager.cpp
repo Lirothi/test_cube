@@ -1,6 +1,6 @@
 #include <cstdarg>
 #include "rendering/core/RenderStats.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/DeferredRelease.h"
 #include <cstdio>
 #include <cwchar>
 #include <optional>
@@ -14,14 +14,15 @@
 #include <string_view>
 #include <DirectXPackedVector.h>
 #include "text/TextManager.h"
-#include "rendering/core/UploadManager.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/UploadManager.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/descriptors/InputLayoutManager.h"
 #include "rendering/core/Renderer.h"
 #include "text/FontAtlas.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/core/RenderContextPool.h"
 
 using Microsoft::WRL::ComPtr;
 

@@ -39,10 +39,10 @@
     <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\CrashHandler.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\InvariantFailure.cpp" />
-    <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
+    <ClCompile Include="..\sources\rhi\GpuAlloc.cpp" />
     <ClCompile Include="..\sources\rendering\core\GpuProfiler.cpp" />
-    <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
-    <ClCompile Include="..\sources\rendering\core\BarrierTranslation.cpp" />
+    <ClCompile Include="..\sources\rhi\TextureCreate.cpp" />
+    <ClCompile Include="..\sources\rhi\BarrierTranslation.cpp" />
     <ClCompile Include="..\sources\core\logging\Log.cpp" />
     <ClCompile Include="..\sources\core\logging\LogQueue.cpp" />
     <ClCompile Include="..\sources\core\logging\LogSinks.cpp" />

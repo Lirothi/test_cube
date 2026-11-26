@@ -392,6 +392,18 @@ namespace editormcp
         // Tessy) run at the hand-over (ServiceHandOver from App's Sync), where both halves may be read.
         std::mutex g_handOverMutex;
         std::vector<std::function<void()>> g_handOverWork;
+
+        // Architecture plan R9.0: get_readouts carries the open level's state -- `level` {path, loading, dirty} -- when
+        // the editor registered its level host; without one (the gate) the app's answer goes out as it came.
+        std::string WithLevelBlock(std::string readouts)
+        {
+            if (!g_levelHost) { return readouts; }
+            nlohmann::json answer = nlohmann::json::parse(readouts, nullptr, false);
+            if (answer.is_discarded() || !answer.is_object()) { return readouts; }
+            const LevelHost::Status status = g_levelHost->Describe();
+            answer["level"] = { { "path", status.path }, { "loading", status.loading }, { "dirty", status.dirty } };
+            return answer.dump();
+        }
     }
 
     int HttpRefusal(const HttpRequestHead& head)
@@ -1537,7 +1549,7 @@ namespace editormcp
             {
                 ToolResult result;
                 const int history = std::clamp(arguments.value("history", 0), 0, 512);
-                result.text = g_runtimeHost->Readouts(history);
+                result.text = WithLevelBlock(g_runtimeHost->Readouts(history)); // R9.0: + the open level
                 return result;
             }
             // "name:value;name:value", --set's own syntax.
@@ -1851,7 +1863,8 @@ namespace editormcp
                         }
                         else
                         {
-                            result.text = g_runtimeHost->Readouts(std::clamp(job->arguments.value("history", 0), 0, 512));
+                            result.text = WithLevelBlock(
+                                g_runtimeHost->Readouts(std::clamp(job->arguments.value("history", 0), 0, 512)));
                         }
                     }
                     catch (const std::exception& e)

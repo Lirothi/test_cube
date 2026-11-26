@@ -2,7 +2,7 @@
 #include "rendering/visibility/HzbCull.h"
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 
 #include <windows.h>
 #include <d3d12.h>

@@ -5,10 +5,11 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
-#include "rendering/core/DeferredRelease.h" // R16.10: a resize retires the old levels
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h" // R16.10: a resize retires the old levels
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/RenderLayers.h"
+#include "materials/Texture2D.h"
 
 namespace
 {

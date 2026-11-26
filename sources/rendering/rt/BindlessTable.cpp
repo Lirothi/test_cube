@@ -1,8 +1,8 @@
 #include "rendering/rt/BindlessTable.h"
 #include "core/logging/Log.h"
 
-#include "rendering/core/DeferredRelease.h" // a retired descriptor set's slot (render::deferred)
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h" // a retired descriptor set's slot (render::deferred)
+#include "rhi/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
 
 #include <algorithm>

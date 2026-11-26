@@ -3,7 +3,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h" // A3: material textures load streamable
 #include "rendering/descriptors/SamplerManager.h"
-#include "rendering/descriptors/BindlessHeap.h" // A6: texture indices for the bindless permutations
+#include "rhi/BindlessHeap.h" // A6: texture indices for the bindless permutations
 #include "rendering/renderables/InstanceTypes.h"
 #include <algorithm>
 #include <array>

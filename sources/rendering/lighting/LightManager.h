@@ -9,7 +9,7 @@
 
 #include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/SpotLight.h"
 #include "rendering/shadows/ShadowAtlasPacker.h" // ShadowPackScratch

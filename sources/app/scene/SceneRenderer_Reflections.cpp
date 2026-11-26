@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-#include "rendering/core/GpuAlloc.h" // --upload-ring-check's readback of the RT constants
+#include "rhi/GpuAlloc.h" // --upload-ring-check's readback of the RT constants
 #include "rendering/core/RenderConstants.h"
 
 #include "rendering/view/Camera.h"

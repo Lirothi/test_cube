@@ -10,7 +10,7 @@
 #include <d3d12.h>
 
 #include "materials/Texture2D.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "materials/Material.h"
 #include "core/math/Math.h"
 

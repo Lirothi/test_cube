@@ -392,6 +392,33 @@ bool SceneRenderer::WaterDrawsThisFrame() const
     return frame_ && frame_->mainView && !frame_->mainView->transparentWater.empty();
 }
 
+// R4.4: the sun's shadow for the direct draws, which lack frame access (the glass panes and slots, the water), into
+// Renderer::DirectInputs. Called by Pass_Transparent and Pass_Translucent before their draws.
+void SceneRenderer::PublishShadowInputs(Renderer* renderer)
+{
+    render::DirectPassInputs& in = renderer->DirectInputs();
+    // Both stand-ins exist from here on (Renderer::EnsureVsmDummySrvs), whatever is substituted below.
+    const D3D12_CPU_DESCRIPTOR_HANDLE dummyBuffer = renderer->VsmDummyBufferSrv();
+    const D3D12_CPU_DESCRIPTOR_HANDLE dummyTexture = renderer->VsmDummyTexSrv();
+    // Step 21: the VSM page-table + pool SRVs (t9/t10) for the glass draws. Valid once a level is loaded; the
+    // pool/page-table are already SRV here (the light passes declared them). glass.hlsl only reads them when
+    // vsmParams.x != 0. Step 24b: when VSM is off/freed (Legacy mode) the inert DUMMY SRVs stand in, so the glass draw
+    // still binds valid descriptors instead of skipping; the light passes use VsmDummy*Srv() the same way.
+    const bool vsmResident = frame_->vsm && frame_->vsm->IsAllocated();
+    const D3D12_CPU_DESCRIPTOR_HANDLE pageTable = vsmResident ? frame_->vsm->PageTableSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    const D3D12_CPU_DESCRIPTOR_HANDLE pool = vsmResident ? frame_->vsm->PagePoolSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    in.vsmPageTable = pageTable.ptr ? pageTable : dummyBuffer;
+    in.vsmPool = pool.ptr ? pool : dummyTexture;
+    // Plan S7, the direct read (t14): the shadow cache pool, at its rest here (null = none, the draw binds its spot atlas).
+    in.localShadowPool = LocalShadowPoolSrv({});
+    // S15: the same transport for the SDSM partitions (t13). Null outside SDSM mode, which
+    // substitutes the inert dummy buffer -- glass gates on csmSdsmParams.x.
+    const D3D12_CPU_DESCRIPTOR_HANDLE partitions = frame_->sdsm ? frame_->sdsm->PartitionSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+    in.sdsmPartitions = partitions.ptr ? partitions : dummyBuffer;
+    // S16: and the atlas slot itself, which holds MOMENTS under EVSM (null = the depth atlas).
+    in.sdsmMoments = (decisions_.sdsmEvsm && frame_->sdsm) ? frame_->sdsm->MomentsSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
 // ---- Pass_Transparent (+ its inner graph) ----
 void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext ctx,
     const Camera& camera, const SceneView& mainView, const TransparentPoints& pts)
@@ -399,26 +426,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     // Shared per-view/per-frame CB (b1) for every transparent object in this pass.
     const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.fogVolumeParams, decisions_.fogVolumeZParams, decisions_.glassRefl, SkyVisShaderParams());
 
-    // Step 21: publish the VSM page-table + pool SRVs (t9/t10) for the glass draws, which lack frame
-    // access. Valid once a level is loaded; the pool/page-table are already SRV here (the light
-    // passes declared them). glass.hlsl only reads them when vsmParams.x != 0.
-    if (frame_->vsm && frame_->vsm->IsAllocated())
-    {
-        renderer->SetVsmShadowSrvs(frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv());
-    }
-    else
-    {
-        renderer->SetVsmShadowSrvs({}, {});
-    }
-    // Plan S7, the direct read (t14): the shadow cache pool, at its rest here (null = none, the draw binds its spot atlas).
-    renderer->SetLocalShadowPoolSrv(LocalShadowPoolSrv({}));
-    // S15: the same transport for the SDSM partitions (t13). Null outside SDSM mode, which
-    // substitutes the inert dummy buffer -- glass gates on csmSdsmParams.x.
-    renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
-                                               : D3D12_CPU_DESCRIPTOR_HANDLE{});
-    // S16: and the atlas slot itself, which holds MOMENTS under EVSM.
-    renderer->SetSdsmMomentsSrv((decisions_.sdsmEvsm && frame_->sdsm)
-                                    ? frame_->sdsm->MomentsSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
+    PublishShadowInputs(renderer); // R4.4: the VSM, SDSM and local-pool transports for the glass and water draws
 
     RenderGraph<kTransparentRenderGraphPassCount> rgTr(ctx.batchIndex);
 
@@ -494,30 +502,16 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
 {
     const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.fogVolumeParams, decisions_.fogVolumeZParams, decisions_.glassRefl, SkyVisShaderParams());
 
-    // Step 21: publish the VSM page-table + pool SRVs (t9/t10) for the glass draws, which lack frame
-    // access. Valid once a level is loaded; the pool/page-table are already SRV here (the light
-    // passes declared them). glass.hlsl only reads them when vsmParams.x != 0.
-    if (frame_->vsm && frame_->vsm->IsAllocated())
-    {
-        renderer->SetVsmShadowSrvs(frame_->vsm->PageTableSrv(), frame_->vsm->PagePoolSrv());
-    }
-    else
-    {
-        renderer->SetVsmShadowSrvs({}, {});
-    }
-    // S15: the same transport for the SDSM partitions (t13) -- see Pass_Transparent.
-    renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
-                                               : D3D12_CPU_DESCRIPTOR_HANDLE{});
-    renderer->SetLocalShadowPoolSrv(LocalShadowPoolSrv({})); // plan S7 (t14) -- see Pass_Transparent
-    renderer->SetSdsmMomentsSrv((decisions_.sdsmEvsm && frame_->sdsm)
-                                    ? frame_->sdsm->MomentsSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
+    PublishShadowInputs(renderer); // R4.4: the same transports -- see Pass_Transparent
     // glass.hlsl's per-pass table, gathered ONCE for every glass draw of the pass (the panes and the
     // glass material slots alike) -- after the transports above, which it reads.
     {
         render::GlassPassSrvs glassSrvs{};
         const bool glassReady = frame_->lightManager &&
             render::GatherGlassPassSrvs(renderer, *frame_->lightManager, frame_->skybox, glassSrvs);
-        renderer->SetGlassPassSrvs(glassReady ? &glassSrvs : nullptr);
+        render::DirectPassInputs& in = renderer->DirectInputs();
+        in.glassValid = glassReady;
+        if (glassReady) { in.glass = glassSrvs; }
     }
 
     RenderGraph<kTranslucentRenderGraphPassCount> rgTl(ctx.batchIndex);
@@ -529,7 +523,7 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
         SetCommandListName(driver.cl, sub.pass);
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
-            // The depth with the water in it, for the particles' soft fade (g_particleDepthWaterSrv).
+            // The depth with the water in it, for the particles' soft fade (DirectPassInputs::particleDepthWater).
             renderer->EmitPoint(driver.cl, copyWaterPoint);
             if (copyWater)
             {

@@ -8,6 +8,8 @@
 
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/Renderer.h"
+#include "materials/MaterialData.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 
 namespace
 {
@@ -487,7 +489,7 @@ void TextureDebugViewer::Draw(Renderer& renderer, ID3D12Resource* oceanShoreDept
         previewSrv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         previewSrv.Texture2D.MipLevels = 1;
         const ImTextureID textureId =
-            renderer.CreateImGuiTextureId(targets.debugPreview.Get(), previewSrv);
+            renderer.ImGui().CreateTextureId(targets.debugPreview.Get(), previewSrv);
 
         ImVec2 available = ImGui::GetContentRegionAvail();
         ImVec2 imageSize = FitAspect(available, width, height);

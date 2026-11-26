@@ -37,7 +37,8 @@
 #include "rendering/lighting/DirectionalLight.h" // stage 9: the sun's direction and disc
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
-#include "rendering/core/DeferredRelease.h" // R16.10: a reloaded kernel or corona image's old texture
+#include "rhi/DeferredRelease.h" // R16.10: a reloaded kernel or corona image's old texture
+#include "rendering/descriptors/SamplerManager.h"
 
 // R16.10: an image about to be reloaded goes to render::deferred whole (frames in flight may still sample it), and its
 // slot gets a fresh texture to load into.

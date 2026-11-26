@@ -48,6 +48,7 @@
 #include "app/scene/SkyOcclusionMap.h" // plan S's fallback without RT
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: the query plan the pass draws
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b: the tester Main_VisTest runs
+#include "rendering/debug/DebugDraw.h"
 using namespace scene_internal;
 
 namespace
@@ -255,8 +256,9 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
         // The sky's fill for the lit particles: lighting_cs's own cube and scale.
         const Skybox* sky = frame_->skybox;
         const bool fill = sky && sky->HasIbl() && frame_->dirLight;
-        g_skyIrradianceSrv = fill ? static_cast<std::uint64_t>(sky->IrradianceSrv().ptr) : 0u;
-        g_skyIrradianceScale = fill ? std::max(sky->GetExposure() * frame_->dirLight->GetSkyFillIntensity(), 0.0f) : 0.0f;
+        render::DirectPassInputs& direct = renderer->DirectInputs(); // R4.4
+        direct.skyIrradiance = fill ? sky->IrradianceSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        direct.skyIrradianceScale = fill ? std::max(sky->GetExposure() * frame_->dirLight->GetSkyFillIntensity(), 0.0f) : 0.0f;
     }
     // UE's DistantHeightFog: the analytic fog at infinity in the sky's capture, so the probes -- the water's sky
     // reflection above all -- see the haze the frame shows (UE: the fog off, the far sea turns from the haze's grey to the
@@ -2637,11 +2639,11 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         RenderGraphPassContext& p = ctx;
         const auto& DT = p.renderer->GetDeferredForFrame();
         // 0. The depth with the water in it (Main_Transparent drew it), copied for the particles' soft fade
-        // (g_particleDepthWaterSrv): a drop falling into the sea fades instead of being cut by the water's depth.
+        // (DirectPassInputs::particleDepthWater): a drop falling into the sea fades instead of being cut by the water's depth.
         // The point is emitted every frame, the copy only when it is wanted.
         const bool copyWater = g_particleSoftWater && WaterDrawsThisFrame() && DT.depthWater.Get() != nullptr &&
                                DT.depthWaterSRV.ptr != 0;
-        g_particleDepthWaterSrv = copyWater ? static_cast<std::uint64_t>(DT.depthWaterSRV.ptr) : 0u;
+        p.renderer->DirectInputs().particleDepthWater = copyWater ? DT.depthWaterSRV : D3D12_CPU_DESCRIPTOR_HANDLE{};
         const std::uint32_t copyWaterPoint = p.usePoint ? *p.usePoint : 0u;
         if (copyWater)
         {

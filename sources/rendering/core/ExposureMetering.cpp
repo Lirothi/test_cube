@@ -1,10 +1,11 @@
 #include "rendering/core/ExposureMetering.h"
 
 #include "core/Helpers.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h" // g_preExposure, noted per readback slot for the history
-#include "rendering/core/TextureCreate.h" // P3B base log-luminance texture
+#include "rhi/TextureCreate.h" // P3B base log-luminance texture
+#include "materials/Texture2D.h"
 
 using Microsoft::WRL::ComPtr;
 

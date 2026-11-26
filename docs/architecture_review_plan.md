@@ -4433,6 +4433,206 @@ Debug, реестр настроек и таблица графики, вкла�
   после каждого мерить охват (`arch_metrics`). **R4.3**: ImGui → `ui::ImGuiRenderer`. **R4.4**: входы прямых
   пассов — одна структура вместо глобалов `g_*Srv`. **R4.5**: `rhi::Device` / `rhi::Frame`. Гейт типа C плюс
   `--scene-stress-gbv`.
+
+  **Подшаги R4 (2026-11-26).** R4.1 и R4.2 — тип A (перенос и include), каждый: три конфигурации, `check_*.py`,
+  `intent_regression`, `inspector_regression`, три вида на полу шума. R4.3 (ImGui) и R4.4 (входы прямых пассов) —
+  тип A с прогоном редактора на своём порту (ImGui) и суженным GBV стекла и воды (R4.4). R4.5 режется на подшаги
+  перед началом (R4.5a, …), когда станет видно, что из `Renderer` уходит в `rhi`. Полный набор типа C и
+  `--scene-stress-gbv` (с разрешения владельца) — один раз, после R4.5. Эталон «до» волны 3 —
+  `x64\Release\test_cube_w3base.exe` (HEAD `e152dc1b`, собран 18:44), запускается из основной папки: R4 не трогает
+  `shaders/` и контент. Пол шума трёх видов на нём: 0.24 / 0.022 / 0.030 % (лагуна / ванная / море), второй раз
+  0.0002 / 0.017 / 0.046 %.
+
+  **Сделано R4.1 (2026-11-26).** `rendering/core/RenderServices.h` — структура из девяти менеджеров (`samplers`,
+  `materials`, `inputLayouts`, `meshes`, `fonts`, `text`, `materialData`, `contexts`, `debugDraw`) в прежнем порядке
+  членов `Renderer`. `Renderer` держит её как `std::unique_ptr<RenderServices> services_` на месте прежних членов:
+  создаётся в конструкторе после `dlssHandler_`, разрушается после `imguiLayer_` и до `bindlessHeap_` — порядок
+  создания и разрушения прежний; `Shutdown` чистит их в прежнем порядке. `Renderer::Services()` отдаёт её целиком,
+  геттеры `Get*Manager()` остались фасадом (ожидания `WaitRenderForGame` в них — те же). `TextureStreaming` и
+  `ExposureMetering` в структуру не вошли: первая разрушается до `bindlessHeap_` (порядок `Shutdown`), вторая —
+  фича кадра (R8). Собран Debug; Release и Release_Editor отдельно для R4.1 не проверены (правки R4.2 пришлись на
+  их сборку) — проверены вместе с R4.2, где код R4.1 не менялся, кроме переноса геттеров.
+
+  **Сделано R4.2 (2026-11-26).** `Renderer.h` больше не включает `materials/`, `text/`, `rendering/meshes/`,
+  `rendering/lighting/`, `rendering/debug/`, `SamplerManager.h`, `InputLayoutManager.h`, `RenderContextPool.h`:
+  менеджеры названы предварительными объявлениями, геттеры ушли в `Renderer.cpp` (ожидания сохранены).
+  `RenderTargetManager.h` не включает `LightManager.h` (ничего из него не брал). Потребители получили 32 include в
+  27 файлах — только тот заголовок, имя из которого файл называет (скрипты рабочей папки `r42_fix.py` — по
+  графу, `err_fix.py` + `fixloop.ps1` — по ошибкам C2027 компилятора: использование через геттер граф не видит).
+  `RenderableObjectBase.h` — предварительное `class Mesh;` вместо двух include. Охват (.cpp, которые пересобирает
+  правка, из 291; до → после): `Renderer.h` тянет 60 → 35 заголовков; `MeshManager.h` 163 → 25, `TextManager.h`
+  158 → 13, `FontManager.h` 158 → 2, `MaterialDataManager.h` 158 → 20, `DebugDraw.h` 158 → 17,
+  `InputLayoutManager.h` 159 → 5, `RenderContextPool.h` 158 → 30, `SamplerManager.h` 158 → 98, `LightManager.h`
+  159 → 91, `Material.h` 160 → 138 (его тянут `RenderableObject.h` и рендерабли — это не `Renderer.h`),
+  `ImGuiLayer.h` 158 (R4.3). Храповик слоёв: 53 → 51 (`Renderer.h -> LightManager.h`,
+  `RenderTargetManager.h -> LightManager.h`). Проверено: Debug, Release_Editor, Release; `check_*.py` 0,
+  `check_shaders` 330/330, `settings_names` 0; `intent_regression` и `inspector_regression` PASS; картинка
+  (Release, эталон и после, чередуя): после-после 0.019 / 0.016 / 0.030 %, эталон-после по вторым прогонам
+  0.0006 / 0.040 / 0.028 % — на полу; кадры просмотрены, логи `clean shutdown`. Найдено по пути: вставка include
+  после последнего `#include` файла попала внутрь `#if WITH_EDITOR` в `App.cpp` — Release не собрался (Debug
+  и Release_Editor не видят: у них ветка есть); вставка теперь только на нулевой глубине `#if`, добавленные
+  строки проверены скриптом `inc_depth.py`. Не покрыто: Shipping, Development, Cook (R4 не трогает вход,
+  настройки, VFS; соберутся в конце R4); `Material.h` и `SamplerManager.h` всё ещё широки — их тянут рендерабли и
+  `OceanRenderable.h`, вне R4. Патч: общая папка сессий, `R4.1-R4.2.patch`.
+
+  **Сделано R4.3 (2026-11-26).** `ui/ImGuiRenderer.h/.cpp` — класс `ui::ImGuiRenderer`: `ImGuiLayer`, списки
+  показанных текстур (`pendingTextureResources_`, `gameReadableMarks_`, `keepAlive_`) и бывшие методы `Renderer`
+  (`Init`, `BeginFrame`, `EndFrame`, `HandOver`, `Render`, `CreateTextureId`, `ReleaseTextureDescriptors`,
+  `MarkTextureShaderReadable`, `Shutdown`, `HandleWndProc`, `RequestDpi`, `Wants*`) — тела перенесены дословно,
+  обращения к устройству, кадру и реестру состояний — через открытый API `Renderer` (`GetDevice`,
+  `GetCurrentFrameIndex`, `Rhi().Flush`, `SetResourceState`, `GetCanonicalState`, `ClearResourceState` — тот же
+  `Forget` реестра, что звал прежний код). `Renderer` держит `std::unique_ptr<ui::ImGuiRenderer> imgui_` на месте
+  `imguiLayer_` (разрушается первым, как он) и отдаёт `ImGui()`; `HandOverImGui` остался: копия экспозиции для UI,
+  затем `imgui_->HandOver()` — порядок прежний; очистку списка в `BeginFrame` делает `BeginRenderFrame()`. Вызовы
+  `renderer.CreateImGuiTextureId(...)` и остальные 26 мест в 9 файлах → `renderer.ImGui().CreateTextureId(...)`.
+  Метки проверок потоков переименованы по новым функциям; имена профайлера (`Renderer::BeginImGuiFrame`,
+  `ImGui::EndFrame`) и `BOOT_SCOPE("InitImGui")` оставлены — их читают трассы. Порядок разрушения изменился в
+  одном: `keepAlive_` (ComPtr показанных за кадр текстур) теперь уходит вместе с `imgui_`, до устройства, а не
+  после — `RenderImGui` чистит его каждый кадр, и к `Shutdown` он пуст. Охват: `ImGuiLayer.h` 158 → 13 .cpp,
+  `ImGuiRenderer.h` — 11; `Renderer.h` тянет 34 заголовка — устройство, кадр, дескрипторы, цели, экспозицию и
+  `core/`. Проверено: три конфигурации, `check_*.py` 0, CRLF, `intent_regression` и `inspector_regression` PASS.
+  Редактор (Release_Editor, `--editor --mcp-port=8142 --shot`, wind_test, эталон `test_cube_w3base.exe` из
+  worktree `test_cube_base` на `e152dc1b`, чередуя эталон / после дважды): панели, миниатюры ассетов и значки
+  (текстуры игровой половины — виртуальные ID → `HandOver`) на месте; эталон-после по вторым прогонам 0.0001 %
+  (2 пикселя), после-после 0.0001 %, первый прогон эталона отличался от второго на 0.053 % (прогрев); предупреждения
+  в логах те же (кроме двух строк спрея, зависящих от момента загрузки), `clean shutdown`; `imgui.ini` и
+  `editor_state.json` возвращены (хэши до и после равны). Не покрыто: изменение DPI (`RequestDpi`) и удаление
+  миниатюр (`ReleaseTextureDescriptors`) вживую не вызывались — вызовы переименованы, тела не менялись.
+
+  **Сделано R4.4 (2026-11-26).** `rendering/core/DirectPassInputs.h` — `render::DirectPassInputs`: то, что прямые
+  рисования (стёкла и стеклянные слоты, поверхность воды, освещённые частицы) читают из кадра — VSM-таблица и пул,
+  SDSM-разбиения и моменты, пул локальных теней, таблица стекла (`Glass()` — null, когда её нет), куб облучённости
+  неба с масштабом и глубина с водой для мягких частиц. Было: пять пар сеттер/геттер `Renderer`
+  (`SetVsmShadowSrvs`, `SetLocalShadowPoolSrv`, `SetGlassPassSrvs`, `SetSdsmPartitionSrv`, `SetSdsmMomentsSrv`),
+  семь членов и глобалы `g_skyIrradianceSrv` / `g_skyIrradianceScale` / `g_particleDepthWaterSrv` в
+  `SceneFrameData.h`. Теперь один член `Renderer::directInputs_` и `DirectInputs()`. Писатели — где и были:
+  `Pass_Transparent` и `Pass_Translucent` зовут `SceneRenderer::PublishShadowInputs` (два одинаковых блока стали
+  одной функцией; подстановка заглушек `VsmDummy*Srv` при пустом источнике — та же, заглушки создаются на том же
+  месте), таблицу стекла кладёт `Pass_Translucent`, небо — пролог графа, глубину с водой — построитель
+  `Main_Translucent`. Читатели: `GlassPassSrvs.cpp`, `OceanRenderable.cpp`, `GBufferRenderable.cpp`,
+  `TransparentStaticMesh.cpp`, `ParticleEmitterObject.cpp`. Структура живёт на рендерере, а не в `SceneFrameData`, как
+  предлагал §5: рисования получают `Renderer*` и не видят данных кадра (виртуалы `RenderableObjectBase`); перенос в
+  данные кадра — вместе с `RenderScene` (R6). Имена в `docs/agents/boats_and_water.md` обновлены. Проверено: три
+  конфигурации, `check_*.py` 0, CRLF, обе регрессии PASS; суженный GBV Debug (`Translucent,Transparent,
+  Transparent.Water,Skybox` + самопроверка Skybox, отдельный стол) на ванной и море — одна строка валидации,
+  `id=935` от самопроверки, `live objects at exit: none`, `clean shutdown`. Картинка (эталон / после, чередуя):
+  лагуна 0.0008 %, ванная 0.012 %, море 0.065 % по вторым прогонам; море проверено ещё двумя парами — у него два
+  устойчивых состояния и внутри одного бинарника (эталон-эталон 0.0011 и 0.066 %, после-после 0.0015 и 0.064 %,
+  эталон-после 0.065 / 0.064 / 0.0004 %), так что 0.065 % — вторая мода пола, не разница. Не покрыто: частицы
+  (брызги, свечи) в трёх видах почти не видны — их входы проверены только сборкой и чтением диффа.
+
+  **Подшаги R4.5 (2026-11-26).** Слой `rhi` §4 (устройство, очереди, кадры, отправка, дескрипторы, загрузка,
+  барьеры) — папка `sources/rhi/`, строка ранга 1 в `check_layers.py`. После R4.2-R4.4 замыкание `Renderer.h` —
+  только `core/` и `rendering/core|descriptors`; набор RHI (37 файлов: `GraphicsDevice`, `SwapchainManager`,
+  `FrameScheduler`, `FrameResource`, `RhiQueue`, `SubmitTimeline`, `ResourceDeclarations`, `BarrierTranslation`,
+  `CommandListBindState`, `DeferredRelease`, `DeviceRemovalWatch`, `GpuAlloc`, `TextureCreate`, `UploadBatch`,
+  `UploadManager`, `DescriptorAllocator`, `DescriptorHeapGPU`, `BindlessHeap`, `RenderConstants`,
+  `RendererInvariantFailure`, `MemoryReport`, `MemGates`) замкнут, кроме семи include вверх (скрипт рабочей папки
+  `r45_set.py`). **R4.5a** — развязать их, поведение то же: `RenderQueue` — свой заголовок (его брали из
+  `RenderPass.h` `ResourceDeclarations.h` и `SubmitTimeline.h`); топология отправки (`SubmitEdge`, кольцо,
+  `g_crossQueueWaits`, `g_asyncComputeLists`) — из `Renderer.h` в свой заголовок (ради неё `FrameScheduler.cpp`
+  включал `Renderer.h`); фильтр GBV — режим списка (RHI: `FrameResource`, устройство) отдельно от сопоставления
+  имён пассов (рендер), устройство получает взведение фильтра параметром; `RenderContext.h` (раскладка привязок,
+  её берёт `CommandListBindState.h`) — в набор. `UploadBatch.cpp` зовёт `Renderer` (`ExecuteOrDefer`,
+  `WaitForPreviousFrame`) — опускается вместе с `rhi::Frame` (R4.5d). **R4.5b** — перенос набора в `sources/rhi/`
+  (только пути include), строка `rhi` в `check_layers.py`. **R4.5c** — `rhi::Device`: устройство, очереди,
+  swapchain, возможности (`GraphicsDevice` + `SwapchainManager` + подписи команд), `Renderer` держит его.
+  **R4.5d** — `rhi::Frame`: планировщик кадра, `RhiQueue`, `SubmitTimeline`, номер и слот кадра, отправка
+  (`SubmitFrame_`), передача в игровой половине (`ExecuteOrDefer`), ожидания (`WaitForPreviousFrame`) — из
+  `Renderer.cpp`; `UploadBatch` берёт `rhi::Frame`. Каждый — тип A (R4.5c/d — с прогоном `--renderer-submission-
+  stress` и `--rt-audit`).
+
+  **Сделано R4.5a (2026-11-26).** Перенос без правки строк, кроме названного: `RenderQueue.h` (enum из
+  `RenderPass.h`, тот включает его); `SubmitTopology.h` (`SubmitEdge`, кольцо, `g_asyncComputeLists`,
+  `g_crossQueueWaits` из `Renderer.h`, тот включает его; `FrameScheduler.cpp` больше не включает `Renderer.h`);
+  `RhiConstants.h` (`kFrameCount`, `kConstantBufferAlignment` из `RenderConstants.h`, тот включает его;
+  `SwapchainManager.h`, `FrameScheduler.h`, `BindlessHeap.h` брали из `RenderConstants.h` только `kFrameCount` и
+  включают `RhiConstants.h` — форматы целей, раскладка теневых видов и предэкспозиция в RHI не входят);
+  `GbvListMode.h/.cpp` — половина `--gbv-passes` про список (режим покоя, режим «в списке», `SetListMode`,
+  `ResetListPatchMode`, имя режима) из `GbvPassFilter.*`, там остались имена пассов (`RequestPassFilter`,
+  `ArmPassFilter`, `ApplyPassPatchMode`, `JoinCLGroup`); `GraphicsDevice::InitDevice` получает взведение фильтра
+  параметром (`Renderer` передаёт `&render::gbv::ArmPassFilter`) вместо вызова наверх. `RenderContext.h` вошёл в
+  набор как есть. Итог: набор RHI — 40 файлов, ни одного include наружу, кроме `core/` (`r45_set.py`); снаружи его
+  включают 24 заголовка, чаще всего `GpuAlloc.h` (46), `DeferredRelease.h` (24), `ResourceDeclarations.h` (23).
+  Проверено: три конфигурации, `check_*.py` 0, CRLF, обе регрессии PASS; суженный GBV Debug `--gbv-passes=Skybox`
+  + самопроверка: лог «shader patching (GUARDED_VALIDATION) ONLY on ... Skybox», устройство в
+  STATE_TRACKING_ONLY, одна строка — `id=935` (самопроверка в пассе из списка — это и контроль: непатченный список
+  её бы не дал), `live objects at exit: none`, `clean shutdown`; картинка эталон-после 0.034 / 0.050 / 0.0009 %
+  при после-после 0.013 / 0.058 / 0.0009 % — на полу.
+
+  **Сделано R4.5b (2026-11-26).** 40 файлов набора — в `sources/rhi/` байт в байт (имена те же; скрипт рабочей
+  папки `r45b_move.py`): пути include в 132 файлах `sources/` и `tools/`, записи `test_cube.vcxproj` и
+  `.filters` (свой фильтр `sources\rhi`), `profiler_regression.vcxproj` и `rt_bindless_regression.vcxproj`
+  (компилируют перенесённое сами), `check_gpu_alloc.py`, `AGENTS.md` (`rhi/DeferredRelease.h`),
+  `docs/agents/workflow.md`. `check_layers.py` — слой `rhi` ранга 1 (`rhi/`): храповик теперь держит, что
+  RHI не включает ничего выше `core/` — 0 нарушений, разрешений по-прежнему 51; `rhi` вне большой компоненты
+  связности (37 папок, как была). `rendering/descriptors/` остались `SamplerManager` и `InputLayoutManager`
+  (сервисы R4.1). `UploadBatch` в `rendering/core` до R4.5d. Проверено: три конфигурации, `check_*.py` 0
+  (`check_shaders` 330/330), `settings_names` 0, CRLF (`LightManager.h` был целиком LF — тронут, приведён),
+  `intent_regression`, `inspector_regression`, `profiler_regression` (Debug и Release), `rt_bindless_regression`
+  (Release — его единственная конфигурация) PASS; картинка эталон-после 0.012 / 0.026 / 0.062 % при после-после
+  0.0001 / 0.022 / 0.0017 % (море — вторая мода пола, см. R4.4).
+
+  **Сделано R4.5c (2026-11-26).** `GraphicsDevice` → `rhi::Device` (`rhi/Device.h/.cpp`, определения под
+  `namespace rhi`; метод `Device()` стал `Native()` — он совпадал с именем класса). В него из `Renderer` перенесены
+  дословно три постоянные подписи команд (`DrawIndexedCommandSignature`, `DrawCommandSignature`,
+  `DispatchMeshCommandSignature`), уровень mesh-шейдеров (`SupportsMeshShaders`) с их мьютексом и атомиком; их
+  освобождение в `Renderer::Shutdown` — на прежнем месте, теперь `ReleaseCommandSignatures()` (до очереди и
+  устройства). `Renderer::RhiDevice()` отдаёт устройство; 21 место вызова `renderer->Get*CommandSignature()` /
+  `SupportsMeshShaders()` → `renderer->RhiDevice().…`; статические переключатели (`rhi::Device::GbvEnabled`, …) в
+  `BootParseDev.cpp`, `FrameSettingRows.cpp`, `Material.cpp`, `ShadowGpuData.cpp`. Подпись под материал
+  (`GetBindlessIndirectCommandSignature`) осталась в `Renderer`: ей нужен `Material`. Имена объектов D3D12
+  (`Renderer.DrawIndexedIndirectSig`, …) не менялись — их читают отчёты живых объектов. **Найдено и исправлено по
+  пути:** `intent_regression` и `inspector_regression` берут объектники игры из `link.command.1.tlog` Debug-сборки
+  и читали ВСЕ записи `^`; после переименования объектника в нём две записи (старая с `GraphicsDevice.obj` и новая),
+  и тест линковал обе — `CVT1100: duplicate resource` (контроль: так упала сборка до правки). Теперь берётся
+  последняя запись (новейшая; порядок проверен по файлу), и сборка предупреждает, если их больше одной. Проверено:
+  три конфигурации, `check_*.py` 0, CRLF; `--renderer-submission-stress` — `failures: 0`, пять death-тестов
+  упали как положено; Debug GBV моря: одна строка `id=935`, `live objects at exit: none` (подписи уходят до
+  устройства), «mesh shader tier: 10» в логе; регрессии (intent, inspector, profiler Debug, rt_bindless) PASS;
+  картинка эталон-после 0.013 / 0.067 / 0.0004 % при после-после 0.0008 / 0.020 / 0.061 % — на полу (ванная до
+  0.071 % внутри эталона, R4.4).
+
+  **Сделано R4.5d (2026-11-26).** `rhi/Frame.h/.cpp` — `rhi::Frame`: `FrameScheduler`, дорога `RhiQueue`, билеты
+  двух последних отправок (`NoteSubmission`, `WaitForSubmissionBeforeLast`), отложенная работа игровой половины (G7:
+  `ExecuteOrDefer`, `SignalOrDefer`, `FlushHandOverSubmits`), ожидания (`WaitForFrame`, `SignalFrame`,
+  `WaitForFrameSlot`, `IsFrameNumberComplete`, `WaitForPreviousFrame`) и счётчик простоев GPU по месту вызова
+  (R16.10) — тела из `Renderer.cpp` дословно, кроме имён членов (`frameScheduler_` → `scheduler_`, очереди — через
+  `rhi::Device`) и метки проверки потока. `Renderer` держит `rhi::Frame frame_{ graphicsDevice_ }` на месте
+  `frameScheduler_` (после устройства, разрушается до него; `RhiQueue` прежде разрушался ПОСЛЕ устройства — его
+  поток `Shutdown` и так останавливает раньше), отдаёт `RhiFrame()`, а его прежние методы (`WaitForPreviousFrame`,
+  `LogGpuIdleWaits`, `ExecuteOrDefer`, `SignalOrDefer`, `FlushHandOverSubmits`, `WaitForFrameSlot`,
+  `IsFrameNumberComplete`, `Rhi`) пересылают — места вызова не менялись; `WaitForPreviousFrame` пересылает место
+  вызова, и счётчик видит прежние строки. **`UploadBatch` остался в `rendering/core`** (вопреки подшагам выше): он
+  удобство над `Renderer` (75 вызовов с `Renderer*`), клиент `rhi::Frame`, в RHI у него нет пользователей — перенос
+  дал бы только смену 75 сигнатур. Проверено: три конфигурации, `check_*.py` 0, CRLF, обе регрессии PASS;
+  `--renderer-submission-stress` `failures: 0`; Release `--scene-stress=150 --rt-audit` — CLEAN, `rt audit: PASS`
+  (455 кадров, 74 объекта), mem tags STABLE, простоев GPU за сессию 604 — столько же, сколько у эталона на том же
+  прогоне (455 кадров); Debug `--scene-stress=12` (отдельный стол) — CLEAN, `clean shutdown`; картинка эталон-после
+  0.0000 / 0.021 / 0.0003 % при после-после 0.119 / 0.034 / 0.0003 % — на полу (лагуна до 0.24 %).
+
+  **R4.5e (разбит, 2026-11-26).** Отправка и запись кадра — `SubmitTimeline`, списки потоков
+  (`BeginThreadCommandList` / `EndThreadCommandList`, пачки), статистика конвейера по спискам, `SubmitFrame_` и
+  сборка сегментов в `ExecuteTimelineAndPresent`, номер и слот кадра — остаются в `Renderer`: они переплетены с
+  целями (`RecordBindDefaultsNoClear` для подменного драйвера), с барьерами графа (`EndListStats`,
+  `ReportOffCanonicalStates`), с DLSS и экспозицией в `BeginFrame`. Перенос в `rhi::Frame` требует сначала
+  развести `BeginFrame` / `ExecuteTimelineAndPresent` на RHI-шаги и рендер-шаги (подшаги R4.5e1 — `BeginFrame`
+  RHI-часть: ожидание слота, сброс пулов, номер кадра; R4.5e2 — запись списков и `SubmitTimeline`; R4.5e3 —
+  `SubmitFrame_` и Present). Делается после R8 (одна точка простоя): R8 перестраивает тот же `BeginFrame`
+  (`ApplyPendingResize`, пересоздание целей), и разрезать его дважды — двойная работа.
+
+  **Сделано R4 целиком, тип C (2026-11-26).** Шесть конфигураций (Debug, Release_Editor, Release, Shipping,
+  Development, Cook) — 0 ошибок и предупреждений. Полный `--scene-stress-gbv` (Debug, отдельный стол; разрешение
+  владельца 2026-11-26 на R4, R6, R8): CLEAN, 300 итераций за 905 с, ни одной строки `(ERROR|CORRUPTION|WARNING)
+  id=` и `InfoQueue` (в сессионном логе и `scene_stress.log`), `live objects at exit: none`, `clean shutdown`.
+  Release `--scene-stress=150 --rt-audit` CLEAN, `rt audit: PASS`; Debug `--scene-stress=12` CLEAN;
+  `--renderer-submission-stress` `failures: 0`; `--mem-readout=30` (occlusion_test) PASS, круче всего private
+  0.069 МБ/с; `--scalability-selftest` PASS, `--vfs-selftest` PASS (141). Цена кадра (Release_Editor, вид 18:00,
+  `perf_ab.py` рабочей папки: редактор закрыт F2, 25 с прогрева, среднее за 15 с `get_profile`; эталон / после,
+  пять пар соседних прогонов): GPU.Frame 3.923 / 3.932, 4.015 / 4.073, 3.926 / 4.510, 4.540 / 4.488,
+  4.170 / 4.030 мс — расходятся в обе стороны, и сам GPU-кадр в одном плече гуляет на 0.6 мс (частоты, не
+  работа: рефакторинг GPU-работу не трогал); CPU.Frame 4.168 / 4.157, 4.209 / 4.264, 4.166 / 4.528, 4.544 /
+  4.494, 4.223 / 4.212; поток рендера в среднем 1.545 / 1.578 мс (+0.03 при разбросе 0.13) — цены сверх шума нет.
 - **R9. Схема данных уровня** (после R2). **R9.0.** До правок сохранить в рабочей папке исходные JSON из
   `data/levels` и эталон для каждого — байты, которые записывает текущий редактор за один цикл загрузки и
   сохранения. В набор включить примеры прежних секций тумана и солнца для R9.5. Свой редактор на своём
@@ -4467,6 +4667,75 @@ Debug, реестр настроек и таблица графики, вкла�
   проходят без правки под новое поведение. Готово для каждого: повторить процедуру R9.0
   на свежих копиях тех же исходников. Сохранённые байты каждого уровня должны совпасть с его эталоном R9.0;
   при расхождении показать уровень и diff. Дополнительно — картинка и `check_gate.py`.
+
+  **Подшаги R9 (2026-11-26).** Байты сохранения проверяют сторону ЗАПИСИ; сторону ЧТЕНИЯ (что рантайм получил
+  из секции) они не видят. Поэтому R9.0 снимает два эталона на каждый уровень `data/levels` (16 файлов): байты
+  цикла «открыть копию — сохранить» в своём редакторе и дамп реестра настроек после загрузки уровня
+  (`--settings-dump`, ~900 значений: туман, небо, облака, bloom, экспозиция, время суток, ...) эталонным
+  бинарником, с `--wind-freeze --time-freeze`; пол дампа — эталон дважды. Каждый подшаг R9 повторяет оба и
+  сверяет. **R9.0a** — блок `level` в `get_readouts` и тест. **R9.0b** — эталоны. **R9.1** — тип «таблица
+  ключей»: запись (ключ, вид значения, член структуры, диапазон чтения, подпись, шаг, подсказка, группа) и
+  обход «прочитать секцию» / «записать секцию»; записи, которые не укладываются в вид (массив-цвет с проверкой
+  длины, умолчание не из структуры, свой зажим), — запись со своей парой функций, а не исключение из таблицы.
+  `VesselKey` — частный случай (те же имена полей, гейт `--physics-gate=vessel` и `--set vessel.*`). **R9.2** —
+  семь секций окружения на таблицах, по одной, от малых к большим. **R9.3** — ключи объектов. **R9.4** — один путь
+  применения. **R9.5** — миграции. **R9.6** — остальные `value()`.
+
+  **Сделано R9.0 (2026-11-26).** (a) MCP: `LevelHost::Describe()` → `{path, loading, dirty}` (нормализованный путь
+  документа, `pendingLevelAction_` не пуст, `IsDirty`), `get_readouts` добавляет блок `level`, когда редактор
+  зарегистрировал хост (`WithLevelBlock` в `EditorMcpServer.cpp`; без хоста — ответ приложения как был, прежняя
+  проверка гейта `{"fake":true}` не тронута). Тест в `TestMcpDrivesTheSameRoad`: подставной хост, блок с его
+  значениями. Контроль: блок не добавляется — FAIL «get_readouts carries the open level ...» (первая попытка
+  контроля была неудачной: поломка шла дальше к нулевому хосту, тест упал AV, а не проверкой — переделана). По пути:
+  `intent_regression.cpp` упёрся в лимит секций объектника (C1128) — проекту добавлен `/bigobj`. (b) Эталоны
+  (`r90_baseline.py` рабочей папки): 16 уровней `data/levels` скопированы, каждая копия открыта MCP `open_level`
+  по своему абсолютному пути, ожидание `level.path` = копия и `loading` false, `save_level`, путь в ответе сверен;
+  свой редактор Release_Editor на порту 8142, `imgui.ini` и `editor_state.json` возвращены. Байт в байт
+  сохраняется только `wind_test`; остальные — миграции редактора при сохранении (`r90_diff.py`):
+  `directionalLight` → `timeOfDay` (с полным набором ключей, `WithAllKeys`) у 15 уровней, верхние `cameraExposure`
+  / `colorPipeline` / `gtao` → `postProcess`, `postProcess/atmosphere` → `postProcess/heightFog` (demo, demo_bckp,
+  occlusion_test, fog_spot_test), `ocean/render` получает недостающие ключи (до 52), у объектов меняются
+  `position` / `scale` (запись float — 4 уровня) и появляется `rotationDeg`. Дампы реестра после загрузки каждого
+  уровня (`--settings-dump --wind-freeze=3 --time-freeze`): эталон дважды — 0 отличий (дамп детерминирован),
+  эталон и текущая сборка (R4) — 0. Секции в дампе: gtao 20, fog 43, sky 42, cloud 71, bloom 57, exposure 52,
+  color 13, tod 93 имени. **Сторону записи секций цикл сохранения НЕ проверяет**: документ редактора держит JSON
+  секции как в файле и пишет его обратно (`EditorSceneDocument::...`, `addSingletonAlways`), `ToJson` секции зовёт
+  только `BuildGtaoObject` и `WithAllKeys` времени суток. Поэтому R9.2 проверяется ещё и «золотым» тестом (R9.1).
+
+  **Сделано R9.1 (2026-11-26).** `core/schema/KeyTable.h`: `schema::Key<S>` (ключ, вид — Bool, Int, UInt, Float,
+  Float3, FloatArray3, String, Section, Custom; член структуры; `Clamp`, `AtLeast`, `Tolerant` — чтение без броска
+  на чужой тип, как `Number` / `Flag` `DirectionalLightJson`; подпись, шаг, подсказка, группа), `schema::Table<S>`
+  (`Read` = `value()` по ключам в порядке таблицы, затем `finish`; `Write`; `Find`), `Field`, `Nested`, `Custom`.
+  Тест `TestKeyTableReadsAsTheHandCodeDid` (отсутствующий ключ, зажим, порог, цвет только массивом из трёх,
+  `float[3]`, терпимое чтение, вложенная таблица, Custom, бросок на чужой тип, не-объект, запись и обратное
+  чтение). Контроль: зажим Int выключен — FAIL «a clamped key clamps into its range»; файл возвращён байт в байт.
+  «Золотой» тест `TestEnvironmentSectionsWriteAsBefore`: для восьми записей (gtao, heightFog, skyAtmosphere,
+  volumetricCloud, bloom, cameraExposure, colorPipeline, timeOfDay) — запись умолчаний и запись после чтения секции,
+  где каждый ключ сдвинут с умолчания (+0.37 / +1, флаги перевёрнуты, массивы поэлементно); строки сняты старым
+  кодом (`TC_SECTION_GOLDEN=print`) и вшиты в тест. `VesselKey` на таблицу не переведён: блок `vessel` объекта —
+  ключи объекта, R9.3.
+
+  **Сделано R9.2 (2026-11-26).** Семь `*SettingsJson.h` читают и пишут через свою таблицу `Keys()`:
+  GTAO (22 строки), туман (33, цвета — Float3), облака (62, `enabled` — Custom: умолчание true, не структуры),
+  bloom (54: зажимы, `AtLeast` для `std::max(lo, v)`, два `float[3]`), небо (13: `enabled` → режим, среда —
+  ОДНА Custom-строка на семь ключей, потому что `SetSkyMedium` считает коэффициенты из всех трёх масштабов и
+  оттенков вместе; альбедо и два числа UE — в четвёртых компонентах параметров), камера (30 строк + `finish`:
+  миграция `manualEv100`, обмен перевёрнутых диапазонов, зажимы — ручной код делал их между чтениями, каждый
+  трогает только уже прочитанное) и цвет (18, кривая — по имени), время суток (26 строк верхнего уровня, все
+  `Tolerant` — как `Number` / `Flag`, и пять вложенных таблиц: луна 22, ночное небо 7, фонари 6, туман 7,
+  сумерки 11; объект `sun` — `DirectionalLight`, читается `ApplySun` рядом с таблицей). `FromDirectionalLight`,
+  `WithAllKeys`, `MigrateLegacyLocalExposure`, `ApplySun` не менялись (R9.5). Строки таблиц для простых секций
+  сделаны скриптом из ручного кода (`r92_conv.py`: `value()`, `std::clamp(value())`, `std::max(lo, value())`,
+  цветовая лямбда, цикл `float[3]`; он же сверил ключи записи с ключами чтения), остальные — руками. Отличия от
+  ручного кода только там, где их не достать: секция-не-объект теперь не читается и у неба, облаков, времени суток
+  (ручной код бросал бы `type_error` из `value()`; все вызывающие передают только объекты). Проверено: «золотой»
+  тест PASS на всех восьми записях (контроль: строка `skyIntensity` убрана из таблицы GTAO — FAIL «section gtao
+  writes as its hand code did»; файл возвращён байт в байт); дампы реестра после загрузки 16 уровней — 0
+  отличий от эталона R9.0 (сторона чтения); цикл «открыть копию — сохранить» — 16 из 16 уровней байт в байт
+  равны эталону; три конфигурации, `check_*.py` 0, `settings_names` 0, `check_gate.py` PASS, CRLF, обе
+  регрессии PASS. Картинку не снимал: значения всех секций после загрузки совпали по дампу, кадр из них же. По
+  пути: Git Bash превращает аргумент, начинающийся с `//`, в `/` — разрезы скриптом по маркеру-комментарию
+  съели по слешу в трёх комментариях; найдено сборкой, исправлено.
 - **R6. `Scene` → `World` + `RenderScene`** (`Scene.cpp` — 4080 строк). **R6.1**: `ShadowViewPlanner` в
   `rendering/shadows` (каскады, клипмап, SDSM-кэш, ёмкость локальных видов). **R6.2**: игровое из `Scene` —
   `RaceRef()` (24 вызова в 5 файлах), `SyncRaceBoats`, камеры судна и зрителя — в `game::`, владеет сессия.
@@ -4582,10 +4851,15 @@ Debug, реестр настроек и таблица графики, вкла�
 Вопросы раздела 8 под прежними номерами и новые. Ответ записывается сюда с датой.
 
 - **В1.** Глубина: остановиться на волнах 0-2 или идти в большие разрезы (волна 3)?
+  **Ответ (2026-11-26): вся волна 3** — R4 → R9 → R6 → R13 → R7 → R8 → R14 → R10 → R11.
 - **В2.** R7: объект перестаёт быть одним классом, или хватит `RenderState` и таблиц сбоку? R6: остановиться
   после R6.2?
+  **Ответ (2026-11-26): R6 и R7 целиком** — `Scene` делится на `World` и `RenderScene` (R6.3, R6.4), объект —
+  набор компонентов (R7.1-R7.3 и дальше).
 - **В3.** R11: библиотеки по слоям или один exe и храповик include?
+  **Ответ (2026-11-26): один exe** и храповик include (`check_layers.py`); библиотек по слоям нет.
 - **В4.** Бэкенды `TaskSystem` (TBB, Enki): удалить или оставить как A/B?
+  **Ответ (2026-11-26): удалить** оба.
 - **В5.** С чего начать волну 2: с настроек (R2) или с циклов (R1)? В таблице 11.1 — с циклов.
 - **В6.** Исключение в задаче: Fatal с дампом для задач кадра и «провалена» для фоновых (предложение) — или иначе?
   **Ответ (2026-11-24): предложение.** Задача кадра (пасс графа рендера) — Fatal с именем задачи и дамп; фоновая —
@@ -4597,6 +4871,7 @@ Debug, реестр настроек и таблица графики, вкла�
 - **В8.** Сборка с ключом отвергает незашифрованные пакеты (сделано 11-18). Нужны ли моды — и тогда подпись?
 - **В9.** MCP включён по умолчанию — оставить?
 - **В10.** Панель редактора, которая бросила: закрыть панель и жить дальше (R10.2) или падать с дампом, как сейчас?
+  **Ответ (2026-11-26): закрыть панель и жить** — R10.2 делается.
 - **В11 (2026-11-26, R2.n).** У сохраняемой графики два набора зажимов: `Sanitize` загрузки `user_settings.json`
   (`GraphicsSettings.cpp`) и строки `--set` реестра — местами разные (`renderScale` 0.1-1 / 0.25-1, `giRays`
   кратно 16 / без округления, `ssrUe.numSteps` кратно 4, подстановка вместо NaN только у загрузки). Один дескриптор

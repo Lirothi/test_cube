@@ -1,8 +1,8 @@
 #include "rendering/core/DlssHandler.h"
 #include "core/logging/Log.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/TextureCreate.h"
 
 #include <array>
 #include <cmath>

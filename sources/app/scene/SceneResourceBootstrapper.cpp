@@ -792,7 +792,7 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         matLensFlare_ = mm->GetOrCreateGraphics(renderer, gd);
         // bloom.ghostMeshShader: the same scatter as a mesh shader (lens_flare.hlsl MSMain), only the bright tiles' quads.
-        if (renderer->SupportsMeshShaders())
+        if (renderer->RhiDevice().SupportsMeshShaders())
         {
             gd.msEntry = "MSMain";
             matLensFlareMs_ = mm->GetOrCreateGraphics(renderer, gd);

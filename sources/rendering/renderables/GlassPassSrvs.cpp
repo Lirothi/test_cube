@@ -40,7 +40,8 @@ bool GatherGlassPassSrvs(Renderer* renderer, LightManager& lights, Skybox* sky, 
 
     // t9/t10 = VSM page table + pool (Step 21), set by Pass_Translucent (valid once a level is
     // loaded). Skip the draws if not set (the root sig binds them; a null staged SRV is invalid).
-    if (renderer->GetVsmPageTableSrv().ptr == 0 || renderer->GetVsmPoolSrv().ptr == 0)
+    const DirectPassInputs& direct = renderer->DirectInputs(); // R4.4
+    if (direct.vsmPageTable.ptr == 0 || direct.vsmPool.ptr == 0)
     {
         return false;
     }
@@ -56,7 +57,7 @@ bool GatherGlassPassSrvs(Renderer* renderer, LightManager& lights, Skybox* sky, 
     out[GLASS_T_SCENE_OPAQUE] = sceneColorSrv;
     // The SUN atlas -- DEPTH normally, EVSM4 MOMENTS when S16 is on. glass.hlsl reads whichever through csm_sample,
     // which decides from the partition's exponents.
-    out[GLASS_T_SHADOW_ATLAS] = renderer->GetSdsmMomentsSrv().ptr != 0 ? renderer->GetSdsmMomentsSrv() : deferred.shadowSRV;
+    out[GLASS_T_SHADOW_ATLAS] = direct.sdsmMoments.ptr != 0 ? direct.sdsmMoments : deferred.shadowSRV;
     out[GLASS_T_SPOT_SHADOW] = deferred.spotShadowSRV;
     out[GLASS_T_SKYBOX] = skyDisplaySrv;
     out[GLASS_T_POINT_LIGHTS] = lights.GetPointLightSrv(renderer->GetCurrentFrameIndex());
@@ -64,20 +65,20 @@ bool GatherGlassPassSrvs(Renderer* renderer, LightManager& lights, Skybox* sky, 
     out[GLASS_T_NORMAL_MAP] = D3D12_CPU_DESCRIPTOR_HANDLE{}; // the draw's
     out[GLASS_T_REFLECTION] = glassReflSrv;
     out[GLASS_T_POINT_SHADOW] = deferred.pointShadowSRV;  // omnidirectional point shadow cube (B3)
-    out[GLASS_T_VSM_PAGE_TABLE] = renderer->GetVsmPageTableSrv();
-    out[GLASS_T_VSM_POOL] = renderer->GetVsmPoolSrv();
+    out[GLASS_T_VSM_PAGE_TABLE] = direct.vsmPageTable;
+    out[GLASS_T_VSM_POOL] = direct.vsmPool;
     out[GLASS_T_SKY_SPECULAR] = skySpecSrv;              // P5 prefiltered sky
     // The volumetric fog's integrated volume (plan A5); Main_Transparent declares it PS-readable every frame, the shader
     // gates on fogVolumeParams.x.
     out[GLASS_T_FOG_VOLUME] = deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : sceneColorSrv;
     // S15, this frame's SDSM partitions (the dummy buffer in Legacy and VSM -- the shader gates on csmSdsmParams.x, which
     // is 0 there).
-    out[GLASS_T_SDSM_PARTITIONS] = renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv()
+    out[GLASS_T_SDSM_PARTITIONS] = direct.sdsmPartitions.ptr != 0 ? direct.sdsmPartitions
                                                                             : renderer->VsmDummyBufferSrv();
     // Plan S7, the local shadow cache pool (a light with a negative atlas page reads there); the spot atlas, an array of
     // the same kind, stands in while there is no pool.
     out[GLASS_T_LOCAL_SHADOW_POOL] =
-        renderer->GetLocalShadowPoolSrv().ptr != 0 ? renderer->GetLocalShadowPoolSrv() : deferred.spotShadowSRV;
+        direct.localShadowPool.ptr != 0 ? direct.localShadowPool : deferred.spotShadowSRV;
     return true;
 }
 } // namespace render

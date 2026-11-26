@@ -1,6 +1,7 @@
 #pragma once
 
 #include "third_party/json/json.hpp"
+#include "core/schema/KeyTable.h" // R9.2: the section's table of keys
 
 #include "rendering/lighting/SkyAtmosphereSettings.h"
 
@@ -34,69 +35,91 @@ inline void ReadTint(const nlohmann::json& j, const char* key, float out[3])
     }
 }
 
+// Architecture plan R9.2: the section's table of keys (core/schema/KeyTable.h). Most of the sky is not one member per
+// key: `enabled` is the mode, the medium's three scales and three tints become the scattering coefficients together
+// (SetSkyMedium -- one row reads and writes all seven), the ground albedo and the two UE numbers live in the parameters'
+// fourth components. PRESENCE IS NOT THE SWITCH, `enabled` IS -- but the section existing at all is what makes the
+// level procedural, exactly as adding a SkyAtmosphere actor is in UE. A level with no section never reaches here and
+// stays on its cubemap.
+inline const schema::Table<SkyAtmosphereSettings>& Keys()
+{
+    using S = SkyAtmosphereSettings;
+    using J = nlohmann::json;
+    static const schema::Table<S> table{ {
+        schema::Custom<S>("enabled", [](const J& j, S& s) { s.mode = j.value("enabled", true) ? 1u : 0u; },
+                          [](J& j, const S& s) { j["enabled"] = s.mode != 0u; }),
+        schema::Field("luminanceScale", &S::luminanceScale).Clamp(0.0f, 10.0f),
+        schema::Field("skyLuminanceFactor", &S::skyLuminanceFactor).Clamp(0.0f, 10.0f),
+        schema::Field("aerialStartDepthMetres", &S::aerialStartDepthMetres).Clamp(0.0f, 100000.0f),
+        schema::Field("aerialViewDistanceScale", &S::aerialViewDistanceScale).Clamp(0.01f, 100.0f),
+        schema::Field("environmentLighting", &S::environmentLighting),
+        schema::Field("aerialPerspective", &S::aerialPerspective),
+        schema::Custom<S>("heightFogContribution",
+            [](const J& j, S& s) { s.heightFogContribution = std::clamp(j.value("heightFogContribution", 1.0f), 0.0f, 10.0f); },
+            [](J& j, const S& s) { j["heightFogContribution"] = s.heightFogContribution; }),
+        // rayleighScale, mieScale, ozoneScale, rayleighTint, mieTint, ozoneTint, mieAbsorptionScale: the medium.
+        schema::Custom<S>("medium",
+            [](const J& j, S& s) {
+                const float rayleigh = std::clamp(j.value("rayleighScale", 1.0f), 0.0f, 10.0f);
+                const float mie = std::clamp(j.value("mieScale", 1.0f), 0.0f, 10.0f);
+                const float ozone = std::clamp(j.value("ozoneScale", 1.0f), 0.0f, 10.0f);
+                // The medium's colours over the x Earth scales (absent = Earth's): UE's colour / its default, per channel.
+                for (unsigned c = 0; c < 3; ++c) { s.rayleighTint[c] = s.mieTint[c] = s.ozoneTint[c] = 1.0f; }
+                ReadTint(j, "rayleighTint", s.rayleighTint);
+                ReadTint(j, "mieTint", s.mieTint);
+                ReadTint(j, "ozoneTint", s.ozoneTint);
+                const float absorption = j.value("mieAbsorptionScale", -1.0f); // < 0 (or absent) = the Mie scale's
+                s.mieAbsorptionScale = absorption < 0.0f ? -1.0f : std::min(absorption, 10.0f);
+                SetSkyMedium(s, rayleigh, mie, ozone);
+            },
+            [](J& j, const S& s) {
+                const SkyAtmosphereParameters earth{};
+                j["rayleighScale"] = SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint);
+                j["mieScale"] = SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint);
+                j["ozoneScale"] = SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint);
+                const auto tint = [](const float t[3]) { return J::array({t[0], t[1], t[2]}); };
+                j["rayleighTint"] = tint(s.rayleighTint);
+                j["mieTint"] = tint(s.mieTint);
+                j["ozoneTint"] = tint(s.ozoneTint);
+                if (s.mieAbsorptionScale >= 0.0f) { j["mieAbsorptionScale"] = s.mieAbsorptionScale; }
+            }),
+        schema::Custom<S>("groundAlbedo",
+            [](const J& j, S& s) {
+                const SkyAtmosphereParameters earth{};
+                for (unsigned i = 0; i < 3; ++i)
+                {
+                    s.parameters.GroundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.GroundAlbedo[0]), 0.0f, 1.0f);
+                }
+            },
+            [](J& j, const S& s) { j["groundAlbedo"] = s.parameters.GroundAlbedo[0]; }),
+        schema::Custom<S>("multiScatteringFactor",
+            [](const J& j, S& s) {
+                const SkyAtmosphereParameters earth{};
+                s.parameters.GroundAlbedo[3] = std::clamp(j.value("multiScatteringFactor", earth.GroundAlbedo[3]), 0.0f, 10.0f);
+            },
+            [](J& j, const S& s) { j["multiScatteringFactor"] = s.parameters.GroundAlbedo[3]; }),
+        // UE's MieAnisotropy, their range and default: how forward-peaked the Mie phase is, which is
+        // what decides the size and hardness of the halo around the sun rather than how much haze
+        // there is. Lives in mieScattering.w, which `mieScale` deliberately does not touch.
+        schema::Custom<S>("mieAnisotropy",
+            [](const J& j, S& s) {
+                const SkyAtmosphereParameters earth{};
+                s.parameters.MieScattering[3] = std::clamp(j.value("mieAnisotropy", earth.MieScattering[3]), 0.0f, 0.999f);
+            },
+            [](J& j, const S& s) { j["mieAnisotropy"] = s.parameters.MieScattering[3]; }),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
 {
-    // PRESENCE IS NOT THE SWITCH, `enabled` IS -- but the section existing at all is what makes the
-    // level procedural, exactly as adding a SkyAtmosphere actor is in UE. A level with no section
-    // never reaches here and stays on its cubemap.
-    s.mode = j.value("enabled", true) ? 1u : 0u;
-    s.luminanceScale = std::clamp(j.value("luminanceScale", s.luminanceScale), 0.0f, 10.0f);
-    s.skyLuminanceFactor = std::clamp(j.value("skyLuminanceFactor", s.skyLuminanceFactor), 0.0f, 10.0f);
-    s.aerialStartDepthMetres = std::clamp(j.value("aerialStartDepthMetres", s.aerialStartDepthMetres), 0.0f, 100000.0f);
-    s.aerialViewDistanceScale = std::clamp(j.value("aerialViewDistanceScale", s.aerialViewDistanceScale), 0.01f, 100.0f);
-    s.environmentLighting = j.value("environmentLighting", s.environmentLighting);
-    s.aerialPerspective = j.value("aerialPerspective", s.aerialPerspective);
-    s.heightFogContribution = std::clamp(j.value("heightFogContribution", 1.0f), 0.0f, 10.0f);
-
-    const SkyAtmosphereParameters earth{};
-    const float rayleigh = std::clamp(j.value("rayleighScale", 1.0f), 0.0f, 10.0f);
-    const float mie = std::clamp(j.value("mieScale", 1.0f), 0.0f, 10.0f);
-    const float ozone = std::clamp(j.value("ozoneScale", 1.0f), 0.0f, 10.0f);
-    // The medium's colours over the x Earth scales (absent = Earth's): UE's colour / its default, per channel.
-    for (unsigned c = 0; c < 3; ++c) { s.rayleighTint[c] = s.mieTint[c] = s.ozoneTint[c] = 1.0f; }
-    ReadTint(j, "rayleighTint", s.rayleighTint);
-    ReadTint(j, "mieTint", s.mieTint);
-    ReadTint(j, "ozoneTint", s.ozoneTint);
-    const float absorption = j.value("mieAbsorptionScale", -1.0f); // < 0 (or absent) = the Mie scale's
-    s.mieAbsorptionScale = absorption < 0.0f ? -1.0f : std::min(absorption, 10.0f);
-    SetSkyMedium(s, rayleigh, mie, ozone);
-    for (unsigned i = 0; i < 3; ++i)
-    {
-        s.parameters.GroundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.GroundAlbedo[0]), 0.0f, 1.0f);
-    }
-    s.parameters.GroundAlbedo[3] =
-        std::clamp(j.value("multiScatteringFactor", earth.GroundAlbedo[3]), 0.0f, 10.0f);
-    // UE's MieAnisotropy, their range and default: how forward-peaked the Mie phase is, which is
-    // what decides the size and hardness of the halo around the sun rather than how much haze
-    // there is. Lives in mieScattering.w, which `mieScale` deliberately does not touch.
-    s.parameters.MieScattering[3] =
-        std::clamp(j.value("mieAnisotropy", earth.MieScattering[3]), 0.0f, 0.999f);
+    Keys().Read(j, s);
 }
 
 inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
 {
-    const SkyAtmosphereParameters earth{};
-    nlohmann::json j = nlohmann::json::object();
-    j["enabled"] = s.mode != 0u;
-    j["luminanceScale"] = s.luminanceScale;
-    j["skyLuminanceFactor"] = s.skyLuminanceFactor;
-    j["aerialStartDepthMetres"] = s.aerialStartDepthMetres;
-    j["aerialViewDistanceScale"] = s.aerialViewDistanceScale;
-    j["environmentLighting"] = s.environmentLighting;
-    j["aerialPerspective"] = s.aerialPerspective;
-    j["heightFogContribution"] = s.heightFogContribution;
-    j["rayleighScale"] = SkyMediumScaleOf(s.parameters.RayleighScattering, earth.RayleighScattering, s.rayleighTint);
-    j["mieScale"] = SkyMediumScaleOf(s.parameters.MieScattering, earth.MieScattering, s.mieTint);
-    j["ozoneScale"] = SkyMediumScaleOf(s.parameters.AbsorptionExtinction, earth.AbsorptionExtinction, s.ozoneTint);
-    const auto tint = [](const float t[3]) { return nlohmann::json::array({t[0], t[1], t[2]}); };
-    j["rayleighTint"] = tint(s.rayleighTint);
-    j["mieTint"] = tint(s.mieTint);
-    j["ozoneTint"] = tint(s.ozoneTint);
-    if (s.mieAbsorptionScale >= 0.0f) { j["mieAbsorptionScale"] = s.mieAbsorptionScale; }
-    j["groundAlbedo"] = s.parameters.GroundAlbedo[0];
-    j["multiScatteringFactor"] = s.parameters.GroundAlbedo[3];
-    j["mieAnisotropy"] = s.parameters.MieScattering[3];
-    return j;
+    return Keys().Write(s);
 }
 
 } // namespace SkyAtmosphereSettingsJson
+

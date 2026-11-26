@@ -2812,6 +2812,15 @@ bool EditorController::McpLevelHost::Open(const std::string& path, bool discardC
     return true;
 }
 
+editormcp::LevelHost::Status EditorController::McpLevelHost::Describe()
+{
+    Status status;
+    status.path = NormalizeLevelPath(owner_.document_.LevelPath());
+    status.loading = owner_.pendingLevelAction_ != PendingLevelAction::None; // cleared when the request completes
+    status.dirty = owner_.document_.IsDirty();
+    return status;
+}
+
 void EditorController::UpdateThumbnailEnvironment(Scene& scene)
 {
     const Skybox* skybox = scene.GetSkybox();

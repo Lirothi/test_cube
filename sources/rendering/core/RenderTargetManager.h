@@ -4,8 +4,7 @@
 #include <array>
 #include <wrl/client.h>
 
-#include "rendering/lighting/LightManager.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/core/RenderConstants.h"
 #include "core/math/Math.h"
 

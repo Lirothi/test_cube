@@ -101,7 +101,7 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   `object #0 model matrix`); coverage via `--scene-stress=150 --rt-audit` or an editor run driven by an MCP script. A
   gate that touches the frame's order runs with `--set=frame.renderThread:0` too.
 - A resource that frames in flight read is freed or recreated only at a GPU-idle point, after a wait, or through
-  `render::deferred::Retire` (`rendering/core/DeferredRelease.h`, released once its frame NUMBER completed;
+  `render::deferred::Retire` (`rhi/DeferredRelease.h`, released once its frame NUMBER completed;
   `--retire-selftest`): a ring buffer released at once hung the GPU. For a lifetime alone, the service, not a
   `WaitForPreviousFrame` (each counted by caller: `gpu idle waits:` every 5 s, scope `Renderer: GPU idle wait`).
 - A GPU copy is done by its frame NUMBER (`Renderer::IsFrameNumberComplete`), never by its slot.

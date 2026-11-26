@@ -1,8 +1,8 @@
 #include "ocean/OceanSimulation.h"
 #include "core/memory/MemScope.h"
 #include "core/vfs/Vfs.h" // the ocean's Save goes where the game keeps what it saves
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/TextureCreate.h"
 
 #include <cassert>
 #include <algorithm>
@@ -15,16 +15,17 @@
 #include "core/Helpers.h"
 #include "core/diagnostics/DiagPaths.h"
 #include "materials/Material.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContextPool.h"
-#include "rendering/core/UploadManager.h"
+#include "rhi/UploadManager.h"
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSpectrum.h"
 #include "rendering/view/Camera.h"
+#include "materials/Texture2D.h"
 
 using Microsoft::WRL::ComPtr;
 

@@ -9,7 +9,7 @@
 #include <string>
 
 #include "core/memory/MemTags.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/streaming/DdsMipTable.h"
 
 class Renderer;

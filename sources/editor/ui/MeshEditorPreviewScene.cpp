@@ -1,4 +1,5 @@
 #include "editor/ui/MeshEditorPreviewScene.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -267,7 +268,7 @@ struct MeshEditorPreviewScene::Impl
             const D3D12_RESOURCE_DESC desc = targets[frameIndex]->GetDesc();
             if (desc.Width != renderWidth || desc.Height != renderHeight)
             {
-                renderer.ReleaseImGuiTextureDescriptors(targets[frameIndex].Get());
+                renderer.ImGui().ReleaseTextureDescriptors(targets[frameIndex].Get());
                 targets[frameIndex].Reset();
                 cameraValid[frameIndex] = false;
             }
@@ -372,7 +373,7 @@ void MeshEditorPreviewScene::Reset(Renderer& renderer)
     {
         if (impl_->targets[frame])
         {
-            renderer.ReleaseImGuiTextureDescriptors(impl_->targets[frame].Get());
+            renderer.ImGui().ReleaseTextureDescriptors(impl_->targets[frame].Get());
             impl_->targets[frame].Reset();
         }
     }
@@ -529,8 +530,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srv.Texture2D.MipLevels = 1;
-    renderer.MarkImGuiTextureShaderReadable(impl_->targets[frameIndex].Get());
-    view.texture = renderer.CreateImGuiTextureId(impl_->targets[frameIndex].Get(), srv);
+    renderer.ImGui().MarkTextureShaderReadable(impl_->targets[frameIndex].Get());
+    view.texture = renderer.ImGui().CreateTextureId(impl_->targets[frameIndex].Get(), srv);
     view.state = view.texture != ImTextureID_Invalid ? State::Ready : State::Loading;
     view.viewProj = impl_->renderedViewProj[frameIndex];
     view.viewMatrix = impl_->renderedView[frameIndex];

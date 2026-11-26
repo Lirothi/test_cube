@@ -7,10 +7,12 @@
 #include "core/logging/Log.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
+#include "materials/Texture2D.h"
+#include "rendering/descriptors/SamplerManager.h"
 
 namespace render
 {

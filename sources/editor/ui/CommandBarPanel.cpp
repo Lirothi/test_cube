@@ -15,7 +15,7 @@
 #include "editor/intent/EditorIntentSource.h"
 #include "editor/intent/EditorRepoSearch.h"
 #include "core/task/TaskSystem.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/MemoryReport.h"
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/GrammarIntentSource.h"
 #include "editor/ui/ImGuiTextInput.h"

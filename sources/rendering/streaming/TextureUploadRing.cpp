@@ -1,8 +1,8 @@
 #include "rendering/streaming/TextureUploadRing.h"
 
 #include "core/logging/Log.h"
-#include "rendering/core/DeferredRelease.h" // an entry a copy read goes once its frame completed (render::deferred)
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h" // an entry a copy read goes once its frame completed (render::deferred)
+#include "rhi/GpuAlloc.h"
 
 namespace streaming {
 

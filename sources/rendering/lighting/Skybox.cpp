@@ -2,11 +2,11 @@
 #include "rendering/lighting/Skybox.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
-#include "rendering/core/UploadManager.h"
-#include "rendering/core/FrameResource.h"
+#include "rhi/UploadManager.h"
+#include "rhi/FrameResource.h"
 #include "rendering/meshes/MeshPrimitives.h"
 #include "rendering/view/Camera.h"
 

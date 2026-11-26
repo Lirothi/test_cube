@@ -5,9 +5,9 @@
 
 #include "rendering/view/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/UploadManager.h"
+#include "rhi/UploadManager.h"
 
 using namespace DirectX;
 using Microsoft::WRL::ComPtr;

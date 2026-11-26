@@ -24,7 +24,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/visibility/OcclusionHistory.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/vis_test.h" // HzbTestConstants's fields, once (R5.3)

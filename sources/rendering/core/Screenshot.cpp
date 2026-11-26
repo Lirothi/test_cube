@@ -1,6 +1,6 @@
 #include "rendering/core/Screenshot.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/GpuAlloc.h"
 #include "core/logging/Log.h"
 
 #include <algorithm>

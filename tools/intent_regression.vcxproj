@@ -25,7 +25,7 @@
            the compiler encodes them to the system codepage, which has no Cyrillic. It only
            worked before because this file has no BOM and the compiler was reading its UTF-8
            bytes as codepage 1252 and writing them straight back. -->
-      <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/utf-8 /bigobj %(AdditionalOptions)</AdditionalOptions>
       <LanguageStandard>stdcpp20</LanguageStandard><Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling>
       <PreprocessorDefinitions>_DEBUG;WITH_EDITOR=1;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -47,9 +47,18 @@
     <ReadLinesFromFile File="$(Repo)test_cube\x64\Debug\test_cube.tlog\link.command.1.tlog">
       <Output TaskParameter="Lines" ItemName="EngineLinkLog" />
     </ReadLinesFromFile>
+    <!-- The LAST link entry only: a link whose input set changed (an object renamed or removed, R4.5c) leaves its
+         old entry beside the new one, and both together link a duplicate resource and duplicate objects. -->
     <ItemGroup>
-      <Object Include="$([System.String]::Copy('%(EngineLinkLog.Identity)').Substring(1).Split('|'))"
-              Condition="$([System.String]::Copy('%(EngineLinkLog.Identity)').StartsWith('^'))" />
+      <EngineLinkEntry Include="@(EngineLinkLog)" Condition="$([System.String]::Copy('%(EngineLinkLog.Identity)').StartsWith('^'))" />
+    </ItemGroup>
+    <PropertyGroup>
+      <EngineLinkInputs>%(EngineLinkEntry.Identity)</EngineLinkInputs>
+    </PropertyGroup>
+    <Warning Condition="'@(EngineLinkEntry->Count())' &gt; '1'"
+             Text="test_cube's Debug link tlog holds @(EngineLinkEntry->Count()) link entries; linking the newest (last) one" />
+    <ItemGroup>
+      <Object Include="$(EngineLinkInputs.Substring(1).Split('|'))" />
     </ItemGroup>
   </Target>
 </Project>

@@ -1,5 +1,6 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #include "core/logging/Log.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -2883,9 +2884,9 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
-        renderer.MarkImGuiTextureShaderReadable(iconAtlas_->GetResource());
+        renderer.ImGui().MarkTextureShaderReadable(iconAtlas_->GetResource());
         icons.texture =
-            renderer.CreateImGuiTextureId(iconAtlas_->GetResource(), srvDesc);
+            renderer.ImGui().CreateTextureId(iconAtlas_->GetResource(), srvDesc);
     }
 
     ImGui::SetNextWindowSize(ImVec2(760.0f, 480.0f), ImGuiCond_FirstUseEver);

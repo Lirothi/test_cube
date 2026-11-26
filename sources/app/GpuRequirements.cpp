@@ -36,7 +36,7 @@ RequirementCheck CheckRequirements()
     using Microsoft::WRL::ComPtr;
     RequirementCheck check;
     ComPtr<ID3D12Device> device;
-    // The adapter the renderer takes (GraphicsDevice: D3D12CreateDevice(nullptr, ...)): the default one.
+    // The adapter the renderer takes (rhi::Device: D3D12CreateDevice(nullptr, ...)): the default one.
     if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))) || !device)
     {
         check.missing.push_back("Direct3D 12 (no device could be created on the default graphics adapter)");

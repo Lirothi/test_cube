@@ -1,5 +1,5 @@
 #pragma once
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include <vector>
 #include <mutex>
 #include <memory>

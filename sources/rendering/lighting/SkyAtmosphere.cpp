@@ -10,10 +10,10 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/core/RenderGraph.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/sky_lut_debug.h" // the debug view's Constants: the fields, once (R5.3)

@@ -56,6 +56,7 @@
 #include "rendering/meshes/Mesh.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/GBufferRenderable.h" // plan L: setOnAt offers a mesh's glow only when it has one
+#include "materials/MaterialDataManager.h"
 
 // Works out what a setting BECOMES: an absolute `value`, or `scale` times what it is now.
 // Exactly one of the two, because "make the fog thicker" and "set the fog to 0.02" are

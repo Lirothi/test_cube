@@ -52,6 +52,7 @@
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
 #include "app/scene/SceneRenderInternal.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 using namespace scene_internal;
 
 // ---- Pass_DebugPreview ----
@@ -692,7 +693,7 @@ void SceneRenderer::Pass_Overlay(Renderer* renderer, RenderGraphPassContext ctx,
             tm->Draw(renderer, t.cl);
         }
 
-        renderer->RenderImGui(t.cl);
+        renderer->ImGui().Render(t.cl);
         renderer->RestoreGraphicsStateAfterExternalDraw(t.cl);
     }
 

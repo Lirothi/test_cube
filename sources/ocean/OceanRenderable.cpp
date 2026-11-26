@@ -19,13 +19,13 @@
 #include "rendering/lighting/DirectionalLight.h"
 #include "core/Helpers.h" // ThrowIfFailed
 #include "materials/Material.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
-#include "rendering/core/DeferredRelease.h" // R16.10: the water mask's old crossings
+#include "rhi/DeferredRelease.h" // R16.10: the water mask's old crossings
 #include "core/logging/Log.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
@@ -1076,12 +1076,13 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // glass reads the same way (GlassPassSrvs): the sun atlas (EVSM moments under S16), the VSM page table and pool,
     // the SDSM partitions. A buffer slot falls back to the inert dummy BUFFER, never a texture; the shader reads the
     // page table and pool only under vsmParams.x and the partitions only under csmSdsmParams.x.
+    const render::DirectPassInputs& direct = renderer->DirectInputs(); // R4.4
     const D3D12_CPU_DESCRIPTOR_HANDLE sunAtlasSrv =
-        renderer->GetSdsmMomentsSrv().ptr != 0 ? renderer->GetSdsmMomentsSrv() : deferred.shadowSRV;
+        direct.sdsmMoments.ptr != 0 ? direct.sdsmMoments : deferred.shadowSRV;
     setSrv(OCEAN_T_SHADOW_ATLAS, sunAtlasSrv.ptr != 0 ? sunAtlasSrv : fallbackSrv);
-    setSrv(OCEAN_T_VSM_PAGE_TABLE, renderer->GetVsmPageTableSrv().ptr != 0 ? renderer->GetVsmPageTableSrv() : renderer->VsmDummyBufferSrv());
-    setSrv(OCEAN_T_VSM_POOL, renderer->GetVsmPoolSrv().ptr != 0 ? renderer->GetVsmPoolSrv() : fallbackSrv);
-    setSrv(OCEAN_T_SDSM_PARTITIONS, renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv() : renderer->VsmDummyBufferSrv());
+    setSrv(OCEAN_T_VSM_PAGE_TABLE, direct.vsmPageTable.ptr != 0 ? direct.vsmPageTable : renderer->VsmDummyBufferSrv());
+    setSrv(OCEAN_T_VSM_POOL, direct.vsmPool.ptr != 0 ? direct.vsmPool : fallbackSrv);
+    setSrv(OCEAN_T_SDSM_PARTITIONS, direct.sdsmPartitions.ptr != 0 ? direct.sdsmPartitions : renderer->VsmDummyBufferSrv());
     // t26: the boat wake's field (ocean/OceanWake), left pixel-readable by Main_OceanWake on the frames it runs; read only
     // under wakeParams.z, which is 0 on every other frame -- the fallback keeps the slot readable then.
     const bool wakeRead = GetWakeParams().z > 0.0f;

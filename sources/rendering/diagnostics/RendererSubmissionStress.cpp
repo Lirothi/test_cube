@@ -1,7 +1,7 @@
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "core/diagnostics/ArtifactWriter.h"
-#include "rendering/core/SubmitTimeline.h"
-#include "rendering/core/BarrierTranslation.h"
+#include "rhi/SubmitTimeline.h"
+#include "rhi/BarrierTranslation.h"
 
 #include <windows.h>
 

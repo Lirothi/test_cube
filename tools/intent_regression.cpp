@@ -52,6 +52,7 @@
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/EditorMcpServer.h"
+#include "core/schema/KeyTable.h" // R9.1: the table of keys
 #include "editor/dist/DistBuildJob.h"
 #include "editor/ui/BuildDistributionPanel.h"
 #include "editor/intent/LlmIntentSource.h"
@@ -60,6 +61,12 @@
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
+#include "app/scene/GtaoSettingsJson.h" // R9.2 golden
+#include "app/scene/HeightFogSettingsJson.h" // R9.2 golden
+#include "app/scene/SkyAtmosphereSettingsJson.h" // R9.2 golden
+#include "app/scene/VolumetricCloudSettingsJson.h" // R9.2 golden
+#include "app/scene/BloomSettingsJson.h" // R9.2 golden
+#include "rendering/core/PhotographicSettingsJson.h" // R9.2 golden
 #include "app/scene/TimeOfDay.h"
 #include "rendering/lighting/NightLamps.h"
 #include "rendering/core/Renderer.h"
@@ -1400,6 +1407,24 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     Check(runtime.historyAsked == 0, "and adds no per-frame rows unless asked");
     call(1201, "tools/call", { { "name", "get_readouts" }, { "arguments", { { "history", 2000 } } } });
     Check(runtime.historyAsked == 512, "`history` reaches the app, clamped to the ring's 512 rows");
+    // Architecture plan R9.0: with a level host, get_readouts carries the open level -- its path, a load in flight,
+    // unsaved edits -- so a script that opens a copy can wait for it before it saves.
+    {
+        struct FakeLevel final : editormcp::LevelHost
+        {
+            bool Save(std::string& outText) override { outText = "no"; return false; }
+            bool Open(const std::string&, bool, std::string& outText) override { outText = "no"; return false; }
+            Status Describe() override { return Status{ "C:/copies/wind_test.json", true, false }; }
+        } level;
+        editormcp::SetLevelHost(&level);
+        const std::optional<json> withLevel = call(1290, "tools/call", { { "name", "get_readouts" } });
+        const json withLevelJson = json::parse(text(withLevel), nullptr, false);
+        Check(!withLevelJson.is_discarded() && withLevelJson.value("fake", false) && withLevelJson.contains("level") &&
+              withLevelJson["level"].value("path", std::string()) == "C:/copies/wind_test.json" &&
+              withLevelJson["level"].value("loading", false) && !withLevelJson["level"].value("dirty", true),
+              "get_readouts carries the open level (path, loading, dirty) beside what the app measured: " + text(withLevel));
+        editormcp::SetLevelHost(nullptr);
+    }
     const std::optional<json> profile = call(1202, "tools/call", { { "name", "get_profile" },
         { "arguments", { { "filter", "VSM" }, { "reset", true } } } });
     Check(text(profile) == "{\"gpu\":[]}" && runtime.profileFilter == "VSM" && runtime.profileReset,
@@ -3291,6 +3316,174 @@ void TestSettingsSeriesRestores()
     Check(series.Set(host, "k2", 1.0f) && series.Restore(host).find("Put back 1 ") == 0 && app.values["k2"] == 15.0f &&
               app.pins.count("k2") == 0 && app.pins.count("k3") == 1,
           "a second series starts from what the first left");
+}
+
+// Architecture plan R9.1: a table of keys reads a section exactly as the hand code did -- an absent key leaves its
+// member, a clamped key clamps, a colour is taken only as an array of three, a key of another type throws as value()
+// did -- and writes every key back.
+void TestKeyTableReadsAsTheHandCodeDid()
+{
+    struct Section
+    {
+        bool on = true;
+        int steps = 8;
+        std::uint32_t count = 3;
+        float radius = 1.5f;
+        Math::float3 tint{ 1.0f, 1.0f, 1.0f };
+        std::string name = "x";
+        float a = 0.0f, b = 0.0f; // behind one Custom key
+        float glare = 1.0f;
+        float arr[3] = { 1.0f, 2.0f, 3.0f };
+        float soft = 2.0f;
+        float depth = 0.0f;
+    };
+    static const schema::Table<Section> inner{ { schema::Field("depth", &Section::depth) } };
+    const schema::Table<Section> table{ {
+        schema::Field("soft", &Section::soft).Tolerant(),
+        schema::Nested<Section>("inner", inner),
+        schema::Field("on", &Section::on),
+        schema::Field("steps", &Section::steps).Clamp(1.0f, 16.0f),
+        schema::Field("count", &Section::count),
+        schema::Field("radius", &Section::radius).Clamp(0.0f, 10.0f),
+        schema::Field("tint", &Section::tint),
+        schema::Field("name", &Section::name),
+        schema::Custom<Section>("pair",
+            [](const Json& j, Section& s) {
+                const auto it = j.find("pair");
+                if (it != j.end() && it->is_array() && it->size() == 2) { s.a = (*it)[0].get<float>(); s.b = (*it)[1].get<float>(); }
+            },
+            [](Json& j, const Section& s) { j["pair"] = { s.a, s.b }; }),
+        schema::Field("glare", &Section::glare).AtLeast(0.5f),
+        schema::Field("arr", &Section::arr),
+    } };
+    Section s;
+    table.Read(Json::parse(R"({"steps": 99, "radius": -2.0, "tint": [0.5, 0.25], "name": "y", "pair": [3, 4],
+                               "glare": 0.1, "arr": [7, 8, 9], "soft": "x", "inner": {"depth": 5}})"), s);
+    Check(s.soft == 2.0f, "a Tolerant key skips a value of another type, as DirectionalLightJson's Number did");
+    Check(s.depth == 5.0f, "a Nested key reads its object through its own table");
+    Check(s.glare == 0.5f && s.arr[0] == 7.0f && s.arr[2] == 9.0f, "AtLeast raises to its floor; a float[3] reads its array");
+    Check(s.on && s.count == 3u, "an absent key leaves its member as it was");
+    Check(s.steps == 16 && s.radius == 0.0f, "a clamped key clamps into its range");
+    Check(s.tint.x == 1.0f && s.tint.y == 1.0f && s.tint.z == 1.0f, "a colour is read only as an array of three");
+    Check(s.name == "y" && s.a == 3.0f && s.b == 4.0f, "a string and a Custom key are read");
+    bool threw = false;
+    try { table.Read(Json::parse(R"({"radius": "far"})"), s); }
+    catch (const Json::exception&) { threw = true; }
+    Check(threw, "a key of another type throws, as value() did (R9.6 decides where that becomes jsonfield::Get)");
+    Section untouched;
+    table.Read(Json::parse("[1, 2]"), untouched);
+    Check(untouched.steps == 8 && untouched.name == "x", "a section that is not an object is not read");
+    const Json written = table.Write(s);
+    Check(written.size() == 11 && written["inner"] == Json{ { "depth", 5.0f } } && written["arr"] == Json::array({ 7.0f, 8.0f, 9.0f }) && written["steps"] == 16 && written["tint"] == Json::array({ 1.0f, 1.0f, 1.0f }) &&
+          written["pair"] == Json::array({ 3.0f, 4.0f }) && written["name"] == "y",
+          "every key is written, the colour as an array, the Custom key by its own write: " + written.dump());
+    Section back;
+    table.Read(written, back);
+    Check(back.steps == s.steps && back.radius == s.radius && back.name == s.name && back.a == s.a && back.b == s.b,
+          "what it writes reads back to the same section");
+}
+
+// Architecture plan R9.2: the seven environment sections write what their hand code wrote. The editor keeps a section's
+// JSON as the file has it and writes it back unchanged, so the load / save cycle of R9.0 never reaches a section's
+// ToJson; this does. For each section: the defaults written, and a section with every key moved off its default
+// (numbers + 0.37 or + 1, booleans flipped, arrays element by element) read and written back -- a key dropped from a
+// table, read into the wrong member or written under another name changes a string. The strings were taken from the
+// hand code before R9.2 (TC_SECTION_GOLDEN=print prints them).
+struct SectionGoldenRow
+{
+    const char* name;
+    const char* text;
+};
+// From TC_SECTION_GOLDEN=print on the hand code, 2026-11-26, before R9.2 (HEAD e152dc1b + R4).
+const SectionGoldenRow kSectionGolden[] = {
+    { "gtao",
+        R"G({"denoise":true,"enabled":false,"fadeEnd":120.0,"fadeStart":60.0,"filterPlaneTolerance":0.05000000074505806,"filterRadius":2,"hzbMipBias":0,"intensity":1.0,"numAngles":2,"numSteps":6,"skyIntensity":1.0,"skyMipBias":2,"skyRadius":25.0,"strength":1.0,"temporal":true,"temporalBlendWeight":0.10000000149011612,"temporalClampRange":0.3499999940395355,"thickness":0.6000000238418579,"upsampleTolerance":0.019999999552965164,"useGBufferNormal":false,"useHzb":true,"worldRadius":0.75} | {"denoise":false,"enabled":true,"fadeEnd":120.37000274658203,"fadeStart":60.369998931884766,"filterPlaneTolerance":0.41999998688697815,"filterRadius":3,"hzbMipBias":1,"intensity":1.3700000047683716,"numAngles":3,"numSteps":7,"skyIntensity":1.3700000047683716,"skyMipBias":3,"skyRadius":25.3700008392334,"strength":1.3700000047683716,"temporal":false,"temporalBlendWeight":0.4699999988079071,"temporalClampRange":0.7199999690055847,"thickness":0.9700000286102295,"upsampleTolerance":0.38999998569488525,"useGBufferNormal":true,"useHzb":false,"worldRadius":1.1200000047683716})G" },
+    { "heightFog",
+        R"G({"albedo":1.0,"conservativeDepth":true,"density":0.004000000189989805,"enabled":false,"extinctionScale":1.0,"fullyDirectionalDistance":0.0,"heightFalloff":0.019999999552965164,"historyWeight":0.8999999761581421,"inscatteringLuminance":[0.0,0.0,0.0],"jitter":true,"localDistanceBias":1.0,"localLightScatter":1.0,"localLights":true,"localSoftFading":1.0,"maxOpacity":0.8999999761581421,"nonDirectionalDistance":0.0,"phaseG":0.20000000298023224,"referenceHeight":0.0,"samplesPerCell":2,"skyAmbientContribution":[1.0,1.0,1.0],"skyBlur":0.5,"skyScatter":1.0,"startDistance":25.0,"sunScatter":1.0,"sunScatterColor":[1.0,1.0,1.0],"sunScatterExponent":4.0,"sunScatterStartDistance":100.0,"sunScatterStrength":0.3499999940395355,"temporal":true,"volumetric":false,"volumetricDistance":300.0,"volumetricNearFadeInDistance":0.0,"volumetricStartDistance":0.0} | {"albedo":1.3700000047683716,"conservativeDepth":false,"density":0.37400001287460327,"enabled":true,"extinctionScale":1.3700000047683716,"fullyDirectionalDistance":0.3700000047683716,"heightFalloff":0.38999998569488525,"historyWeight":1.2699999809265137,"inscatteringLuminance":[0.3700000047683716,0.3700000047683716,0.3700000047683716],"jitter":false,"localDistanceBias":1.3700000047683716,"localLightScatter":1.3700000047683716,"localLights":false,"localSoftFading":1.3700000047683716,"maxOpacity":1.2699999809265137,"nonDirectionalDistance":0.3700000047683716,"phaseG":0.5699999928474426,"referenceHeight":0.3700000047683716,"samplesPerCell":3,"skyAmbientContribution":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"skyBlur":0.8700000047683716,"skyScatter":1.3700000047683716,"startDistance":25.3700008392334,"sunScatter":1.3700000047683716,"sunScatterColor":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"sunScatterExponent":4.369999885559082,"sunScatterStartDistance":100.37000274658203,"sunScatterStrength":0.7199999690055847,"temporal":false,"volumetric":true,"volumetricDistance":300.3699951171875,"volumetricNearFad)G"
+        R"G(eInDistance":0.3700000047683716,"volumetricStartDistance":0.3700000047683716})G" },
+    { "skyAtmosphere",
+        R"G({"aerialPerspective":false,"aerialStartDepthMetres":100.0,"aerialViewDistanceScale":1.0,"enabled":false,"environmentLighting":false,"groundAlbedo":0.4019777774810791,"heightFogContribution":1.0,"luminanceScale":2.130000114440918,"mieAnisotropy":0.800000011920929,"mieScale":1.0,"mieTint":[1.0,1.0,1.0],"multiScatteringFactor":1.0,"ozoneScale":1.0,"ozoneTint":[1.0,1.0,1.0],"rayleighScale":1.0,"rayleighTint":[1.0,1.0,1.0],"skyLuminanceFactor":1.0} | {"aerialPerspective":true,"aerialStartDepthMetres":100.37000274658203,"aerialViewDistanceScale":1.3700000047683716,"enabled":true,"environmentLighting":true,"groundAlbedo":0.7719777822494507,"heightFogContribution":1.3700000047683716,"luminanceScale":2.5,"mieAnisotropy":0.9990000128746033,"mieScale":1.3700000047683716,"mieTint":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"multiScatteringFactor":1.3700000047683716,"ozoneScale":1.3700000047683716,"ozoneTint":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"rayleighScale":1.3700000047683716,"rayleighTint":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"skyLuminanceFactor":1.3700000047683716})G" },
+    { "volumetricCloud",
+        R"G({"albedo":0.949999988079071,"cloudType":0.0,"coverage":0.5,"diffuseLight":0.25,"distanceToSampleCountMaxKm":3.0,"enabled":false,"erosionPower":3.0,"erosionStrength":1.2000000476837158,"erosionTileKm":1.2000000476837158,"extinctionScale":10.0,"floorVariationClear":0.07999999821186066,"floorVariationCloudy":0.6399999856948853,"formationChangeSpeed":1.0,"formationRoughness":0.8500000238418579,"highFrequencyDistanceKm":1.5,"highFrequencyStrength":0.23999999463558197,"historyWeight":0.8999999761581421,"layerBottomKm":0.6000000238418579,"layerHeightKm":0.699999988079071,"macroTileKm":60.0,"macroVariation":0.0,"msContribution":0.8500000238418579,"msEccentricity":0.4000000059604645,"msOcclusion":0.5,"msOctaves":2,"oceanBodyShadow":0.3499999940395355,"overcastEvenness":0.699999988079071,"overcastFrom":0.8500000238418579,"phaseBlend":0.6499999761581421,"phaseG":0.8500000238418579,"phaseG2":0.4000000059604645,"profileBaseErosion":0.20000000298023224,"profileBaseSoftness":0.28999999165534973,"profileBodyDensity":0.6499999761581421,"profileDome":0.6000000238418579,"profileErosionRise":0.5299999713897705,"profileHeavyErosionCut":0.3499999940395355,"profileHeavyThinning":0.6600000262260437,"profileHeight":1.0,"profileSmallDensity":0.09000000357627869,"profileTopSoftness":0.27000001072883606,"reflectionHorizonFadeDeg":5.0,"seed":0,"shadowDepthBiasKm":0.0,"shadowExtentKm":20.0,"shadowHorizonFadeDeg":6.0,"shadowMap":true,"shadowMapSampleCount":16,"shadowSampleCount":4,"shadowSnapKm":2.0,"shadowStrength":1.0,"shadowTracingDistanceKm":0.15600000321865082,"skyLightBottomOcclusion":0.0,"skyLightIntensity":1.0,"stopTracingTransmittance":0.004999999888241291,"temporal":true,"tracingMaxDistanceKm":50.0,"tracingStartMaxDistanceKm":350.0,"viewSampleCountMax":128,"viewSampleCountMin":2,"weatherTileKm":12.0,"windKmH":20.0} | {"albedo":1.0,"cloudType":0.3700000047683716,"coverage":0.8700000047683716,"diffuseLight":0.6200000047683716,"distanceToSampleCountMaxKm":3.369999885559082,"enabled":true,")G"
+        R"G(erosionPower":3.369999885559082,"erosionStrength":1.5700000524520874,"erosionTileKm":1.5700000524520874,"extinctionScale":10.369999885559082,"floorVariationClear":0.44999998807907104,"floorVariationCloudy":1.0099999904632568,"formationChangeSpeed":1.3700000047683716,"formationRoughness":0.8999999761581421,"highFrequencyDistanceKm":1.8700000047683716,"highFrequencyStrength":0.6100000143051147,"historyWeight":0.9900000095367432,"layerBottomKm":0.9700000286102295,"layerHeightKm":1.0699999332427979,"macroTileKm":60.369998931884766,"macroVariation":0.3700000047683716,"msContribution":1.0,"msEccentricity":0.7699999809265137,"msOcclusion":0.8700000047683716,"msOctaves":2,"oceanBodyShadow":0.7199999690055847,"overcastEvenness":1.0,"overcastFrom":0.9900000095367432,"phaseBlend":1.0,"phaseG":0.9900000095367432,"phaseG2":0.7699999809265137,"profileBaseErosion":0.5699999928474426,"profileBaseSoftness":0.6599999666213989,"profileBodyDensity":1.0,"profileDome":0.9700000286102295,"profileErosionRise":0.8999999761581421,"profileHeavyErosionCut":0.7199999690055847,"profileHeavyThinning":1.0,"profileHeight":1.3700000047683716,"profileSmallDensity":0.46000000834465027,"profileTopSoftness":0.6399999856948853,"reflectionHorizonFadeDeg":5.369999885559082,"seed":1,"shadowDepthBiasKm":0.3700000047683716,"shadowExtentKm":20.3700008392334,"shadowHorizonFadeDeg":6.369999885559082,"shadowMap":false,"shadowMapSampleCount":17,"shadowSampleCount":5,"shadowSnapKm":2.369999885559082,"shadowStrength":1.0,"shadowTracingDistanceKm":0.5260000228881836,"skyLightBottomOcclusion":0.3700000047683716,"skyLightIntensity":1.3700000047683716,"stopTracingTransmittance":0.375,"temporal":false,"tracingMaxDistanceKm":50.369998931884766,"tracingStartMaxDistanceKm":350.3699951171875,"viewSampleCountMax":129,"viewSampleCountMin":3,"weatherTileKm":12.369999885559082,"windKmH":20.3700008392334})G" },
+    { "bloom",
+        R"G({"convAnamorphicChroma":0.5,"convAnamorphicIntensity":0.0,"convAnamorphicLength":0.2800000011920929,"convAnamorphicThreshold":1.5,"convAnamorphicTint":[1.0,1.0,1.0],"convAnamorphicWidth":3.0,"convBeforeUpscale":true,"convBlades":6,"convGhostBokeh":3.0,"convGhostIntensity":1.0,"convGhostThreshold":8.0,"convGhosts":0,"convKernel":"textures/BloomKernelStar.dds","convKernelTint":[1.0,1.0,1.0],"convPercent":50.0,"convPreFilterMax":15000.0,"convPreFilterMin":7.0,"convPreFilterMult":15.0,"convSize":1.0,"convSunGhostScale":1.0,"convSunKernelScale":1.0,"convSunSplitRadiusDeg":8.0,"convTemporalWeight":0.10000000149011612,"enabled":false,"fireflyClamp":false,"intensity":0.675000011920929,"method":0,"radius":1.0,"softKnee":0.5,"sunGlareIntensity":0.006500000134110451,"sunGlareLowSunDeg":12.0,"sunGlareLowSunFloor":0.20000000298023224,"sunGlareRadiusDeg":2.0,"sunGlareSmoothingSec":0.10000000149011612,"sunGlareVeil":0.15000000596046448,"sunGlareVeilRadiusDeg":12.0,"sunRaysBundleStrength":0.5,"sunRaysBundleWidthDeg":5.0,"sunRaysBundles":12,"sunRaysCount":100,"sunRaysHalo":0.07999999821186066,"sunRaysHaloRadiusDeg":3.5,"sunRaysIntensity":0.010400000028312206,"sunRaysLengthDeg":2.5,"sunRaysRotationDeg":0.0,"sunRaysSpikeCount":6,"sunRaysSpikeLengthDeg":10.0,"sunRaysSpikeWidthDeg":0.10000000149011612,"sunRaysSpikes":0.0,"sunRaysTexture":"","sunRaysTextureSizeDeg":15.0,"sunRaysVisibleExponent":0.5,"sunRaysWidthDeg":0.15000000596046448,"threshold":-1.0} | {"convAnamorphicChroma":0.8700000047683716,"convAnamorphicIntensity":0.3700000047683716,"convAnamorphicLength":0.6499999761581421,"convAnamorphicThreshold":1.8700000047683716,"convAnamorphicTint":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"convAnamorphicWidth":3.369999885559082,"convBeforeUpscale":false,"convBlades":7,"convGhostBokeh":3.369999885559082,"convGhostIntensity":1.3700000047683716,"convGhostThreshold":8.369999885559082,"convGhosts":1,"convKernel":"textures/BloomKernelStar.dds","convKernelTint":[1.3700000047683)G"
+        R"G(716,1.3700000047683716,1.3700000047683716],"convPercent":50.369998931884766,"convPreFilterMax":15000.3701171875,"convPreFilterMin":7.369999885559082,"convPreFilterMult":15.369999885559082,"convSize":1.3700000047683716,"convSunGhostScale":1.3700000047683716,"convSunKernelScale":1.3700000047683716,"convSunSplitRadiusDeg":8.369999885559082,"convTemporalWeight":0.4699999988079071,"enabled":true,"fireflyClamp":true,"intensity":1.0449999570846558,"method":1,"radius":1.3700000047683716,"softKnee":0.8700000047683716,"sunGlareIntensity":0.3765000104904175,"sunGlareLowSunDeg":12.369999885559082,"sunGlareLowSunFloor":0.5699999928474426,"sunGlareRadiusDeg":2.369999885559082,"sunGlareSmoothingSec":0.4699999988079071,"sunGlareVeil":0.5199999809265137,"sunGlareVeilRadiusDeg":12.369999885559082,"sunRaysBundleStrength":0.8700000047683716,"sunRaysBundleWidthDeg":5.369999885559082,"sunRaysBundles":13,"sunRaysCount":101,"sunRaysHalo":0.44999998807907104,"sunRaysHaloRadiusDeg":3.869999885559082,"sunRaysIntensity":0.38040000200271606,"sunRaysLengthDeg":2.869999885559082,"sunRaysRotationDeg":0.3700000047683716,"sunRaysSpikeCount":7,"sunRaysSpikeLengthDeg":10.369999885559082,"sunRaysSpikeWidthDeg":0.4699999988079071,"sunRaysSpikes":0.3700000047683716,"sunRaysTexture":"","sunRaysTextureSizeDeg":15.369999885559082,"sunRaysVisibleExponent":0.8700000047683716,"sunRaysWidthDeg":0.5199999809265137,"threshold":-0.6299999952316284})G" },
+    { "cameraExposure",
+        R"G({"adaptationStartDistance":1.5,"apertureFStop":16.0,"autoExposure":true,"blackBucketInfluence":1.0,"compensationEv":-0.15000000596046448,"enabled":false,"exposureCurve":[],"highPercentile":0.800000011920929,"isoSensitivity":100.0,"localBlurredBlend":0.6000000238418579,"localBlurredKernelPercent":50.0,"localDetailStrength":1.0,"localHighlightContrast":1.0,"localHighlightThreshold":0.0,"localShadowContrast":1.0,"localShadowThreshold":0.0,"lowPercentile":0.15000000596046448,"manualCompensationEv":0.0,"maxEv100":16.0,"meterMaskInnerRadius":0.3499999940395355,"meterMaskOuterRadius":1.0,"meterMaskSkyBias":0.6000000238418579,"meterMaskStrength":0.699999988079071,"minEv100":-6.0,"nightDesaturation":0.20000000298023224,"nightTint":[0.8199999928474426,1.0199999809265137,1.3799999952316284],"nightVision":1.0,"shutterSpeedSec":0.00800000037997961,"speedDown":1.0,"speedUp":3.0} | {"adaptationStartDistance":1.8700000047683716,"apertureFStop":16.3700008392334,"autoExposure":false,"blackBucketInfluence":1.0,"compensationEv":0.2199999988079071,"enabled":true,"exposureCurve":[],"highPercentile":1.0,"isoSensitivity":100.37000274658203,"localBlurredBlend":0.9700000286102295,"localBlurredKernelPercent":50.369998931884766,"localDetailStrength":1.3700000047683716,"localHighlightContrast":1.3700000047683716,"localHighlightThreshold":0.3700000047683716,"localShadowContrast":1.3700000047683716,"localShadowThreshold":0.3700000047683716,"lowPercentile":0.5199999809265137,"manualCompensationEv":0.3700000047683716,"maxEv100":16.3700008392334,"meterMaskInnerRadius":0.7199999690055847,"meterMaskOuterRadius":1.3700000047683716,"meterMaskSkyBias":0.9700000286102295,"meterMaskStrength":1.0,"minEv100":-5.630000114440918,"nightDesaturation":0.5699999928474426,"nightTint":[1.1899999380111694,1.3899999856948853,1.75],"nightVision":1.0,"shutterSpeedSec":0.3779999911785126,"speedDown":1.3700000047683716,"speedUp":3.369999885559082})G" },
+    { "colorPipeline",
+        R"G({"agxPower":1.0,"agxSaturation":1.0,"agxSlope":1.0,"blueCorrection":0.6000000238418579,"expandGamut":1.0,"filmBlackClip":0.0,"filmShoulder":0.25999999046325684,"filmSlope":0.8799999952316284,"filmToe":0.550000011920929,"filmWhiteClip":0.03999999910593033,"gradeContrast":1.149999976158142,"gradeGain":1.0,"gradeGamma":1.100000023841858,"gradeOffset":0.0,"gradeSaturation":1.2999999523162842,"toneCurve":"filmic","ueGamut":true,"vignetteIntensity":0.4000000059604645} | {"agxPower":1.3700000047683716,"agxSaturation":1.3700000047683716,"agxSlope":1.3700000047683716,"blueCorrection":0.9700000286102295,"expandGamut":1.3700000047683716,"filmBlackClip":0.3700000047683716,"filmShoulder":0.6299999952316284,"filmSlope":1.25,"filmToe":0.9200000166893005,"filmWhiteClip":0.4099999964237213,"gradeContrast":1.5199999809265137,"gradeGain":1.3700000047683716,"gradeGamma":1.4700000286102295,"gradeOffset":0.3700000047683716,"gradeSaturation":1.6699999570846558,"toneCurve":"filmic","ueGamut":false,"vignetteIntensity":0.7699999809265137})G" },
+    { "timeOfDay",
+        R"G({"animate":false,"date":[2026,6,21],"dawn":6.0,"dayLengthMin":30.0,"daySkyBrightness":1.0,"dusk":18.0,"extendTwilight":0.0,"fog":{"dayDensity":1.0,"dayFullDeg":25.0,"duskDeg":5.0,"duskDensity":1.0,"nightDensity":1.0,"nightFullDeg":-8.0,"udsColor":false},"heightOffset":0.0,"lamps":{"dayBrightness":1.0,"randomDelaySec":1.0,"sunElevationDeg":0.0,"turnOnExponent":0.6000000238418579,"turnOnFlicker":0.20000000298023224,"turnOnSec":1.5},"latitude":-16.5,"lightUpdateThresholdDeg":0.05000000074505806,"longitude":-151.75,"moon":{"discAdaptation":1.0,"discColor":[1.0,1.0,1.0],"earthshine":1.0,"enabled":true,"glintPhaseFalloff":0.5,"glow":0.019999999552965164,"glowRadiusDeg":11.600000381469727,"illuminanceLux":0.3199999928474426,"lightColor":[0.44600000977516174,0.5569999814033508,0.8650000095367432],"lightShaftBloomMaxBrightness":0.029999999329447746,"lightShaftBloomScale":1.0,"lightShaftBloomThreshold":0.00800000037997961,"lightShaftBloomTint":[1.0,1.0,1.0],"lightSourceAngle":0.5199999809265137,"lightSourceSoftAngle":0.0,"newMoonBrightness":0.0,"orbitOffsetDeg":0.0,"pathTiltDeg":35.0,"pathYawDeg":180.0,"phase":0.5,"phaseAuto":true,"udsMoon":false},"nightBrightness":1.0,"nightCameraEv100":0.0,"nightCameraFollow":0.20000000298023224,"nightCameraIndoorLift":5.0,"nightCameraOpenFrom":0.15000000596046448,"nightCameraOpenFull":0.3499999940395355,"nightExposureEv":0.0,"nightLengthMin":15.0,"nightSky":{"airglowColor":[0.949999988079071,1.0,0.8999999761581421],"airglowZenith":0.00011999999696854502,"enabled":true,"milkyWay":1.0,"siderealAtMidnight":18.0,"stars":1.0,"twinkle":0.30000001192092896},"northYawDeg":0.0,"pathTiltDeg":30.0,"pathYawDeg":180.0,"realPositions":false,"sun":{"ambient":0.05000000074505806,"color":[1.0,1.0,1.0],"enabled":true,"groundAlbedo":[0.25,0.25,0.25],"lightShaftBloomMaxBrightness":0.3499999940395355,"lightShaftBloomScale":0.30000001192092896,"lightShaftBloomThreshold":0.75,"lightShaftBloomTint":[1.0,1.0,1.0],"lightShaftLength":1.0,"lightShaftOcclusionDepthRan)G"
+        R"G(ge":1000.0,"lightShaftSmoothing":0.15000000596046448,"lightShaftsEnabled":true,"lightSourceAngle":0.5357000231742859,"lightSourceSoftAngle":0.0,"skyFillIntensity":1.0,"sunIlluminanceLux":120000.0,"sunTemperatureK":6500.0,"useSunTemperature":false},"time":12.0,"timeScale":60.0,"twilight":{"lightHandOverDeg":3.0,"mieNightScale":1.0,"ozoneBlendDeg":1.9500000476837158,"ozoneNightTint":[6.1539998054504395,1.805999994277954,1.4279999732971191],"ozoneSunriseTint":[4.614999771118164,1.5570000410079956,4.031000137329102],"rayleighDayFullDeg":3.680000066757202,"rayleighDayStartDeg":-2.069999933242798,"rayleighNightTint":[1.4259999990463257,0.8479999899864197,0.609000027179718],"sunSkyFullDeg":-6.489999771118164,"sunSkyStartDeg":-9.029999732971191,"udsSkyMaterial":false},"utcOffset":-10.0} | {"animate":true,"date":[2027,7,22],"dawn":6.369999885559082,"dayLengthMin":30.3700008392334,"daySkyBrightness":1.3700000047683716,"dusk":18.3700008392334,"extendTwilight":0.3700000047683716,"fog":{"dayDensity":1.3700000047683716,"dayFullDeg":25.3700008392334,"duskDeg":5.369999885559082,"duskDensity":1.3700000047683716,"nightDensity":1.3700000047683716,"nightFullDeg":-7.630000114440918,"udsColor":true},"heightOffset":0.3700000047683716,"lamps":{"dayBrightness":1.3700000047683716,"randomDelaySec":1.3700000047683716,"sunElevationDeg":0.3700000047683716,"turnOnExponent":0.9700000286102295,"turnOnFlicker":0.5699999928474426,"turnOnSec":1.8700000047683716},"latitude":-16.1299991607666,"lightUpdateThresholdDeg":0.41999998688697815,"longitude":-151.3800048828125,"moon":{"discAdaptation":1.0,"discColor":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"earthshine":1.3700000047683716,"enabled":false,"glintPhaseFalloff":0.8700000047683716,"glow":0.38999998569488525,"glowRadiusDeg":11.970000267028809,"illuminanceLux":0.6899999976158142,"lightColor":[0.8159999847412109,0.9269999861717224,1.2350000143051147],"lightShaftBloomMaxBrightness":0.4000000059604645,"lightShaftBloomScale":1.37000000476)G"
+        R"G(83716,"lightShaftBloomThreshold":0.3779999911785126,"lightShaftBloomTint":[1.3700000047683716,1.3700000047683716,1.3700000047683716],"lightSourceAngle":0.8899999856948853,"lightSourceSoftAngle":0.3700000047683716,"newMoonBrightness":0.3700000047683716,"orbitOffsetDeg":0.3700000047683716,"pathTiltDeg":35.369998931884766,"pathYawDeg":180.3699951171875,"phase":0.8700000047683716,"phaseAuto":false,"udsMoon":true},"nightBrightness":1.3700000047683716,"nightCameraEv100":0.3700000047683716,"nightCameraFollow":0.5699999928474426,"nightCameraIndoorLift":5.369999885559082,"nightCameraOpenFrom":0.5199999809265137,"nightCameraOpenFull":0.7199999690055847,"nightExposureEv":0.3700000047683716,"nightLengthMin":15.369999885559082,"nightSky":{"airglowColor":[1.3199999332427979,1.3700000047683716,1.2699999809265137],"airglowZenith":0.37011998891830444,"enabled":false,"milkyWay":1.3700000047683716,"siderealAtMidnight":18.3700008392334,"stars":1.3700000047683716,"twinkle":0.6700000166893005},"northYawDeg":0.3700000047683716,"pathTiltDeg":30.3700008392334,"pathYawDeg":180.3699951171875,"realPositions":true,"sun":{"ambient":0.05000000074505806,"color":[1.0,1.0,1.0],"enabled":true,"groundAlbedo":[0.25,0.25,0.25],"lightShaftBloomMaxBrightness":0.3499999940395355,"lightShaftBloomScale":0.30000001192092896,"lightShaftBloomThreshold":0.75,"lightShaftBloomTint":[1.0,1.0,1.0],"lightShaftLength":1.0,"lightShaftOcclusionDepthRange":1000.0,"lightShaftSmoothing":0.15000000596046448,"lightShaftsEnabled":true,"lightSourceAngle":0.5357000231742859,"lightSourceSoftAngle":0.0,"skyFillIntensity":1.0,"sunIlluminanceLux":120000.0,"sunTemperatureK":6500.0,"useSunTemperature":false},"time":12.369999885559082,"timeScale":60.369998931884766,"twilight":{"lightHandOverDeg":3.369999885559082,"mieNightScale":1.3700000047683716,"ozoneBlendDeg":2.319999933242798,"ozoneNightTint":[6.5239996910095215,2.175999879837036,1.7979999780654907],"ozoneSunriseTint":[4.984999656677246,1.9270000457763672,4.401000022888184],"rayl)G"
+        R"G(eighDayFullDeg":4.050000190734863,"rayleighDayStartDeg":-1.6999999284744263,"rayleighNightTint":[1.7960000038146973,1.2179999351501465,0.9790000319480896],"sunSkyFullDeg":-6.119999885559082,"sunSkyStartDeg":-8.65999984741211,"udsSkyMaterial":true},"utcOffset":-9.630000114440918})G" },
+};
+
+void MoveOffDefault(Json& v)
+{
+    if (v.is_boolean()) { v = !v.get<bool>(); }
+    else if (v.is_number_float()) { v = v.get<double>() + 0.37; }
+    else if (v.is_number_unsigned()) { v = v.get<std::uint64_t>() + 1u; }
+    else if (v.is_number_integer()) { v = v.get<std::int64_t>() + 1; }
+    else if (v.is_array() || v.is_object()) { for (Json& e : v) { MoveOffDefault(e); } }
+}
+
+template <class S, class Read, class Write>
+std::string SectionGolden(Read read, Write write)
+{
+    S defaults{};
+    const Json written = write(defaults);
+    Json moved = written;
+    MoveOffDefault(moved);
+    S s{};
+    read(moved, s);
+    return written.dump() + " | " + write(s).dump();
+}
+
+void TestEnvironmentSectionsWriteAsBefore()
+{
+    std::vector<std::pair<const char*, std::string>> sections;
+    sections.emplace_back("gtao", SectionGolden<GtaoSettings>(
+        [](const Json& j, GtaoSettings& s) { GtaoSettingsJson::ApplyOverrides(j, s); },
+        [](const GtaoSettings& s) { return GtaoSettingsJson::ToJson(s); }));
+    sections.emplace_back("heightFog", SectionGolden<HeightFogSettings>(
+        [](const Json& j, HeightFogSettings& s) { HeightFogSettingsJson::ApplyOverrides(j, s); },
+        [](const HeightFogSettings& s) { return HeightFogSettingsJson::ToJson(s); }));
+    sections.emplace_back("skyAtmosphere", SectionGolden<SkyAtmosphereSettings>(
+        [](const Json& j, SkyAtmosphereSettings& s) { SkyAtmosphereSettingsJson::ApplyOverrides(j, s); },
+        [](const SkyAtmosphereSettings& s) { return SkyAtmosphereSettingsJson::ToJson(s); }));
+    sections.emplace_back("volumetricCloud", SectionGolden<VolumetricCloudSettings>(
+        [](const Json& j, VolumetricCloudSettings& s) { VolumetricCloudSettingsJson::ApplyOverrides(j, s); },
+        [](const VolumetricCloudSettings& s) { return VolumetricCloudSettingsJson::ToJson(s); }));
+    sections.emplace_back("bloom", SectionGolden<BloomSettings>(
+        [](const Json& j, BloomSettings& s) { BloomSettingsJson::ApplyOverrides(j, s); },
+        [](const BloomSettings& s) { return BloomSettingsJson::ToJson(s); }));
+    sections.emplace_back("cameraExposure", SectionGolden<render::CameraExposureSettings>(
+        [](const Json& j, render::CameraExposureSettings& s) { render::PhotographicSettingsJson::ApplyOverrides(j, s); },
+        [](const render::CameraExposureSettings& s) { return render::PhotographicSettingsJson::ToJson(s); }));
+    sections.emplace_back("colorPipeline", SectionGolden<render::ColorPipelineSettings>(
+        [](const Json& j, render::ColorPipelineSettings& s) { render::PhotographicSettingsJson::ApplyOverrides(j, s); },
+        [](const render::ColorPipelineSettings& s) { return render::PhotographicSettingsJson::ToJson(s); }));
+    sections.emplace_back("timeOfDay", SectionGolden<TimeOfDaySettings>(
+        [](const Json& j, TimeOfDaySettings& s) {
+            DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
+            TimeOfDaySettingsJson::ApplyOverrides(j, s, sun);
+        },
+        [](const TimeOfDaySettings& s) { return TimeOfDaySettingsJson::ToJson(s, TimeOfDaySettingsJson::DefaultSun()); }));
+    const char* print = std::getenv("TC_SECTION_GOLDEN"); // NOLINT: a test's own switch
+    if (print && std::string(print) == "print")
+    {
+        for (const auto& [name, text] : sections) { std::printf("SECTION %s\n%s\n", name, text.c_str()); }
+        return;
+    }
+    for (const auto& [name, text] : sections)
+    {
+        const auto golden = std::find_if(std::begin(kSectionGolden), std::end(kSectionGolden),
+                                         [&](const SectionGoldenRow& r) { return std::string(r.name) == name; });
+        Check(golden != std::end(kSectionGolden) && text == golden->text,
+              std::string("section ") + name + " writes as its hand code did (R9.2 golden): " + text);
+    }
 }
 
 void TestJsonFieldsAreReadWithoutThrowing()
@@ -6411,6 +6604,8 @@ int main(int argc, char** argv)
 
         TestGeneratedGrammar(document, assets);
         TestModelAnswersAreRead();
+        TestKeyTableReadsAsTheHandCodeDid(); // R9.1
+        TestEnvironmentSectionsWriteAsBefore(); // R9.2
         TestJsonFieldsAreReadWithoutThrowing();
         TestSettingsSeriesRestores();
         TestModelRepliesOfAnyShape();

@@ -19,7 +19,7 @@
 #include "third_party/robin_hood.h"
 #include "core/logging/Log.h"
 #include "core/threading/ThreadRole.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include <Windows.h>
 
 using namespace profiler_detail;

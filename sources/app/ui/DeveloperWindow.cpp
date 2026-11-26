@@ -52,6 +52,7 @@
 #include "text/TextManager.h"
 #include "app/settings/SettingContext.h"     // R2.n: the Settings tab
 #include "core/settings/SettingsRegistry.h"  // ...through the registry
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 
 namespace
 {
@@ -932,8 +933,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             srvDesc.Texture2D.MipLevels = 1;
-            renderer.MarkImGuiTextureShaderReadable(resetIconAtlas_->GetResource());
-            resetIconTexture = renderer.CreateImGuiTextureId(resetIconAtlas_->GetResource(), srvDesc);
+            renderer.ImGui().MarkTextureShaderReadable(resetIconAtlas_->GetResource());
+            resetIconTexture = renderer.ImGui().CreateTextureId(resetIconAtlas_->GetResource(), srvDesc);
         }
 
         ImGui::SeparatorText("Project graphics settings");

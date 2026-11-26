@@ -10,7 +10,7 @@
 
 #include "third_party/robin_hood.h"
 #include "rendering/core/RenderConstants.h" // render::kFrameCount
-#include "rendering/descriptors/BindlessHeap.h" // A6: the shared heap this table takes a region of
+#include "rhi/BindlessHeap.h" // A6: the shared heap this table takes a region of
 
 class Mesh;
 

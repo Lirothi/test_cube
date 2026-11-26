@@ -2,6 +2,7 @@
 
 #include "third_party/json/json.hpp"
 
+#include "core/schema/KeyTable.h"
 #include "rendering/scene/SceneFrameData.h"
 
 // P6B: the ONE mapping between GtaoSettings and JSON. The level reader, the editor's environment
@@ -12,65 +13,50 @@
 // of the renderer, and pulling nlohmann/json into it puts the whole single-header JSON parser in
 // front of every one of those translation units. Same reason PhotographicSettingsJson.h exists
 // separately from PhotographicSettings.h.
+//
+// Architecture plan R9.2: the mapping is the section's table of keys (core/schema/KeyTable.h); reading and writing
+// walk it.
 namespace GtaoSettingsJson
 {
 
+inline const schema::Table<GtaoSettings>& Keys()
+{
+    using S = GtaoSettings;
+    static const schema::Table<S> table{ {
+        schema::Field("enabled", &S::enabled),
+        schema::Field("worldRadius", &S::worldRadius),
+        schema::Field("thickness", &S::thickness),
+        schema::Field("intensity", &S::intensity),
+        schema::Field("strength", &S::strength),
+        schema::Field("fadeStart", &S::fadeStart),
+        schema::Field("fadeEnd", &S::fadeEnd),
+        schema::Field("numAngles", &S::numAngles),
+        schema::Field("numSteps", &S::numSteps),
+        schema::Field("denoise", &S::denoise),
+        schema::Field("temporal", &S::temporal),
+        schema::Field("filterRadius", &S::filterRadius),
+        schema::Field("filterPlaneTolerance", &S::filterPlaneTolerance),
+        schema::Field("temporalBlendWeight", &S::temporalBlendWeight),
+        schema::Field("temporalClampRange", &S::temporalClampRange),
+        schema::Field("upsampleTolerance", &S::upsampleTolerance),
+        schema::Field("useGBufferNormal", &S::useGBufferNormal),
+        schema::Field("useHzb", &S::useHzb),
+        schema::Field("hzbMipBias", &S::hzbMipBias),
+        schema::Field("skyRadius", &S::skyRadius),
+        schema::Field("skyMipBias", &S::skyMipBias),
+        schema::Field("skyIntensity", &S::skyIntensity),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, GtaoSettings& s)
 {
-    if (!j.is_object())
-    {
-        return;
-    }
-    s.enabled = j.value("enabled", s.enabled);
-    s.worldRadius = j.value("worldRadius", s.worldRadius);
-    s.thickness = j.value("thickness", s.thickness);
-    s.intensity = j.value("intensity", s.intensity);
-    s.strength = j.value("strength", s.strength);
-    s.fadeStart = j.value("fadeStart", s.fadeStart);
-    s.fadeEnd = j.value("fadeEnd", s.fadeEnd);
-    s.numAngles = j.value("numAngles", s.numAngles);
-    s.numSteps = j.value("numSteps", s.numSteps);
-    s.denoise = j.value("denoise", s.denoise);
-    s.temporal = j.value("temporal", s.temporal);
-    s.filterRadius = j.value("filterRadius", s.filterRadius);
-    s.filterPlaneTolerance = j.value("filterPlaneTolerance", s.filterPlaneTolerance);
-    s.temporalBlendWeight = j.value("temporalBlendWeight", s.temporalBlendWeight);
-    s.temporalClampRange = j.value("temporalClampRange", s.temporalClampRange);
-    s.upsampleTolerance = j.value("upsampleTolerance", s.upsampleTolerance);
-    s.useGBufferNormal = j.value("useGBufferNormal", s.useGBufferNormal);
-    s.useHzb = j.value("useHzb", s.useHzb);
-    s.hzbMipBias = j.value("hzbMipBias", s.hzbMipBias);
-    s.skyRadius = j.value("skyRadius", s.skyRadius);
-    s.skyMipBias = j.value("skyMipBias", s.skyMipBias);
-    s.skyIntensity = j.value("skyIntensity", s.skyIntensity);
+    Keys().Read(j, s);
 }
 
 inline nlohmann::json ToJson(const GtaoSettings& s)
 {
-    nlohmann::json j;
-    j["enabled"] = s.enabled;
-    j["worldRadius"] = s.worldRadius;
-    j["thickness"] = s.thickness;
-    j["intensity"] = s.intensity;
-    j["strength"] = s.strength;
-    j["fadeStart"] = s.fadeStart;
-    j["fadeEnd"] = s.fadeEnd;
-    j["numAngles"] = s.numAngles;
-    j["numSteps"] = s.numSteps;
-    j["denoise"] = s.denoise;
-    j["temporal"] = s.temporal;
-    j["filterRadius"] = s.filterRadius;
-    j["filterPlaneTolerance"] = s.filterPlaneTolerance;
-    j["temporalBlendWeight"] = s.temporalBlendWeight;
-    j["temporalClampRange"] = s.temporalClampRange;
-    j["upsampleTolerance"] = s.upsampleTolerance;
-    j["useGBufferNormal"] = s.useGBufferNormal;
-    j["useHzb"] = s.useHzb;
-    j["hzbMipBias"] = s.hzbMipBias;
-    j["skyRadius"] = s.skyRadius;
-    j["skyMipBias"] = s.skyMipBias;
-    j["skyIntensity"] = s.skyIntensity;
-    return j;
+    return Keys().Write(s);
 }
 
 } // namespace GtaoSettingsJson

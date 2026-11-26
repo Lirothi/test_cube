@@ -10,7 +10,7 @@
 
 #include "materials/Material.h"
 #include "rendering/meshes/Mesh.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "core/math/AABB.h"

@@ -11,6 +11,7 @@
 #pragma warning(disable: 26819)
 #include "third_party/json/json.hpp"
 #pragma warning(pop)
+#include "core/schema/KeyTable.h" // R9.2: the section's table of keys
 
 // JSON round-trip for the photographic camera settings, kept in its own header for the same reason
 // OceanRenderConfigJson is: Scene.h must not drag nlohmann into every translation unit that only
@@ -22,41 +23,18 @@
 namespace render::PhotographicSettingsJson
 {
 
-inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
+// What the camera's keys mean together, after every key is read (the hand code did these between its reads; each
+// touches only keys read before it, so they run here in the same order). P16.6: the camera is three settings; EV100 is
+// derived from them -- a level carrying the old hand-solved `manualEv100` is MIGRATED rather than given a second
+// control: shutter and ISO hold at whatever it authored (or the reference values) and the aperture is solved to
+// reproduce the EV exactly, so the frame does not move.
+inline void FinishCamera(const nlohmann::json& j, CameraExposureSettings& out)
 {
-    if (!j.is_object())
-    {
-        return;
-    }
-    out.enabled        = j.value("enabled",        out.enabled);
-    out.autoExposure   = j.value("autoExposure",   out.autoExposure);
-    out.compensationEv = j.value("compensationEv", out.compensationEv);
-    out.manualCompensationEv = j.value("manualCompensationEv", out.manualCompensationEv);
-    out.minEv100       = j.value("minEv100",       out.minEv100);
-    out.maxEv100       = j.value("maxEv100",       out.maxEv100);
-    out.lowPercentile  = j.value("lowPercentile",  out.lowPercentile);
-    out.highPercentile = j.value("highPercentile", out.highPercentile);
-    out.speedUp        = j.value("speedUp",        out.speedUp);
-    out.speedDown      = j.value("speedDown",      out.speedDown);
-    // P16.6: the camera is three settings; EV100 is derived from them. A level carrying the old
-    // hand-solved `manualEv100` is MIGRATED rather than given a second control -- shutter and ISO
-    // hold at whatever it authored (or the reference values) and the aperture is solved to
-    // reproduce the EV exactly, so the frame does not move.
-    out.apertureFStop   = j.value("apertureFStop",   out.apertureFStop);
-    out.shutterSpeedSec = j.value("shutterSpeedSec", out.shutterSpeedSec);
-    out.isoSensitivity  = j.value("isoSensitivity",  out.isoSensitivity);
     if (!j.contains("apertureFStop") && j.contains("manualEv100"))
     {
         out.apertureFStop = ApertureFromEv100(j.value("manualEv100", 0.0f),
                                               out.shutterSpeedSec, out.isoSensitivity);
     }
-    out.meterMaskStrength    = j.value("meterMaskStrength",    out.meterMaskStrength);
-    out.meterMaskInnerRadius = j.value("meterMaskInnerRadius", out.meterMaskInnerRadius);
-    out.meterMaskOuterRadius = j.value("meterMaskOuterRadius", out.meterMaskOuterRadius);
-    out.meterMaskSkyBias     = j.value("meterMaskSkyBias",     out.meterMaskSkyBias);
-    out.adaptationStartDistance = j.value("adaptationStartDistance", out.adaptationStartDistance);
-    out.blackBucketInfluence    = j.value("blackBucketInfluence",    out.blackBucketInfluence);
-
     // Clamp at the settings boundary only (plan section 6.2: no hidden clamps scattered through
     // shaders). An inverted or degenerate authored range would otherwise reach the P2 solve.
     if (out.maxEv100 < out.minEv100)
@@ -71,45 +49,7 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     }
     out.speedUp   = std::max(out.speedUp,   0.0f);
     out.speedDown = std::max(out.speedDown, 0.0f);
-
-    out.localHighlightContrast  = j.value("localHighlightContrast",  out.localHighlightContrast);
-    out.localShadowContrast     = j.value("localShadowContrast",     out.localShadowContrast);
-    out.localDetailStrength     = j.value("localDetailStrength",     out.localDetailStrength);
-    out.localHighlightThreshold = j.value("localHighlightThreshold", out.localHighlightThreshold);
-    out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
-    out.localBlurredBlend       = j.value("localBlurredBlend",       out.localBlurredBlend);
     out.localBlurredBlend       = std::clamp(out.localBlurredBlend,       0.0f, 1.0f);
-    out.localBlurredKernelPercent = std::clamp(j.value("localBlurredKernelPercent", out.localBlurredKernelPercent), 0.0f, 100.0f);
-    out.nightVision             = std::clamp(j.value("nightVision", out.nightVision), 0.0f, 1.0f); // time-of-day E2
-    out.nightDesaturation       = std::clamp(j.value("nightDesaturation", out.nightDesaturation), 0.0f, 1.0f);
-    if (const auto it = j.find("nightTint"); it != j.end() && it->is_array() && it->size() >= 3)
-    {
-        for (int c = 0; c < 3; ++c)
-        {
-            out.nightTint[c] = (*it)[c].is_number() ? std::max((*it)[c].get<float>(), 0.0f) : out.nightTint[c];
-        }
-    }
-    // Time-of-day E1: "exposureCurve": [[sceneEv100, compensationEv], ...] -- up to six, sorted here by EV
-    // so a hand-edited file cannot hand the shader a curve that runs backwards.
-    if (const auto it = j.find("exposureCurve"); it != j.end() && it->is_array())
-    {
-        std::vector<std::pair<float, float>> points;
-        for (const nlohmann::json& p : *it)
-        {
-            if (p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number())
-            {
-                points.emplace_back(std::clamp(p[0].get<float>(), -16.0f, 24.0f), std::clamp(p[1].get<float>(), -10.0f, 10.0f));
-            }
-        }
-        std::sort(points.begin(), points.end());
-        out.exposureCurvePoints = static_cast<std::uint32_t>(
-            std::min<std::size_t>(points.size(), CameraExposureSettings::kExposureCurveMaxPoints));
-        for (std::uint32_t i = 0; i < out.exposureCurvePoints; ++i)
-        {
-            out.exposureCurveEv[i] = points[i].first;
-            out.exposureCurveComp[i] = points[i].second;
-        }
-    }
     out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
     out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
     out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
@@ -129,6 +69,92 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     {
         out.meterMaskOuterRadius = out.meterMaskInnerRadius + 0.01f;
     }
+}
+
+// Architecture plan R9.2: the camera's table of keys (core/schema/KeyTable.h), FinishCamera after the last.
+inline const schema::Table<CameraExposureSettings>& CameraKeys()
+{
+    using S = CameraExposureSettings;
+    using J = nlohmann::json;
+    static const schema::Table<S> table{ {
+        schema::Field("enabled", &S::enabled),
+        schema::Field("autoExposure", &S::autoExposure),
+        schema::Field("compensationEv", &S::compensationEv),
+        schema::Field("manualCompensationEv", &S::manualCompensationEv),
+        schema::Field("minEv100", &S::minEv100),
+        schema::Field("maxEv100", &S::maxEv100),
+        schema::Field("lowPercentile", &S::lowPercentile),
+        schema::Field("highPercentile", &S::highPercentile),
+        schema::Field("speedUp", &S::speedUp),
+        schema::Field("speedDown", &S::speedDown),
+        schema::Field("apertureFStop", &S::apertureFStop),
+        schema::Field("shutterSpeedSec", &S::shutterSpeedSec),
+        schema::Field("isoSensitivity", &S::isoSensitivity),
+        schema::Field("meterMaskStrength", &S::meterMaskStrength),
+        schema::Field("meterMaskInnerRadius", &S::meterMaskInnerRadius),
+        schema::Field("meterMaskOuterRadius", &S::meterMaskOuterRadius),
+        schema::Field("meterMaskSkyBias", &S::meterMaskSkyBias),
+        schema::Field("adaptationStartDistance", &S::adaptationStartDistance),
+        schema::Field("blackBucketInfluence", &S::blackBucketInfluence),
+        schema::Field("localHighlightContrast", &S::localHighlightContrast),
+        schema::Field("localShadowContrast", &S::localShadowContrast),
+        schema::Field("localDetailStrength", &S::localDetailStrength),
+        schema::Field("localHighlightThreshold", &S::localHighlightThreshold),
+        schema::Field("localShadowThreshold", &S::localShadowThreshold),
+        schema::Field("localBlurredBlend", &S::localBlurredBlend),
+        schema::Field("localBlurredKernelPercent", &S::localBlurredKernelPercent).Clamp(0.0f, 100.0f),
+        schema::Field("nightVision", &S::nightVision).Clamp(0.0f, 1.0f), // time-of-day E2
+        schema::Field("nightDesaturation", &S::nightDesaturation).Clamp(0.0f, 1.0f),
+        schema::Custom<S>("nightTint",
+            [](const J& j, S& out) {
+                if (const auto it = j.find("nightTint"); it != j.end() && it->is_array() && it->size() >= 3)
+                {
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        out.nightTint[c] = (*it)[c].is_number() ? std::max((*it)[c].get<float>(), 0.0f) : out.nightTint[c];
+                    }
+                }
+            },
+            [](J& j, const S& s) { j["nightTint"] = { s.nightTint[0], s.nightTint[1], s.nightTint[2] }; }),
+        // Time-of-day E1: "exposureCurve": [[sceneEv100, compensationEv], ...] -- up to six, sorted here by EV
+        // so a hand-edited file cannot hand the shader a curve that runs backwards.
+        schema::Custom<S>("exposureCurve",
+            [](const J& j, S& out) {
+                if (const auto it = j.find("exposureCurve"); it != j.end() && it->is_array())
+                {
+                    std::vector<std::pair<float, float>> points;
+                    for (const nlohmann::json& p : *it)
+                    {
+                        if (p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number())
+                        {
+                            points.emplace_back(std::clamp(p[0].get<float>(), -16.0f, 24.0f), std::clamp(p[1].get<float>(), -10.0f, 10.0f));
+                        }
+                    }
+                    std::sort(points.begin(), points.end());
+                    out.exposureCurvePoints = static_cast<std::uint32_t>(
+                        std::min<std::size_t>(points.size(), CameraExposureSettings::kExposureCurveMaxPoints));
+                    for (std::uint32_t i = 0; i < out.exposureCurvePoints; ++i)
+                    {
+                        out.exposureCurveEv[i] = points[i].first;
+                        out.exposureCurveComp[i] = points[i].second;
+                    }
+                }
+            },
+            [](J& j, const S& s) {
+                nlohmann::json curve = nlohmann::json::array();
+                for (std::uint32_t i = 0; i < std::min(s.exposureCurvePoints, CameraExposureSettings::kExposureCurveMaxPoints); ++i)
+                {
+                    curve.push_back(nlohmann::json::array({ s.exposureCurveEv[i], s.exposureCurveComp[i] }));
+                }
+                j["exposureCurve"] = std::move(curve);
+            }),
+    }, &FinishCamera };
+    return table;
+}
+
+inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
+{
+    CameraKeys().Read(j, out);
 }
 
 // P3B fields moved from `colorPipeline` to `cameraExposure` (they are an exposure operation, not a
@@ -161,121 +187,60 @@ inline void MigrateLegacyLocalExposure(const nlohmann::json& colorPipelineJson,
     lift("localShadowThreshold",    camera.localShadowThreshold);
 }
 
-// P3. The tone curve serialises as a NAME, not an index: a level that says "agx" keeps meaning
-// what it says if the enum ever gains a member, and it is readable in a diff.
+// Architecture plan R9.2: the colour pipeline's table of keys (core/schema/KeyTable.h). The tone curve serialises as a
+// NAME (P3); every number clamps into its range after it is read, as the hand code clamped the struct at its end.
+inline const schema::Table<ColorPipelineSettings>& ColorPipelineKeys()
+{
+    using S = ColorPipelineSettings;
+    static const schema::Table<S> table{ {
+        schema::Custom<S>("toneCurve",
+            [](const nlohmann::json& j, S& out) {
+                if (const auto it = j.find("toneCurve"); it != j.end() && it->is_string())
+                {
+                    const std::string name = it->get<std::string>();
+                    if (name == "legacy" || name == "aces") { out.toneCurve = ToneCurve::LegacyAces; }
+                    else if (name == "agx")                 { out.toneCurve = ToneCurve::AgX; }
+                    else if (name == "filmic" || name == "film") { out.toneCurve = ToneCurve::Filmic; }
+                }
+            },
+            [](nlohmann::json& j, const S& s) {
+                j["toneCurve"] = s.toneCurve == ToneCurve::AgX ? "agx" : (s.toneCurve == ToneCurve::Filmic ? "filmic" : "legacy");
+            }),
+        schema::Field("agxSlope", &S::agxSlope).Clamp(0.0f, 4.0f),
+        schema::Field("agxPower", &S::agxPower).Clamp(0.1f, 4.0f),
+        schema::Field("agxSaturation", &S::agxSaturation).Clamp(0.0f, 4.0f),
+        schema::Field("gradeSaturation", &S::gradeSaturation).Clamp(0.0f, 4.0f),
+        schema::Field("gradeContrast", &S::gradeContrast).Clamp(0.1f, 4.0f),
+        schema::Field("gradeGamma", &S::gradeGamma).Clamp(0.1f, 4.0f),
+        schema::Field("gradeGain", &S::gradeGain).Clamp(0.0f, 4.0f),
+        schema::Field("gradeOffset", &S::gradeOffset).Clamp(-1.0f, 1.0f),
+        schema::Field("filmSlope", &S::filmSlope).Clamp(0.1f, 2.0f),
+        schema::Field("filmToe", &S::filmToe).Clamp(0.0f, 1.0f),
+        schema::Field("filmShoulder", &S::filmShoulder).Clamp(0.0f, 1.0f),
+        schema::Field("filmBlackClip", &S::filmBlackClip).Clamp(0.0f, 1.0f),
+        schema::Field("filmWhiteClip", &S::filmWhiteClip).Clamp(0.0f, 1.0f),
+        schema::Field("ueGamut", &S::ueGamut),
+        schema::Field("expandGamut", &S::expandGamut).Clamp(0.0f, 4.0f),
+        schema::Field("blueCorrection", &S::blueCorrection).Clamp(0.0f, 1.0f),
+        schema::Field("vignetteIntensity", &S::vignetteIntensity).Clamp(0.0f, 1.0f),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
 {
-    if (!j.is_object())
-    {
-        return;
-    }
-    if (const auto it = j.find("toneCurve"); it != j.end() && it->is_string())
-    {
-        const std::string name = it->get<std::string>();
-        if (name == "legacy" || name == "aces") { out.toneCurve = ToneCurve::LegacyAces; }
-        else if (name == "agx")                 { out.toneCurve = ToneCurve::AgX; }
-        else if (name == "filmic" || name == "film") { out.toneCurve = ToneCurve::Filmic; }
-    }
-    out.agxSlope      = j.value("agxSlope",      out.agxSlope);
-    out.agxPower      = j.value("agxPower",      out.agxPower);
-    out.agxSaturation = j.value("agxSaturation", out.agxSaturation);
-    out.gradeSaturation = j.value("gradeSaturation", out.gradeSaturation);
-    out.gradeContrast   = j.value("gradeContrast",   out.gradeContrast);
-    out.gradeGamma      = j.value("gradeGamma",      out.gradeGamma);
-    out.gradeGain       = j.value("gradeGain",       out.gradeGain);
-    out.gradeOffset     = j.value("gradeOffset",     out.gradeOffset);
-    out.filmSlope     = j.value("filmSlope",     out.filmSlope);
-    out.filmToe       = j.value("filmToe",       out.filmToe);
-    out.filmShoulder  = j.value("filmShoulder",  out.filmShoulder);
-    out.filmBlackClip = j.value("filmBlackClip", out.filmBlackClip);
-    out.filmWhiteClip = j.value("filmWhiteClip", out.filmWhiteClip);
-    out.ueGamut        = j.value("ueGamut",        out.ueGamut);
-    out.expandGamut    = j.value("expandGamut",    out.expandGamut);
-    out.blueCorrection = j.value("blueCorrection", out.blueCorrection);
-    out.vignetteIntensity = j.value("vignetteIntensity", out.vignetteIntensity);
-
-    out.agxSlope      = std::clamp(out.agxSlope,      0.0f, 4.0f);
-    out.agxPower      = std::clamp(out.agxPower,      0.1f, 4.0f);
-    out.agxSaturation = std::clamp(out.agxSaturation, 0.0f, 4.0f);
-    out.gradeSaturation = std::clamp(out.gradeSaturation, 0.0f, 4.0f);
-    out.gradeContrast   = std::clamp(out.gradeContrast,   0.1f, 4.0f);
-    out.gradeGamma      = std::clamp(out.gradeGamma,      0.1f, 4.0f);
-    out.gradeGain       = std::clamp(out.gradeGain,       0.0f, 4.0f);
-    out.gradeOffset     = std::clamp(out.gradeOffset,    -1.0f, 1.0f);
-    out.filmSlope     = std::clamp(out.filmSlope,     0.1f, 2.0f);
-    out.filmToe       = std::clamp(out.filmToe,       0.0f, 1.0f);
-    out.filmShoulder  = std::clamp(out.filmShoulder,  0.0f, 1.0f);
-    out.filmBlackClip = std::clamp(out.filmBlackClip, 0.0f, 1.0f);
-    out.filmWhiteClip = std::clamp(out.filmWhiteClip, 0.0f, 1.0f);
-    out.expandGamut    = std::clamp(out.expandGamut,    0.0f, 4.0f);
-    out.blueCorrection = std::clamp(out.blueCorrection, 0.0f, 1.0f);
-    out.vignetteIntensity = std::clamp(out.vignetteIntensity, 0.0f, 1.0f);
+    ColorPipelineKeys().Read(j, out);
 }
 
 inline nlohmann::json ToJson(const ColorPipelineSettings& s)
 {
-    return nlohmann::json{
-        { "toneCurve",     s.toneCurve == ToneCurve::AgX ? "agx"
-                           : (s.toneCurve == ToneCurve::Filmic ? "filmic" : "legacy") },
-        { "agxSlope",      s.agxSlope },
-        { "agxPower",      s.agxPower },
-        { "agxSaturation", s.agxSaturation },
-        { "gradeSaturation", s.gradeSaturation },
-        { "gradeContrast",   s.gradeContrast },
-        { "gradeGamma",      s.gradeGamma },
-        { "gradeGain",       s.gradeGain },
-        { "gradeOffset",     s.gradeOffset },
-        { "filmSlope",     s.filmSlope },
-        { "filmToe",       s.filmToe },
-        { "filmShoulder",  s.filmShoulder },
-        { "filmBlackClip", s.filmBlackClip },
-        { "filmWhiteClip", s.filmWhiteClip },
-        { "ueGamut",        s.ueGamut },
-        { "expandGamut",    s.expandGamut },
-        { "blueCorrection", s.blueCorrection },
-        { "vignetteIntensity", s.vignetteIntensity },
-    };
+    return ColorPipelineKeys().Write(s);
 }
 
 inline nlohmann::json ToJson(const CameraExposureSettings& s)
 {
-    nlohmann::json curve = nlohmann::json::array();
-    for (std::uint32_t i = 0; i < std::min(s.exposureCurvePoints, CameraExposureSettings::kExposureCurveMaxPoints); ++i)
-    {
-        curve.push_back(nlohmann::json::array({ s.exposureCurveEv[i], s.exposureCurveComp[i] }));
-    }
-    return nlohmann::json{
-        { "exposureCurve", std::move(curve) }, // time-of-day E1
-        { "enabled",        s.enabled },
-        { "autoExposure",   s.autoExposure },
-        { "compensationEv", s.compensationEv },
-        { "manualCompensationEv", s.manualCompensationEv },
-        { "localHighlightContrast",  s.localHighlightContrast },
-        { "localShadowContrast",     s.localShadowContrast },
-        { "localDetailStrength",     s.localDetailStrength },
-        { "localHighlightThreshold", s.localHighlightThreshold },
-        { "localShadowThreshold",    s.localShadowThreshold },
-        { "localBlurredBlend",       s.localBlurredBlend },
-        { "localBlurredKernelPercent", s.localBlurredKernelPercent },
-        { "nightVision",             s.nightVision },
-        { "nightTint",               { s.nightTint[0], s.nightTint[1], s.nightTint[2] } },
-        { "nightDesaturation",       s.nightDesaturation },
-        { "minEv100",       s.minEv100 },
-        { "maxEv100",       s.maxEv100 },
-        { "lowPercentile",  s.lowPercentile },
-        { "highPercentile", s.highPercentile },
-        { "speedUp",        s.speedUp },
-        { "speedDown",      s.speedDown },
-        { "apertureFStop",   s.apertureFStop },
-        { "shutterSpeedSec", s.shutterSpeedSec },
-        { "isoSensitivity",  s.isoSensitivity },
-        { "meterMaskStrength",    s.meterMaskStrength },
-        { "meterMaskInnerRadius", s.meterMaskInnerRadius },
-        { "meterMaskOuterRadius", s.meterMaskOuterRadius },
-        { "meterMaskSkyBias",     s.meterMaskSkyBias },
-        { "adaptationStartDistance", s.adaptationStartDistance },
-        { "blackBucketInfluence",    s.blackBucketInfluence },
-    };
+    return CameraKeys().Write(s);
 }
 
 } // namespace render::PhotographicSettingsJson
+

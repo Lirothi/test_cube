@@ -656,6 +656,10 @@ private:
     };
     void Pass_WaterReflection(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const WaterReflectionPoints& pts);
+    // R4.4: the sun's shadow for the direct draws (glass, water) into Renderer::DirectInputs -- the VSM page table and
+    // pool, the SDSM partitions and moments, the local shadow pool -- as Pass_Transparent and Pass_Translucent publish
+    // them before their draws.
+    void PublishShadowInputs(Renderer* r);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView, const TransparentPoints& pts);
     // `copyWaterPoint`: the depth (with the water) -> COPY_SOURCE, depthWater -> COPY_DEST; `copyWater` = copy it there.

@@ -24,7 +24,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 
 class Material;
 class Renderer;

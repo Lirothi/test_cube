@@ -7,7 +7,7 @@
 #include "app/settings/Scalability.h"
 #include "core/Helpers.h" // GetTimeSeconds
 #include "core/logging/Log.h"
-#include "rendering/core/MemGates.h"
+#include "rhi/MemGates.h"
 #include "rendering/core/Renderer.h"
 
 #include <algorithm>

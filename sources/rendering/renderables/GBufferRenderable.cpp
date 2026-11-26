@@ -17,6 +17,7 @@
 #include "rendering/wind/WindState.h" // W8: WindDistanceFade
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/glass_params.h" // GlassMaterialCB's fields, once (R5.3)
+#include "rendering/core/RenderContextPool.h"
 
 namespace
 {
@@ -1174,7 +1175,7 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
 {
     Mesh* mesh = GetMesh();
     if (!renderer || !cl || !mesh || slotGlassMaterials_.empty() || matDatas_.empty()) { return; }
-    const render::GlassPassSrvs* passSrvs = renderer->GetGlassPassSrvs();
+    const render::GlassPassSrvs* passSrvs = renderer->DirectInputs().Glass();
     if (!passSrvs) { return; } // a shadow map is missing this frame: no glass, as for the panes
 
     // s0..s2 as the panes' (TransparentStaticMesh), s3 the G-buffer's material sampler with its DLSS bias.

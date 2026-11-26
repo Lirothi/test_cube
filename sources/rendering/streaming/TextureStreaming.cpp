@@ -9,13 +9,13 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Texture2D.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/TextureCreate.h"
 #include "rendering/streaming/StreamingSettings.h"
 
 namespace streaming {

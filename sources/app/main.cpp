@@ -22,8 +22,8 @@
 #include "core/vfs/Vfs.h"
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/MemTrace.h"
-#include "rendering/core/MemGates.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/MemGates.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (R16.1)
 #include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest, --crash-selftest=view-throw (the second review of wave 1)
 #include "rendering/lighting/TimeOfDaySettings.h"  // T3: --tod-legacy-light

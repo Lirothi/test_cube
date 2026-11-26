@@ -4,6 +4,8 @@
 
 #include "third_party/json/json.hpp"
 
+#include "core/schema/KeyTable.h" // R9.2: the section's table of keys
+
 #include "rendering/scene/SceneFrameData.h"
 
 // P8: the ONE mapping between BloomSettings and JSON. The level reader, the editor's environment
@@ -15,145 +17,77 @@
 namespace BloomSettingsJson
 {
 
+// Architecture plan R9.2: the section's table of keys (core/schema/KeyTable.h); reading and writing walk it.
+inline const schema::Table<BloomSettings>& Keys()
+{
+    using S = BloomSettings;
+    static const schema::Table<S> table{ {
+        schema::Field("convKernelTint", &S::convKernelTint),
+        schema::Field("convAnamorphicTint", &S::convAnamorphicTint),
+        schema::Field("enabled", &S::enabled),
+        schema::Field("intensity", &S::intensity),
+        schema::Field("threshold", &S::threshold),
+        schema::Field("softKnee", &S::softKnee),
+        schema::Field("radius", &S::radius),
+        schema::Field("fireflyClamp", &S::fireflyClamp),
+        schema::Field("method", &S::method),
+        schema::Field("convKernel", &S::convKernel),
+        schema::Field("convPreFilterMin", &S::convPreFilterMin),
+        schema::Field("convPreFilterMax", &S::convPreFilterMax),
+        schema::Field("convPreFilterMult", &S::convPreFilterMult),
+        schema::Field("convSize", &S::convSize),
+        schema::Field("convPercent", &S::convPercent),
+        schema::Field("convBeforeUpscale", &S::convBeforeUpscale),
+        schema::Field("convTemporalWeight", &S::convTemporalWeight).Clamp(0.01f, 1.0f),
+        schema::Field("convSunKernelScale", &S::convSunKernelScale).Clamp(0.0f, 10.0f),
+        schema::Field("convSunGhostScale", &S::convSunGhostScale).Clamp(0.0f, 10.0f),
+        schema::Field("convSunSplitRadiusDeg", &S::convSunSplitRadiusDeg).Clamp(0.1f, 45.0f),
+        schema::Field("convBlades", &S::convBlades),
+        schema::Field("convAnamorphicIntensity", &S::convAnamorphicIntensity),
+        schema::Field("convAnamorphicLength", &S::convAnamorphicLength),
+        schema::Field("convAnamorphicWidth", &S::convAnamorphicWidth),
+        schema::Field("convAnamorphicThreshold", &S::convAnamorphicThreshold),
+        schema::Field("convAnamorphicChroma", &S::convAnamorphicChroma),
+        schema::Field("convGhosts", &S::convGhosts),
+        schema::Field("convGhostBokeh", &S::convGhostBokeh),
+        schema::Field("convGhostIntensity", &S::convGhostIntensity),
+        schema::Field("convGhostThreshold", &S::convGhostThreshold),
+        schema::Field("sunGlareIntensity", &S::sunGlareIntensity).AtLeast(0.0f),
+        schema::Field("sunGlareRadiusDeg", &S::sunGlareRadiusDeg).AtLeast(0.05f),
+        schema::Field("sunGlareVeil", &S::sunGlareVeil).AtLeast(0.0f),
+        schema::Field("sunGlareVeilRadiusDeg", &S::sunGlareVeilRadiusDeg).AtLeast(0.1f),
+        schema::Field("sunGlareSmoothingSec", &S::sunGlareSmoothingSec).Clamp(0.0f, 2.0f),
+        schema::Field("sunGlareLowSunDeg", &S::sunGlareLowSunDeg).Clamp(0.0f, 90.0f),
+        schema::Field("sunGlareLowSunFloor", &S::sunGlareLowSunFloor).Clamp(0.0f, 1.0f),
+        schema::Field("sunRaysIntensity", &S::sunRaysIntensity).AtLeast(0.0f),
+        schema::Field("sunRaysCount", &S::sunRaysCount).Clamp(16.0f, 2000.0f),
+        schema::Field("sunRaysBundles", &S::sunRaysBundles).Clamp(1.0f, 128.0f),
+        schema::Field("sunRaysBundleWidthDeg", &S::sunRaysBundleWidthDeg).Clamp(0.1f, 360.0f),
+        schema::Field("sunRaysBundleStrength", &S::sunRaysBundleStrength).Clamp(0.0f, 1.0f),
+        schema::Field("sunRaysLengthDeg", &S::sunRaysLengthDeg).AtLeast(0.1f),
+        schema::Field("sunRaysWidthDeg", &S::sunRaysWidthDeg).Clamp(0.005f, 2.0f),
+        schema::Field("sunRaysHalo", &S::sunRaysHalo).AtLeast(0.0f),
+        schema::Field("sunRaysHaloRadiusDeg", &S::sunRaysHaloRadiusDeg).AtLeast(0.1f),
+        schema::Field("sunRaysTexture", &S::sunRaysTexture),
+        schema::Field("sunRaysTextureSizeDeg", &S::sunRaysTextureSizeDeg).AtLeast(0.5f),
+        schema::Field("sunRaysSpikes", &S::sunRaysSpikes).AtLeast(0.0f),
+        schema::Field("sunRaysSpikeCount", &S::sunRaysSpikeCount).Clamp(2.0f, 32.0f),
+        schema::Field("sunRaysSpikeWidthDeg", &S::sunRaysSpikeWidthDeg).Clamp(0.005f, 2.0f),
+        schema::Field("sunRaysSpikeLengthDeg", &S::sunRaysSpikeLengthDeg).Clamp(0.1f, 60.0f),
+        schema::Field("sunRaysRotationDeg", &S::sunRaysRotationDeg),
+        schema::Field("sunRaysVisibleExponent", &S::sunRaysVisibleExponent).Clamp(0.0f, 1.0f),
+    } };
+    return table;
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
 {
-    if (!j.is_object())
-    {
-        return;
-    }
-    s.enabled = j.value("enabled", s.enabled);
-    s.intensity = j.value("intensity", s.intensity);
-    s.threshold = j.value("threshold", s.threshold);
-    s.softKnee = j.value("softKnee", s.softKnee);
-    s.radius = j.value("radius", s.radius);
-    s.fireflyClamp = j.value("fireflyClamp", s.fireflyClamp);
-    s.method = j.value("method", s.method);
-    // P8C-2: the aperture-kernel fields (convKernelRadius, the spoke set, convChroma, the
-    // convAnamorphic squeeze, convGhostSpacing) are GONE, not renamed -- a level that still
-    // carries them keeps rendering, the keys are simply ignored. P8C-2d retired
-    // `convBladeRotation` the same way, for being inert against the noise floor.
-    s.convKernel = j.value("convKernel", s.convKernel);
-    if (j.contains("convKernelTint") && j["convKernelTint"].is_array() &&
-        j["convKernelTint"].size() == 3)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            s.convKernelTint[i] = j["convKernelTint"][i].get<float>();
-        }
-    }
-    s.convPreFilterMin = j.value("convPreFilterMin", s.convPreFilterMin);
-    s.convPreFilterMax = j.value("convPreFilterMax", s.convPreFilterMax);
-    s.convPreFilterMult = j.value("convPreFilterMult", s.convPreFilterMult);
-    s.convSize = j.value("convSize", s.convSize);
-    s.convPercent = j.value("convPercent", s.convPercent);
-    s.convBeforeUpscale = j.value("convBeforeUpscale", s.convBeforeUpscale);
-    s.convTemporalWeight = std::clamp(j.value("convTemporalWeight", s.convTemporalWeight), 0.01f, 1.0f);
-    s.convSunKernelScale = std::clamp(j.value("convSunKernelScale", s.convSunKernelScale), 0.0f, 10.0f);
-    s.convSunGhostScale = std::clamp(j.value("convSunGhostScale", s.convSunGhostScale), 0.0f, 10.0f);
-    s.convSunSplitRadiusDeg = std::clamp(j.value("convSunSplitRadiusDeg", s.convSunSplitRadiusDeg), 0.1f, 45.0f);
-    s.convBlades = j.value("convBlades", s.convBlades);
-    s.convAnamorphicIntensity = j.value("convAnamorphicIntensity", s.convAnamorphicIntensity);
-    s.convAnamorphicLength = j.value("convAnamorphicLength", s.convAnamorphicLength);
-    s.convAnamorphicWidth = j.value("convAnamorphicWidth", s.convAnamorphicWidth);
-    s.convAnamorphicThreshold = j.value("convAnamorphicThreshold", s.convAnamorphicThreshold);
-    s.convAnamorphicChroma = j.value("convAnamorphicChroma", s.convAnamorphicChroma);
-    if (j.contains("convAnamorphicTint") && j["convAnamorphicTint"].is_array() &&
-        j["convAnamorphicTint"].size() == 3)
-    {
-        for (int i = 0; i < 3; ++i)
-        {
-            s.convAnamorphicTint[i] = j["convAnamorphicTint"][i].get<float>();
-        }
-    }
-    s.convGhosts = j.value("convGhosts", s.convGhosts);
-    s.convGhostBokeh = j.value("convGhostBokeh", s.convGhostBokeh);
-    s.convGhostIntensity = j.value("convGhostIntensity", s.convGhostIntensity);
-    s.convGhostThreshold = j.value("convGhostThreshold", s.convGhostThreshold);
-    s.sunGlareIntensity = std::max(0.0f, j.value("sunGlareIntensity", s.sunGlareIntensity));
-    s.sunGlareRadiusDeg = std::max(0.05f, j.value("sunGlareRadiusDeg", s.sunGlareRadiusDeg));
-    s.sunGlareVeil = std::max(0.0f, j.value("sunGlareVeil", s.sunGlareVeil));
-    s.sunGlareVeilRadiusDeg = std::max(0.1f, j.value("sunGlareVeilRadiusDeg", s.sunGlareVeilRadiusDeg));
-    s.sunGlareSmoothingSec = std::clamp(j.value("sunGlareSmoothingSec", s.sunGlareSmoothingSec), 0.0f, 2.0f);
-    s.sunGlareLowSunDeg = std::clamp(j.value("sunGlareLowSunDeg", s.sunGlareLowSunDeg), 0.0f, 90.0f);
-    s.sunGlareLowSunFloor = std::clamp(j.value("sunGlareLowSunFloor", s.sunGlareLowSunFloor), 0.0f, 1.0f);
-    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
-    s.sunRaysCount = std::clamp(j.value("sunRaysCount", s.sunRaysCount), 16u, 2000u);
-    s.sunRaysBundles = std::clamp(j.value("sunRaysBundles", s.sunRaysBundles), 1u, 128u);
-    s.sunRaysBundleWidthDeg = std::clamp(j.value("sunRaysBundleWidthDeg", s.sunRaysBundleWidthDeg), 0.1f, 360.0f);
-    s.sunRaysBundleStrength = std::clamp(j.value("sunRaysBundleStrength", s.sunRaysBundleStrength), 0.0f, 1.0f);
-    s.sunRaysLengthDeg = std::max(0.1f, j.value("sunRaysLengthDeg", s.sunRaysLengthDeg));
-    s.sunRaysWidthDeg = std::clamp(j.value("sunRaysWidthDeg", s.sunRaysWidthDeg), 0.005f, 2.0f);
-    s.sunRaysHalo = std::max(0.0f, j.value("sunRaysHalo", s.sunRaysHalo));
-    s.sunRaysHaloRadiusDeg = std::max(0.1f, j.value("sunRaysHaloRadiusDeg", s.sunRaysHaloRadiusDeg));
-    s.sunRaysTexture = j.value("sunRaysTexture", s.sunRaysTexture);
-    s.sunRaysTextureSizeDeg = std::max(0.5f, j.value("sunRaysTextureSizeDeg", s.sunRaysTextureSizeDeg));
-    s.sunRaysSpikes = std::max(0.0f, j.value("sunRaysSpikes", s.sunRaysSpikes));
-    s.sunRaysSpikeCount = std::clamp(j.value("sunRaysSpikeCount", s.sunRaysSpikeCount), 2u, 32u);
-    s.sunRaysSpikeWidthDeg = std::clamp(j.value("sunRaysSpikeWidthDeg", s.sunRaysSpikeWidthDeg), 0.005f, 2.0f);
-    s.sunRaysSpikeLengthDeg = std::clamp(j.value("sunRaysSpikeLengthDeg", s.sunRaysSpikeLengthDeg), 0.1f, 60.0f);
-    s.sunRaysRotationDeg = j.value("sunRaysRotationDeg", s.sunRaysRotationDeg);
-    s.sunRaysVisibleExponent = std::clamp(j.value("sunRaysVisibleExponent", s.sunRaysVisibleExponent), 0.0f, 1.0f);
+    Keys().Read(j, s);
 }
 
 inline nlohmann::json ToJson(const BloomSettings& s)
 {
-    nlohmann::json j;
-    j["enabled"] = s.enabled;
-    j["intensity"] = s.intensity;
-    j["threshold"] = s.threshold;
-    j["softKnee"] = s.softKnee;
-    j["radius"] = s.radius;
-    j["fireflyClamp"] = s.fireflyClamp;
-    j["method"] = s.method;
-    j["convKernel"] = s.convKernel;
-    j["convKernelTint"] = { s.convKernelTint[0], s.convKernelTint[1], s.convKernelTint[2] };
-    j["convPreFilterMin"] = s.convPreFilterMin;
-    j["convPreFilterMax"] = s.convPreFilterMax;
-    j["convPreFilterMult"] = s.convPreFilterMult;
-    j["convSize"] = s.convSize;
-    j["convPercent"] = s.convPercent;
-    j["convBeforeUpscale"] = s.convBeforeUpscale;
-    j["convTemporalWeight"] = s.convTemporalWeight;
-    j["convSunKernelScale"] = s.convSunKernelScale;
-    j["convSunGhostScale"] = s.convSunGhostScale;
-    j["convSunSplitRadiusDeg"] = s.convSunSplitRadiusDeg;
-    j["convBlades"] = s.convBlades;
-    j["convAnamorphicIntensity"] = s.convAnamorphicIntensity;
-    j["convAnamorphicLength"] = s.convAnamorphicLength;
-    j["convAnamorphicWidth"] = s.convAnamorphicWidth;
-    j["convAnamorphicThreshold"] = s.convAnamorphicThreshold;
-    j["convAnamorphicChroma"] = s.convAnamorphicChroma;
-    j["convAnamorphicTint"] = { s.convAnamorphicTint[0], s.convAnamorphicTint[1],
-                                s.convAnamorphicTint[2] };
-    j["convGhosts"] = s.convGhosts;
-    j["convGhostBokeh"] = s.convGhostBokeh;
-    j["convGhostIntensity"] = s.convGhostIntensity;
-    j["convGhostThreshold"] = s.convGhostThreshold;
-    j["sunGlareIntensity"] = s.sunGlareIntensity;
-    j["sunGlareRadiusDeg"] = s.sunGlareRadiusDeg;
-    j["sunGlareVeil"] = s.sunGlareVeil;
-    j["sunGlareVeilRadiusDeg"] = s.sunGlareVeilRadiusDeg;
-    j["sunGlareSmoothingSec"] = s.sunGlareSmoothingSec;
-    j["sunGlareLowSunDeg"] = s.sunGlareLowSunDeg;
-    j["sunGlareLowSunFloor"] = s.sunGlareLowSunFloor;
-    j["sunRaysIntensity"] = s.sunRaysIntensity;
-    j["sunRaysCount"] = s.sunRaysCount;
-    j["sunRaysLengthDeg"] = s.sunRaysLengthDeg;
-    j["sunRaysBundles"] = s.sunRaysBundles;
-    j["sunRaysBundleWidthDeg"] = s.sunRaysBundleWidthDeg;
-    j["sunRaysBundleStrength"] = s.sunRaysBundleStrength;
-    j["sunRaysWidthDeg"] = s.sunRaysWidthDeg;
-    j["sunRaysHalo"] = s.sunRaysHalo;
-    j["sunRaysHaloRadiusDeg"] = s.sunRaysHaloRadiusDeg;
-    j["sunRaysTexture"] = s.sunRaysTexture;
-    j["sunRaysTextureSizeDeg"] = s.sunRaysTextureSizeDeg;
-    j["sunRaysSpikes"] = s.sunRaysSpikes;
-    j["sunRaysSpikeCount"] = s.sunRaysSpikeCount;
-    j["sunRaysSpikeWidthDeg"] = s.sunRaysSpikeWidthDeg;
-    j["sunRaysSpikeLengthDeg"] = s.sunRaysSpikeLengthDeg;
-    j["sunRaysRotationDeg"] = s.sunRaysRotationDeg;
-    j["sunRaysVisibleExponent"] = s.sunRaysVisibleExponent;
-    return j;
+    return Keys().Write(s);
 }
 
 } // namespace BloomSettingsJson

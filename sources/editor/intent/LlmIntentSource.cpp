@@ -9,7 +9,7 @@
 #include <thread>
 
 #include "core/logging/Log.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/MemoryReport.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/intent/EditorActionRegistry.h"
 #include "editor/intent/IntentNotes.h"

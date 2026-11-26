@@ -1,8 +1,8 @@
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
-#include "rendering/core/TextureCreate.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/TextureCreate.h"
+#include "rhi/GpuAlloc.h"
 
 #include <bit>
 #include <cstdint>
@@ -26,6 +26,7 @@
 #include "shaders/shared/vsm_scatter.h" // ScatterCB's fields, once (R5.3)
 #include "shaders/shared/vsm_water_mask.h" // WaterMaskCB's fields, once (R5.3)
 #include "shaders/shared/vsm_propagate.h" // PropagateCB's fields, once (R5.3)
+#include "materials/Texture2D.h"
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
 {
@@ -823,13 +824,13 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     if (!IsAllocated() || !shadowGpu) { return PageRenderDecisions{}; }
     PageRenderDecisions d = ComputePageRenderDecisions(shadowGpu, wind);
     // Tessy N3: the cluster draw's command signature, made here on the builder's thread (the record may be a worker's).
-    if (d.tessy && (!ctx.renderer || !ctx.renderer->GetDrawCommandSignature()))
+    if (d.tessy && (!ctx.renderer || !ctx.renderer->RhiDevice().DrawCommandSignature()))
     {
         d.tessy = false;
         d.tessyMs = false;
         d.tessyOffReason = "the DRAW command signature failed";
     }
-    if (d.tessyMs && !ctx.renderer->GetDispatchMeshCommandSignature())
+    if (d.tessyMs && !ctx.renderer->RhiDevice().DispatchMeshCommandSignature())
     {
         d.tessyMs = false;
         d.tessyMsOffReason = "the DISPATCH_MESH command signature failed";
@@ -2422,7 +2423,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // The LOOP fallback draws into the pool, whose DSV is D32 — it needs the pool-format twin of
     // the Legacy PSO (one PSO cannot serve two depth formats).
     Material* indirectMat = shadowGpu->IndirectShadowPoolMaterial();
-    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    ID3D12CommandSignature* sig = renderer->RhiDevice().DrawIndexedCommandSignature();
     if (!indirectMat || !indirectMat->GetPipelineState() || !sig) { return; }
 
     const UINT f = renderer->GetCurrentFrameIndex();
@@ -3081,12 +3082,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             tessyMat->Bind(cl, tctx, false);
             if (dec.tessyMs)
             {
-                renderer->ExecuteIndirect(cl, renderer->GetDispatchMeshCommandSignature(), 1, tessyStats_.Get(), 80, nullptr, 0);
+                renderer->ExecuteIndirect(cl, renderer->RhiDevice().DispatchMeshCommandSignature(), 1, tessyStats_.Get(), 80, nullptr, 0);
             }
             else
             {
                 cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                renderer->ExecuteIndirect(cl, renderer->GetDrawCommandSignature(), 1, tessyStats_.Get(), 0, nullptr, 0);
+                renderer->ExecuteIndirect(cl, renderer->RhiDevice().DrawCommandSignature(), 1, tessyStats_.Get(), 0, nullptr, 0);
             }
         }
         if (dec.hzb)

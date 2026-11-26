@@ -5,7 +5,7 @@
 #include <DirectXMath.h>
 #include <vector>
 
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 
 class Renderer;
 

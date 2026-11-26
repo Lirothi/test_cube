@@ -29,10 +29,8 @@ ocean/WaterMask.cpp -> physics/PhysicsWorld.h
 physics/PhysicsWorld.cpp -> ocean/OceanReadback.h
 physics/PhysicsWorld.cpp -> ocean/OceanRenderable.h
 rendering/core/RenderTargetManager.cpp -> rendering/shadows/ShadowSettings.h
-rendering/core/RenderTargetManager.h -> rendering/lighting/LightManager.h
 rendering/core/Renderer.cpp -> rendering/lighting/VolumetricCloudSettings.h
 rendering/core/Renderer.cpp -> rendering/shadows/ShadowSettings.h
-rendering/core/Renderer.h -> rendering/lighting/LightManager.h
 rendering/debug/DebugGrid.cpp -> rendering/renderables/RenderableObject.h
 rendering/debug/DebugGrid.h -> rendering/renderables/RenderableObjectBase.h
 rendering/debug/LodDebugView.cpp -> rendering/renderables/RenderableObject.h

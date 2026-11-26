@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <wrl/client.h>
 #include "materials/Material.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/RenderContext.h"
 #include "rendering/core/RenderConstants.h"
 #include "core/math/Math.h"
 

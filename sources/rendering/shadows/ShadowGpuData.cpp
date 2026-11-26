@@ -21,11 +21,11 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h" // PrepareCullPass takes a RenderGraphPassContext&
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/CommandListBindState.h" // A6: the merged draws bypass the bind cache
+#include "rhi/CommandListBindState.h" // A6: the merged draws bypass the bind cache
 #include "rendering/core/RasterSettings.h"       // A6: raster.bindless gates the merged path
-#include "rendering/core/GraphicsDevice.h"       // GbvEnabled: GBV takes the per-group path (id=1044)
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/DeferredRelease.h"      // R16.9: an outgrown ring, the old mega buffers
+#include "rhi/Device.h"       // GbvEnabled: GBV takes the per-group path (id=1044)
+#include "rhi/GpuAlloc.h"
+#include "rhi/DeferredRelease.h"      // R16.9: an outgrown ring, the old mega buffers
 #include <chrono>                                // A6: the throttled readout
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
@@ -917,7 +917,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.tessyAtlas = tessy::g_enabled && tessy::g_atlas && dec.localCompact && !readbackWanted && TessyReady() &&
                          tessyAtlasCullMat_ && atlasMat && atlasMat->GetPipelineState() && tessyAtlasHeap_ &&
                          dec.localViews <= render::kShadowViewCeiling && ctx.renderer &&
-                         ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
+                         ctx.renderer->RhiDevice().DispatchMeshCommandSignature() != nullptr;
         tessyAtlasFrame_ = dec.tessyAtlas;
         // Tessy N7e: the atlas views cut the cluster DAG (tessy.lod) by each view's light and texels (viewDag_).
         dec.tessyAtlasDag = dec.tessyAtlas && tessy::g_lod && tessyDagGroups_ > 0u && viewDag_.Valid();
@@ -948,7 +948,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         Material* viewMat = MaskedShadowsActive() ? tessyViewMaskedMat_.get() : tessyViewMat_.get();
         const bool viewPso = tessyAtlasCullMat_ && viewMat && viewMat->GetPipelineState();
         dec.tessyView = tessyViewWanted && TessyReady() && viewPso && tessyAtlasHeap_ && ctx.renderer &&
-                        ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
+                        ctx.renderer->RhiDevice().DispatchMeshCommandSignature() != nullptr;
         tessyViewFrame_ = dec.tessyView;
         tessyViewMode_ = tessy::g_debugView;
         tessyViewVerdict_ = dec.tessyView ? (tessyViewMode_ == 2u ? "on (meshlets)" : tessyViewMode_ == 3u ? "on (levels)" : "on (clusters)")
@@ -984,7 +984,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.tessyGBuffer = tessy::g_enabled && (tessy::g_gbuffer || dagWanted) && dec.gbuffer && !readbackWanted && !wireframe &&
                            filled && tessyGbufTwins_ > 0 && tessyAtlasCullMat_ && tessyAtlasHeap_ &&
                            rows <= kTessyCamRunsMax && rows * split <= render::kShadowViewCeiling && numVirtualGroups_ <= 0x10000u &&
-                           ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
+                           ctx.renderer->RhiDevice().DispatchMeshCommandSignature() != nullptr;
         dec.tessyCamRows = dec.tessyGBuffer ? rows : 0u;
         dec.tessyCamSplit = dec.tessyGBuffer ? split : 1u;
         tessyGbufFrame_ = dec.tessyGBuffer;
@@ -1440,7 +1440,7 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     if (vgBegin >= vgEnd) { return false; }
     const UINT f = renderer->GetCurrentFrameIndex();
     if (f >= render::kFrameCount) { return false; }
-    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    ID3D12CommandSignature* sig = renderer->RhiDevice().DrawIndexedCommandSignature();
     if (!sig) { return false; }
 
     // b0 per LOD value: the virtual group's LOD is the only per-draw constant, and there are four
@@ -1620,7 +1620,7 @@ void ShadowGpuData::EnsureTessyGBufferMaterials_(Renderer* renderer)
         tessyRunCmdsCpu_[2u * r + 1u] = cmdRuns_[r].count;
     }
     tessyRunCmdsCpu_.insert(tessyRunCmdsCpu_.end(), cmdOrder_.begin(), cmdOrder_.end());
-    if (cmdRuns_.empty() || !renderer->SupportsMeshShaders()) { return; }
+    if (cmdRuns_.empty() || !renderer->RhiDevice().SupportsMeshShaders()) { return; }
     auto* mm = renderer->GetMaterialManager();
     for (std::size_t r = 0; r < cmdRuns_.size(); ++r)
     {
@@ -1684,7 +1684,7 @@ void ShadowGpuData::RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsC
                                              bool wireframe, std::uint32_t rowFirst, std::uint32_t slices)
 {
     const UINT f = renderer->GetCurrentFrameIndex();
-    ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
+    ID3D12CommandSignature* const meshSig = renderer->RhiDevice().DispatchMeshCommandSignature();
     if (f >= render::kFrameCount || !meshSig || !tessyGroupSurface_.Valid()) { return; }
     const D3D12_GPU_DESCRIPTOR_HANDLE table = renderer->StageSrvUavTable({
         InstanceReadSrv(f), casterFade_.Srv(f), CasterLodSrv(f),
@@ -1832,7 +1832,7 @@ bool ShadowGpuData::FillGBufferCommandsForFrame(Renderer* renderer)
     // and from then on calls its own state tracking imprecise for the rest of the frame. The per-group path below in
     // RecordIndirectGBufferDraws draws the same groups with the same PSOs and a DRAW_INDEXED-only signature, every
     // binding set on the CPU where GBV sees it. So a GBV run validates these shaders exactly instead of half-blind.
-    if (GraphicsDevice::GbvEnabled())
+    if (rhi::Device::GbvEnabled())
     {
         LOG_INFO_ONCE(logging::LogCategory::RenderShadow,
                       "[gbuffer.indirect] GBV on: one ExecuteIndirect per group (merged bindless commands change VB/IB/root "
@@ -2686,7 +2686,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), kInstancesReadState, L"ShadowGpuData.InstancesUnified");
     EnsureUavRing(renderer, boundsUnified_, casters * sizeof(render::CasterBounds), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.BoundsUnified");
     // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
-    renderer->GetDrawIndexedCommandSignature();
+    renderer->RhiDevice().DrawIndexedCommandSignature();
     // Step 4: per-region UAVs for the cull outputs (depend on the just-decided sizes).
     RebuildCullDescriptors(renderer);
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
@@ -3277,7 +3277,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
 
         // Tessy N6: the mesh shader twins of the two above (MSMain, the same state, the same table). Only with a
         // mesh shader tier; without them `tessy.raster` 1 draws through the VS path.
-        if (renderer->SupportsMeshShaders())
+        if (renderer->RhiDevice().SupportsMeshShaders())
         {
             gd.defines.clear();
             gd.defines.emplace_back("VSM_TESSY", "1");
@@ -3332,7 +3332,7 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
                 tessyCameraPostMat_.reset();
             }
         }
-        if (renderer->SupportsMeshShaders())
+        if (renderer->RhiDevice().SupportsMeshShaders())
         {
             gd.defines.clear();
             gd.defines.emplace_back("TESSY_ATLAS_MS", "1");
@@ -4112,7 +4112,7 @@ ShadowGpuData::DirectionalCullDecisions ShadowGpuData::PrepareDirectionalCullPas
         // through them.
         const bool sunWanted = tessy::g_sdsm || tessyCamDagFrame_;
         dec.tessySun = tessy::g_enabled && sunWanted && TessyReady() && pso && tessyAtlasHeap_ &&
-                       views <= render::kShadowViewCeiling && ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
+                       views <= render::kShadowViewCeiling && ctx.renderer->RhiDevice().DispatchMeshCommandSignature() != nullptr;
         tessySunFrame_ = dec.tessySun;
         dec.tessySunClear = dec.tessySun && !tessyCountersCleared_;
         // tessy.lod: the camera's DAG cut, drawn by the partitions too (UE's rule for LODs: the shadow takes the LOD the
@@ -4422,7 +4422,7 @@ void ShadowGpuData::RecordTessySunDraw(Renderer* renderer, ID3D12GraphicsCommand
     if (!tessySunFrame_ || !renderer || !cl || viewCB == 0 || partition >= render::kShadowViewCeiling) { return; }
     const UINT f = renderer->GetCurrentFrameIndex();
     Material* const tm = MaskedShadowsActive() ? tessyAtlasMeshMaskedMat_.get() : tessyAtlasMeshMat_.get();
-    ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
+    ID3D12CommandSignature* const meshSig = renderer->RhiDevice().DispatchMeshCommandSignature();
     if (f >= render::kFrameCount || !tm || !meshSig) { return; }
     GPU_SCOPE(cl, ProfilerScopes::kTessySunDraw);
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
@@ -4695,7 +4695,7 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
                        viewSlot - render::kShadowViewCascades >= localCompactViews_)) { return false; }
     const UINT f = renderer->GetCurrentFrameIndex();
     if (f >= render::kFrameCount) { return false; }
-    ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
+    ID3D12CommandSignature* sig = renderer->RhiDevice().DrawIndexedCommandSignature();
     if (!sig) { return false; }
     // S5b: pass B's pair has cascade rows only, laid out exactly like the main pair's first rows.
     if (passB && (viewSlot >= render::CascadeHzb::kCascades || !indirectArgsB_.Valid() || !visibleListB_.Valid())) { return false; }
@@ -4776,7 +4776,7 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
         {
             Material* const tm = MaskedShadowsActive() ? tessyAtlasMeshMaskedMat_.get() : tessyAtlasMeshMat_.get();
             Material* const tml = (tm && linearDepth) ? tm->LinearDepthVariant() : nullptr;
-            ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
+            ID3D12CommandSignature* const meshSig = renderer->RhiDevice().DispatchMeshCommandSignature();
             if (tm && meshSig && (!linearDepth || tml))
             {
                 const D3D12_GPU_DESCRIPTOR_HANDLE table = TessyAtlasDrawTable(renderer, f);
@@ -5392,7 +5392,7 @@ bool ShadowGpuData::RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandLis
     if (!tessyViewFrame_ || !renderer || !cl || viewCB == 0) { return false; }
     const UINT f = renderer->GetCurrentFrameIndex();
     Material* const m = MaskedShadowsActive() ? tessyViewMaskedMat_.get() : tessyViewMat_.get();
-    ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
+    ID3D12CommandSignature* const meshSig = renderer->RhiDevice().DispatchMeshCommandSignature();
     if (f >= render::kFrameCount || !m || !meshSig) { return false; }
     const D3D12_GPU_DESCRIPTOR_HANDLE table = TessyAtlasDrawTable(renderer, f);
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();

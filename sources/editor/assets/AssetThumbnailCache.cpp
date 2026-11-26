@@ -1,7 +1,8 @@
 #include "editor/assets/AssetThumbnailCache.h"
 #include "core/vfs/Vfs.h"
-#include "rendering/core/BarrierTranslation.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/BarrierTranslation.h"
+#include "rhi/DeferredRelease.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -30,7 +31,7 @@
 #include "materials/MaterialDataManager.h"
 #include "materials/TextureDecodeCache.h"
 #include "materials/TextureCube.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/Mesh.h"
@@ -1232,8 +1233,8 @@ AssetThumbnailCache::View AssetThumbnailCache::Request(Renderer& renderer,
         // the thumbnail is drawn much smaller than the source (DDS ships mips;
         // rendered previews are single-mip).
         srvDesc.Texture2D.MipLevels = entry.mipLevels;
-        renderer.MarkImGuiTextureShaderReadable(entry.resource.Get());
-        view.texture = renderer.CreateImGuiTextureId(entry.resource.Get(), srvDesc);
+        renderer.ImGui().MarkTextureShaderReadable(entry.resource.Get());
+        view.texture = renderer.ImGui().CreateTextureId(entry.resource.Get(), srvDesc);
     }
     else if (entry.state == State::Failed)
     {
@@ -1743,7 +1744,7 @@ void AssetThumbnailCache::ReleaseEntry(Renderer& renderer, Entry& entry)
         // recycled under a live ImGui preview handle.
         Renderer* r = &renderer;
         render::deferred::Retire([r, resource = std::move(entry.resource)]() mutable {
-            r->ReleaseImGuiTextureDescriptors(resource.Get());
+            r->ImGui().ReleaseTextureDescriptors(resource.Get());
             resource.Reset();
         }, 0, "thumbnail");
     }
@@ -1781,7 +1782,7 @@ void AssetThumbnailCache::ReleaseAll(Renderer& renderer)
     {
         if (pair.second.resource)
         {
-            renderer.ReleaseImGuiTextureDescriptors(pair.second.resource.Get());
+            renderer.ImGui().ReleaseTextureDescriptors(pair.second.resource.Get());
             pair.second.resource.Reset();
         }
     }

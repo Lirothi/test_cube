@@ -1,7 +1,7 @@
 #include "rendering/rt/RtSmoke.h"
 #include "core/diagnostics/ArtifactWriter.h"
 #include "rendering/rt/AccelerationStructure.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/DeferredRelease.h"
 #include "rendering/meshes/Mesh.h"
 
 #include <windows.h>
@@ -75,7 +75,7 @@ int RunRtSmoke(const char* outPath)
         return 1;
     }
 
-    // --- DXR capability (mirrors GraphicsDevice S1 detection) ---
+    // --- DXR capability (mirrors rhi::Device S1 detection) ---
     ComPtr<ID3D12Device5> device5;
     D3D12_RAYTRACING_TIER tier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
     if (SUCCEEDED(device.As(&device5))) {

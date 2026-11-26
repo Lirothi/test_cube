@@ -6,13 +6,14 @@
 #include "core/logging/Log.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/RenderContext.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/TextureCreate.h" // barrier plan step 11: the ONE place a texture is made
+#include "rhi/TextureCreate.h" // barrier plan step 11: the ONE place a texture is made
 #include "rendering/renderables/InstanceTypes.h" // render::kShadowViewPlanes
+#include "materials/Texture2D.h"
 
 namespace
 {

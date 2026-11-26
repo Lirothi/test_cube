@@ -14,8 +14,8 @@
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h"
 #include "ocean/OceanWake.h"
-#include "rendering/core/DeferredRelease.h"
-#include "rendering/core/GpuAlloc.h"
+#include "rhi/DeferredRelease.h"
+#include "rhi/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
 

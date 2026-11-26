@@ -1,7 +1,7 @@
 #include "rendering/core/RenderTargetManager.h"
-#include "rendering/core/DeferredRelease.h" // R16.10: the bloom FFT grids a residency switch replaces
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/TextureCreate.h"
+#include "rhi/DeferredRelease.h" // R16.10: the bloom FFT grids a residency switch replaces
+#include "rhi/GpuAlloc.h"
+#include "rhi/TextureCreate.h"
 #include "rendering/shadows/ShadowSettings.h" // render::g_csmAtlasRes + the S5 gutter
 
 #include <algorithm>
@@ -517,7 +517,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
         // which run before the upscaler.
         //
-        // Rests SHADER-READABLE, and that is not a free choice. `Renderer::RenderImGui` shows a
+        // Rests SHADER-READABLE, and that is not a free choice. `ui::ImGuiRenderer::Render` shows a
         // target in the texture inspector with
         // `TransitionExplicit(cl, res, GetCanonicalState(res), PIXEL_SHADER_RESOURCE)` — it takes
         // the CANONICAL as the before-state and does not transition back. That is only sound while

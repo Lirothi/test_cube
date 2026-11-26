@@ -142,6 +142,16 @@ namespace editormcp
         // open_level: File > Open's road; the load runs at the next frame. False + the reason (no such file, unsaved
         // edits without discardChanges).
         virtual bool Open(const std::string& path, bool discardChanges, std::string& outText) = 0;
+        // get_readouts' block `level` (architecture plan R9.0): the open document's normalized path, whether a level
+        // change is in flight (open_level asked it; it loads at a later frame), whether the document has unsaved
+        // edits. A script that opens a level waits for `path` = its file and `loading` false before it saves.
+        struct Status
+        {
+            std::string path;
+            bool loading = false;
+            bool dirty = false;
+        };
+        virtual Status Describe() = 0;
     };
     void SetLevelHost(LevelHost* host);
 

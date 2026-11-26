@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Memory profiling plan M1: every GPU allocation goes through rendering/core/GpuAlloc.h.
+"""Memory profiling plan M1: every GPU allocation goes through rhi/GpuAlloc.h.
 
 Scans sources/ for D3D12 calls that create memory-holding objects
   * CreateCommittedResource[1-3]( / CreatePlacedResource / CreateReservedResource / CreateHeap
@@ -20,10 +20,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1] / "sources"
 
 # The wrappers themselves.
 ALLOW = (
-    "rendering/core/GpuAlloc.h",
-    "rendering/core/GpuAlloc.cpp",
-    "rendering/core/TextureCreate.h",
-    "rendering/core/TextureCreate.cpp",
+    "rhi/GpuAlloc.h",
+    "rhi/GpuAlloc.cpp",
+    "rhi/TextureCreate.h",
+    "rhi/TextureCreate.cpp",
 )
 
 PATTERNS = [

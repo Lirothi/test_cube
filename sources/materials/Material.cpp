@@ -2,7 +2,7 @@
 #include "core/diagnostics/ThrowSelfTest.h" // --throw-selftest=fsprobe
 #include "core/logging/Log.h"
 #include "core/threading/ThreadRole.h"
-#include "rendering/core/DeferredRelease.h"
+#include "rhi/DeferredRelease.h"
 #include "core/vfs/Vfs.h"
 #include "core/vfs/Pak.h"
 #include <thread>
@@ -10,7 +10,7 @@
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
-#include "rendering/core/GraphicsDevice.h" // GbvEnabled: GBV keeps its own PSO cache
+#include "rhi/Device.h" // GbvEnabled: GBV keeps its own PSO cache
 #include "rendering/core/RasterSettings.h" // A6: g_rasterBindless decides the GBUFFER_BINDLESS permutation
 #include "rendering/core/RenderConstants.h" // S10a: the shadow-view layout counts every shader is compiled with
 #include "rendering/meshes/LodSelect.h"     // S10a: render::kMaxShadowLods, likewise
@@ -41,11 +41,12 @@
 
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/RenderContext.h"
-#include "rendering/core/CommandListBindState.h"
+#include "rhi/RenderContext.h"
+#include "rhi/CommandListBindState.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/descriptors/InputLayoutManager.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -707,7 +708,7 @@ const std::filesystem::path& PipelineCacheDirectory(ID3D12Device* device)
     static const std::filesystem::path directory = [device]
     {
 #ifdef _DEBUG
-        const wchar_t* flavour = GraphicsDevice::GbvEnabled() ? L"pso_gbv" : L"pso_debug";
+        const wchar_t* flavour = rhi::Device::GbvEnabled() ? L"pso_gbv" : L"pso_debug";
 #else
         const wchar_t* flavour = L"pso";
 #endif

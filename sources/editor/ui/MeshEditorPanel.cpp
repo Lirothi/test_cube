@@ -18,7 +18,7 @@
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/core/DeferredRelease.h" // R16.10: the preview sky's old cubes
+#include "rhi/DeferredRelease.h" // R16.10: the preview sky's old cubes
 #include "rendering/core/UploadBatch.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"

@@ -35,17 +35,9 @@ class SdsmShadows;
 namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
 namespace vis { struct OcclusionQueryPlan; class OcclusionQueryHeap; class HzbOcclusionTester; } // occlusion plan S3a / S3b
 
-// The sky's diffuse irradiance cube this frame (Skybox::IrradianceSrv, E / pi: the same fill lighting_cs gives opaque
-// surfaces -- the sky by day, the moon's sky, the night sky and Ultra Dynamic Sky's layer by night) and its scale
-// (lighting_cs skyIrradianceScale), for forward draws without lighting constants of their own (lit particles: the air's
-// light on a drop). The descriptor's ptr, 0 = none. Set by the scene renderer once a frame, before the forward passes.
-inline std::uint64_t g_skyIrradianceSrv = 0u;
-inline float g_skyIrradianceScale = 0.0f;
-// The depth WITH the water in it (Main_Translucent copies it once Main_Transparent has drawn the water), for the
-// particles' soft fade: a spray drop falling into the sea fades out over its softFade instead of being cut by the
-// water's depth test. The descriptor's ptr, 0 = none this frame (the particles keep the opaque depthCopy). Set by the
-// Main_Translucent builder, read by its draws. particles.softWater 0 = the opaque copy, the A/B (--set, transient).
-inline std::uint64_t g_particleDepthWaterSrv = 0u;
+// The sky's irradiance cube for the lit particles and the depth with the water for their soft fade: R4.4 moved both
+// into render::DirectPassInputs (Renderer::DirectInputs). particles.softWater 0 = the opaque copy, the A/B (--set,
+// transient).
 inline bool g_particleSoftWater = true;
 inline bool g_particleSoftWater_game = true;
 inline const bool g_particleSoftWater_knob = ::knob::Register(g_particleSoftWater_game, g_particleSoftWater, "g_particleSoftWater");

@@ -8,7 +8,7 @@
 
 #include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "rendering/shadows/SdsmPartitions.h"
 
 class Renderer;

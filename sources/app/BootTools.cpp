@@ -33,17 +33,17 @@
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/diagnostics/MemBench.h"
 #include "core/memory/MemTrace.h"
-#include "rendering/core/MemGates.h"
+#include "rhi/MemGates.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/threading/ThreadRole.h" // --thread-check-selftest (R15.5)
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
-#include "rendering/core/BarrierTranslation.h"
+#include "rhi/BarrierTranslation.h"
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/core/GbvPassFilter.h"
-#include "rendering/core/GraphicsDevice.h"
-#include "rendering/core/MemoryReport.h"
+#include "rhi/Device.h"
+#include "rhi/MemoryReport.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/diagnostics/GraphSelfTest.h" // --crash-selftest=pass-throw (R15.3), graphcap (R15.4)
 #include "rendering/diagnostics/RetireSelfTest.h" // --retire-selftest (R16.1)
@@ -64,7 +64,7 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // Tessy N7: --tessy-lod-build
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: --vis-readout
-#include "rendering/core/CommandListBindState.h" // --no-bind-batching
+#include "rhi/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
 #include "rendering/wind/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
 #include "rendering/lighting/VolumetricCloud.h"  // render::g_cloudProfilePath (--cloud-profile)

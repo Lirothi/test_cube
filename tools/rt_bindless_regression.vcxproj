@@ -28,14 +28,14 @@
   <ItemGroup>
     <ClCompile Include="rt_bindless_regression.cpp" />
     <ClCompile Include="..\sources\rendering\rt\BindlessTable.cpp" />
-    <ClCompile Include="..\sources\rendering\core\DeferredRelease.cpp" />
+    <ClCompile Include="..\sources\rhi\DeferredRelease.cpp" />
     <ClCompile Include="..\sources\rendering\streaming\TextureUploadRing.cpp" />
-    <ClCompile Include="..\sources\rendering\descriptors\BindlessHeap.cpp" />
-    <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
-    <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
+    <ClCompile Include="..\sources\rhi\BindlessHeap.cpp" />
+    <ClCompile Include="..\sources\rhi\GpuAlloc.cpp" />
+    <ClCompile Include="..\sources\rhi\TextureCreate.cpp" />
     <ClCompile Include="..\sources\core\memory\MemTrace.cpp" />
     <ClCompile Include="..\sources\core\memory\MemNew.cpp" />
-    <ClCompile Include="..\sources\rendering\core\BarrierTranslation.cpp" />
+    <ClCompile Include="..\sources\rhi\BarrierTranslation.cpp" />
     <ClCompile Include="..\sources\core\logging\Log.cpp" />
     <ClCompile Include="..\sources\core\logging\LogQueue.cpp" />
     <ClCompile Include="..\sources\core\logging\LogSinks.cpp" />

@@ -1,8 +1,8 @@
 #include "rendering/meshes/Mesh.h"
 #include "core/Helpers.h"
-#include "rendering/core/UploadManager.h"
-#include "rendering/core/GpuAlloc.h"
-#include "rendering/core/CommandListBindState.h"
+#include "rhi/UploadManager.h"
+#include "rhi/GpuAlloc.h"
+#include "rhi/CommandListBindState.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
 #include <algorithm>

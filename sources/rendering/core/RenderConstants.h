@@ -3,6 +3,7 @@
 #include <atomic>       // g_cleanCapture
 #include <dxgiformat.h> // DXGI_FORMAT
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
+#include "rhi/RhiConstants.h" // R4.5a: kFrameCount, kConstantBufferAlignment
 
 // Rendering-wide compile-time constants, in the render:: namespace. Single
 // source of truth shared across the renderer core (Renderer, SwapchainManager,
@@ -14,15 +15,6 @@
 // Keep entries to values that span multiple subsystems and change rarely — this
 // header is included widely, so editing it recompiles a lot.
 namespace render {
-
-// Frames in flight = swapchain backbuffer count = number of per-frame resource
-// sets (command allocators/lists, descriptor heaps, deferred render targets,
-// fence values). Change once (e.g. 2 -> 3 for triple buffering) and every
-// per-frame array resizes together.
-inline constexpr unsigned kFrameCount = 3;
-
-// D3D12 constant-buffer placement alignment (CBV size/offset must be a multiple).
-inline constexpr unsigned kConstantBufferAlignment = 256u;
 
 // Rung 0 GPU-driven shadows: the fixed number of shadow-view slots the per-view cull
 // inputs (frustum planes) + indirect buffers are sized for. Kept here (below the light subsystem

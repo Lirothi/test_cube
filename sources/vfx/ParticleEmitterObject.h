@@ -7,7 +7,7 @@
 #include "core/math/AABB.h"
 #include "materials/Texture2D.h"
 #include "rendering/renderables/RenderableObject.h"
-#include "rendering/core/ResourceDeclarations.h"
+#include "rhi/ResourceDeclarations.h"
 #include "vfx/ParticleTypes.h"
 
 // Part E: a GPU-simulated particle emitter. E1 = the sim core: per-emitter DEFAULT-heap

@@ -1,4 +1,5 @@
 #include "editor/ui/ViewportGizmo.h"
+#include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -44,6 +45,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ImGuizmo/ImGuizmo.h"
+#include "materials/MaterialDataManager.h"
 
 namespace
 {
@@ -744,8 +746,8 @@ void ViewportGizmo::Update(EditorContext& ctx,
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2D.MipLevels = 1;
-        ctx.renderer.MarkImGuiTextureShaderReadable(iconAtlas_->GetResource());
-        const ImTextureID iconTex = ctx.renderer.CreateImGuiTextureId(iconAtlas_->GetResource(), srvDesc);
+        ctx.renderer.ImGui().MarkTextureShaderReadable(iconAtlas_->GetResource());
+        const ImTextureID iconTex = ctx.renderer.ImGui().CreateTextureId(iconAtlas_->GetResource(), srvDesc);
         if (iconTex != ImTextureID_Invalid)
         {
             ImDrawList* dl = ImGui::GetBackgroundDrawList();
