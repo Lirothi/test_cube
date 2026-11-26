@@ -17,17 +17,11 @@
 #include "ddgi_common.hlsli"
 
 // Mirrors DdgiUsageConstants (SceneRenderer_Gi.cpp).
+#include "shared/shader_types.h"
+#include "shared/ddgi_usage.h" // DdgiUsageCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer DdgiUsageCB : register(b0)
 {
-    float4x4 invView;    // the camera (jittered, as the depth it reads)
-    float4x4 invProj;
-    float4 cameraPos;    // xyz
-    int4 nearBase;       // xyz the near cascade's first cell
-    float4 nearParams;   // x spacing, y 1 = stamp it
-    int4 farBase;
-    float4 farParams;
-    uint4 grid;          // xy the sample grid, zw this frame's pixel in each 4x4 block
-    uint4 stamp;         // x this frame's stamp
+    DDGI_USAGE_FIELDS
 };
 
 Texture2D<float> SceneDepth : register(t0);

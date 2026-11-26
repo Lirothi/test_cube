@@ -23,14 +23,11 @@
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 // Mirrors vis::HzbTestConstants. row_major spelled out for tools/check_shaders.py (no -Zpr there).
+#include "shared/shader_types.h"
+#include "shared/vis_test.h" // VisTestCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer VisTestCB : register(b0)
 {
-    row_major float4x4 worldToClip;   // the camera's JITTERED view-projection: the HZB is the jittered depth
-    row_major float4x4 viewToClip;    // its projection, for the analytic near/far verdicts
-    int4  viewRect;                   // (0, 0, renderWidth, renderHeight)
-    uint2 hzbSize;                    // mip 0 of the pyramid
-    uint  boxCount;
-    uint  pad0;
+    VIS_TEST_FIELDS
 };
 
 struct TestBox

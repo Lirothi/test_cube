@@ -699,8 +699,8 @@ clock in the world was the cap on the copies of the water's heights (`OceanReadb
 - **The same answers**: the four bots' race at 1 and at 4 -- fast_boat_13's laps 109.5 / 102.0 / 103.6 against 108.7 /
   103.3 / 102.9, the yacht's 108.6 / 101.9 / 103.4 against 112.9 / 102.7 / 103.2, police_boat's 95.3 against 96.1, the
   misses at the same gates.
-- **It is sticky and nothing resets it** (a `frame.*` switch: `reset_settings` leaves it): a script sets it back to 1
-  in the call that ends its run. The HUD's `Time:` line says `WORLD x4 (frame.timeScale)` while it is not 1, and
+- **It stays until it is set back** (a `frame.*` switch; since 2026-11-26 `reset_settings` puts it back too): a script
+  sets it back to 1 in the call that ends its run. The HUD's `Time:` line says `WORLD x4 (frame.timeScale)` while it is not 1, and
   `get_readouts` carries `timeScale`. A script that times with its own clock (a sleep, `time.time()`) is wrong by the
   scale: read the race's clock, a lap's seconds, the readouts' own times. A `screenshot` stalls the frame as it does at
   1 -- the world goes on by at most 0.1 s a frame.

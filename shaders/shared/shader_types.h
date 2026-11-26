@@ -15,9 +15,18 @@
 #define TC_REGISTER_PASTE(kind, slot) register(kind##slot)
 #define TC_REGISTER(kind, slot) TC_REGISTER_PASTE(kind, slot)
 
+// A C++ default of a shared field: `float skyIrradianceScale TC_INIT(1.0f);` is `= 1.0f` in C++ and nothing in HLSL
+// (a cbuffer has no initial values; the C++ mirrors kept theirs, which the uploads rely on). ONE argument, no comma
+// outside parentheses -- `TC_INIT(uint4(1, 0, 0, 0))`, never `TC_INIT({ 1, 0, 0, 0 })`: FXC (Material's SM5 fallback,
+// the editor preview) has no variadic macros. TC_ROW_MAJOR is HLSL's row_major (C++'s Math::mat4 is row-major storage
+// already).
 #ifdef __cplusplus
+#include <cstddef>
 #include <cstdint>
 #include "core/math/Math.h"
+
+#define TC_INIT(value) = value
+#define TC_ROW_MAJOR
 
 namespace shader_shared
 {
@@ -26,28 +35,37 @@ using float3 = Math::float3;
 using float4 = Math::float4;
 using float4x4 = Math::mat4;
 using uint = std::uint32_t;
-#define TC_SHARED_BEGIN namespace shader_shared {
-#define TC_SHARED_END }
+using uint2 = Math::uint2;
+using int2 = Math::int2;
+
+// HLSL's int3 / int4 / uint3 / uint4: x..w, and an index (the mirrors before R5.3 were int32_t[4] filled by index).
+// `{}` is zero (the defaulted constructor value-initializes); `uint4(1, 0, 0, 0)` or `{ 1, 0, 0, 0 }` sets each.
+template<class T, int N> struct IntVector;
+template<class T> struct IntVector<T, 3>
+{
+    T x, y, z;
+    IntVector() = default;
+    constexpr IntVector(T x_, T y_, T z_) : x(x_), y(y_), z(z_) {}
+    T& operator[](std::size_t i) { return i == 0 ? x : (i == 1 ? y : z); }
+    const T& operator[](std::size_t i) const { return i == 0 ? x : (i == 1 ? y : z); }
+};
+template<class T> struct IntVector<T, 4>
+{
+    T x, y, z, w;
+    IntVector() = default;
+    constexpr IntVector(T x_, T y_, T z_, T w_) : x(x_), y(y_), z(z_), w(w_) {}
+    T& operator[](std::size_t i) { return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w)); }
+    const T& operator[](std::size_t i) const { return i == 0 ? x : (i == 1 ? y : (i == 2 ? z : w)); }
+};
+using int3 = IntVector<std::int32_t, 3>;
+using int4 = IntVector<std::int32_t, 4>;
+using uint3 = IntVector<std::uint32_t, 3>;
+using uint4 = IntVector<std::uint32_t, 4>;
+static_assert(sizeof(int4) == 16 && sizeof(uint3) == 12, "HLSL's integer vectors are packed 4-byte components");
 }
 #else
-#define TC_SHARED_BEGIN
-#define TC_SHARED_END
+#define TC_INIT(value)
+#define TC_ROW_MAJOR row_major
 #endif
-
-TC_SHARED_BEGIN
-// R5.1's probe: the layout of water_composite_cs.hlsl's WaterCompositeCB (a matrix, then three full rows), checked from
-// C++ (SceneRenderer_Reflections.cpp) against the 112 bytes the upload's struct has. It proves both compilers read this
-// file the same way before a real constant buffer moves here (R5.3).
-struct SharedLayoutProbe
-{
-    float4x4 m;
-    float3 a;
-    float b;
-    float2 c;
-    float d;
-    uint e;
-    float4 f;
-};
-TC_SHARED_END
 
 #endif

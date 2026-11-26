@@ -897,38 +897,38 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                                    P.hzbWidth == D.hzbWidth && P.hzbHeight == D.hzbHeight;
             // The previous pyramid was reduced from last frame's JITTERED depth, so it is tested
             // with last frame's jittered pair (the plan text says no-jitter; exact beats close).
-            p.prevViewProj = cam.GetPrevViewProjMatrix();
-            p.prevViewToClip = cam.GetPrevProjMatrix();
-            p.viewProj = cam.GetViewProjMatrix();
-            p.viewToClip = cam.GetProjMatrix();
-            p.viewRect[0] = 0;
-            p.viewRect[1] = 0;
-            p.viewRect[2] = static_cast<std::int32_t>(w);
-            p.viewRect[3] = static_cast<std::int32_t>(h);
-            p.hzbSize[0] = D.hzbWidth;
-            p.hzbSize[1] = D.hzbHeight;
-            p.prevValid = prevValid ? 1u : 0u;
-            p.on = 1u;
+            p.gCamPrevViewProj = cam.GetPrevViewProjMatrix();
+            p.gCamPrevViewToClip = cam.GetPrevProjMatrix();
+            p.gCamViewProj = cam.GetViewProjMatrix();
+            p.gCamViewToClip = cam.GetProjMatrix();
+            p.gCamViewRect[0] = 0;
+            p.gCamViewRect[1] = 0;
+            p.gCamViewRect[2] = static_cast<std::int32_t>(w);
+            p.gCamViewRect[3] = static_cast<std::int32_t>(h);
+            p.gCamHzbSize.x = D.hzbWidth;
+            p.gCamHzbSize.y = D.hzbHeight;
+            p.gCamHzbPrevValid = prevValid ? 1u : 0u;
+            p.gCamHzbOn = 1u;
             prevHzb = P.hzb.Get();
             prevSrv = P.hzbSRV;
             curHzb = D.hzb.Get();
             curSrv = D.hzbSRV;
             decisions_.camHzb = true;
         }
-        if (p.on == 0u && frame.camera)
+        if (p.gCamHzbOn == 0u && frame.camera)
         {
             // Without the pyramid the camera's matrix and target still go in: Tessy's cluster cull drops a cluster that
             // holds no pixel centre of them (tessy.clusterCull) -- the G-buffer's jittered matrix, as above.
-            p.viewProj = frame.camera->GetViewProjMatrix();
-            p.viewRect[2] = static_cast<std::int32_t>(renderer->GetRenderWidth());
-            p.viewRect[3] = static_cast<std::int32_t>(renderer->GetRenderHeight());
+            p.gCamViewProj = frame.camera->GetViewProjMatrix();
+            p.gCamViewRect[2] = static_cast<std::int32_t>(renderer->GetRenderWidth());
+            p.gCamViewRect[3] = static_cast<std::int32_t>(renderer->GetRenderHeight());
         }
         frame.shadowGpu->SetCameraHzb(p, prevHzb, prevSrv, curHzb, curSrv);
-        const int state = decisions_.camHzb ? (1 + static_cast<int>(p.prevValid)) : 0;
+        const int state = decisions_.camHzb ? (1 + static_cast<int>(p.gCamHzbPrevValid)) : 0;
         if (state != camHzbLogged_)
         {
             LOG_INFO(logging::LogCategory::RenderShadow, "camera hzb cull: on={} prev-valid={} (frame {})",
-                     decisions_.camHzb ? 1 : 0, p.prevValid, renderer->GetTotalFrameNumber());
+                     decisions_.camHzb ? 1 : 0, p.gCamHzbPrevValid, renderer->GetTotalFrameNumber());
             camHzbLogged_ = state;
         }
     }

@@ -16,6 +16,8 @@
 #define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #endif
 #pragma pack_matrix(row_major)
+#include "shared/shader_types.h" // TC_REGISTER
+#include "shared/glass_slots.h"  // the pass's registers by name (architecture plan R5.3), shared with the C++
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
@@ -56,61 +58,49 @@ struct SpotLightData
 };
 
 // Per-object data (unique per glass instance).
-cbuffer GlassParams : register(b0)
+#include "shared/glass_params.h" // GlassParams's fields, once for HLSL and C++ (architecture plan R5.3)
+cbuffer GlassParams : TC_REGISTER(b, GLASS_B_PARAMS)
 {
-    float4x4 world;
-    float4x4 prevWorld;
-    float4 absorptionThickness;   // xyz = absorption, w = thickness
-    float4 tintRoughness;         // xyz = tint color, w = roughness
-    float4 matExtra;              // x = IOR, y = reflection strength, z = refraction distortion, w = normal map enabled (0=disabled, 1=enabled)
-    uint objectId;
-    uint3 _objectIdPad;
-    // GLASS_MATERIAL only (GBufferRenderable::RenderTranslucent; zero from TransparentStaticMesh, unread there):
-    // the slot's MaterialParams and glass values.
-    float4 matBaseColor;          // linear tint (rgb, multiplies the albedo map) + alpha factor (a)
-    float4 matSurface;            // x = metallic, y = roughness, z = transmission factor, w = alpha cutoff (-1 = no split)
-    float4 matTexFlags;           // x = useAlbedo, y = useMR, z = useNormal, w = normal strength
-    float4 matTexOffsScale;       // UV offset (xy), scale (zw) -- gbuffer_common.hlsli's tfUVp
-    float4 matGlass;              // x = transmission map present, y = mrMultiply, z = the slot's glass wall (m; < 0 = the frame's), w = unused
+    GLASS_PARAMS_FIELDS
 };
 
 #include "glass_view_cb.hlsli" // b1: the transparent pass's shared per-view CB (also particles)
 #include "forward_sun_shadow.hlsli" // the sun's shadow, the ocean's own
 
-Texture2D SceneOpaque : register(t0);
-Texture2D ShadowAtlas : register(t1);
-Texture2DArray SpotShadowAtlas : register(t2);
-TextureCube SkyboxTex : register(t3);
-StructuredBuffer<PointLightData> PointLights : register(t4);
-StructuredBuffer<SpotLightData> SpotLights : register(t5);
-Texture2D NormalMap : register(t6);
-Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT glass reflection
-Texture2DArray PointShadowAtlas : register(t8); // B3: point shadow faces, 6 per light (D16 -> R16); a 2D array since S4
-StructuredBuffer<uint> VsmPageTable : register(t9);  // Rung 2 / Step 21
-Texture2D VsmPool : register(t10);
+Texture2D SceneOpaque : TC_REGISTER(t, GLASS_T_SCENE_OPAQUE);
+Texture2D ShadowAtlas : TC_REGISTER(t, GLASS_T_SHADOW_ATLAS);
+Texture2DArray SpotShadowAtlas : TC_REGISTER(t, GLASS_T_SPOT_SHADOW);
+TextureCube SkyboxTex : TC_REGISTER(t, GLASS_T_SKYBOX);
+StructuredBuffer<PointLightData> PointLights : TC_REGISTER(t, GLASS_T_POINT_LIGHTS);
+StructuredBuffer<SpotLightData> SpotLights : TC_REGISTER(t, GLASS_T_SPOT_LIGHTS);
+Texture2D NormalMap : TC_REGISTER(t, GLASS_T_NORMAL_MAP);
+Texture2D GlassReflection : TC_REGISTER(t, GLASS_T_REFLECTION); // S15b: premultiplied off-screen RT glass reflection
+Texture2DArray PointShadowAtlas : TC_REGISTER(t, GLASS_T_POINT_SHADOW); // B3: point shadow faces, 6 per light (D16 -> R16); a 2D array since S4
+StructuredBuffer<uint> VsmPageTable : TC_REGISTER(t, GLASS_T_VSM_PAGE_TABLE);  // Rung 2 / Step 21
+Texture2D VsmPool : TC_REGISTER(t, GLASS_T_VSM_POOL);
 // P5: GGX-prefiltered sky. Inert unless skySpecMipCount says this level's sky has it, in which case
 // glass stops guessing `rough * 5` on the display cube and reads the shared environment.
-TextureCube SkySpecular : register(t11);
-Texture3D<float4> FogVolume : register(t12); // plan A5: the integrated froxel volume
+TextureCube SkySpecular : TC_REGISTER(t, GLASS_T_SKY_SPECULAR);
+Texture3D<float4> FogVolume : TC_REGISTER(t, GLASS_T_FOG_VOLUME); // plan A5: the integrated froxel volume
 // t13: S15, this frame's SDSM partitions. glass is a PIXEL shader, which is why the partition
 // buffer's canonical state carries the PIXEL bit as well as the non-pixel one.
-StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
+StructuredBuffer<SdsmPartition> SdsmPartitions : TC_REGISTER(t, GLASS_T_SDSM_PARTITIONS);
 // Plan S7, the direct read: the local shadow cache's pool -- a light whose atlas page is negative is read there (page
 // -page - 1, the atlas layout). The spot atlas stands in while there is no pool.
-Texture2DArray LocalShadowPool : register(t14);
+Texture2DArray LocalShadowPool : TC_REGISTER(t, GLASS_T_LOCAL_SHADOW_POOL);
 #if GLASS_MATERIAL
-Texture2D MatAlbedo : register(t15);       // sRGB view
-Texture2D MatMR : register(t16);           // R = metal, G = rough (B/G when MR_LAYOUT_GLTF)
-Texture2D MatTransmission : register(t17); // R multiplies matSurface.z
-Texture2D SceneOpaqueDepth : register(t18); // the opaque depth (Main_Transparent's snapshot, SceneOpaque's pair)
-Texture2D<float4> SkyVisTex : register(t19); // plan S: the RT sky visibility of the opaque scene (gated by glassSkyVis.x)
+Texture2D MatAlbedo : TC_REGISTER(t, GLASS_T_MAT_ALBEDO);       // sRGB view
+Texture2D MatMR : TC_REGISTER(t, GLASS_T_MAT_MR);           // R = metal, G = rough (B/G when MR_LAYOUT_GLTF)
+Texture2D MatTransmission : TC_REGISTER(t, GLASS_T_MAT_TRANSMISSION); // R multiplies matSurface.z
+Texture2D SceneOpaqueDepth : TC_REGISTER(t, GLASS_T_OPAQUE_DEPTH); // the opaque depth (Main_Transparent's snapshot, SceneOpaque's pair)
+Texture2D<float4> SkyVisTex : TC_REGISTER(t, GLASS_T_SKY_VIS); // plan S: the RT sky visibility of the opaque scene (gated by glassSkyVis.x)
 #endif
 
-SamplerState LinearSampler : register(s0);
-SamplerComparisonState ShadowSampler : register(s1);
-SamplerState EnvSampler : register(s2);
+SamplerState LinearSampler : TC_REGISTER(s, GLASS_S_LINEAR);
+SamplerComparisonState ShadowSampler : TC_REGISTER(s, GLASS_S_SHADOW);
+SamplerState EnvSampler : TC_REGISTER(s, GLASS_S_ENV);
 #if GLASS_MATERIAL
-SamplerState MatSampler : register(s3);    // the G-buffer's own (anisotropic, wrap): material UVs tile
+SamplerState MatSampler : TC_REGISTER(s, GLASS_S_MATERIAL);    // the G-buffer's own (anisotropic, wrap): material UVs tile
 #endif
 
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Mirrors PointShadowFactor
@@ -217,6 +207,13 @@ struct VSOut
     float2 uv : TEXCOORD4;
 };
 
+#if GLASS_MATERIAL
+#if GLASS_MATERIAL_SRV_COUNT != 20 || GLASS_MATERIAL_SAMPLER_COUNT != 4
+#error "GLASS_RS (GLASS_MATERIAL): the SRV / sampler table sizes no longer match shared/glass_slots.h"
+#endif
+#elif GLASS_PASS_SRV_COUNT != 15 || GLASS_SAMPLER_COUNT != 3
+#error "GLASS_RS: the SRV / sampler table sizes no longer match shared/glass_slots.h"
+#endif
 [RootSignature(GLASS_RS)]
 VSOut VSMain(VSIn input)
 {

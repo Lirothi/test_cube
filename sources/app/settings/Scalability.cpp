@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "app/settings/UserSettings.h"
+#include "core/settings/SettingsRegistry.h" // ScalabilityKnobs: the rows flagged SettingScalable
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
@@ -17,48 +18,6 @@ namespace settings
 namespace
 {
     using json = nlohmann::json;
-
-    // Every knob the table may name, with what it is (Scalability.h ScalabilityKnob). Content = the level's environment
-    // sets it (a ceiling or "level" reads it back first); the class is what a change costs.
-    const std::vector<ScalabilityKnob> kKnobs = {
-        // View distance
-        { "lod.pixelError", false, 'L' }, { "tessy.lodPixelError", false, 'L' }, { "lod.chunkFactor", false, 'L' },
-        // Shadows
-        { "shadow.mode", false, 'I' }, { "csm.atlasRes", false, 'I' }, { "csm.filterMode", false, 'L' },
-        { "sdsm.partitions", false, 'L' }, { "sdsm.cacheFrames", false, 'L' },
-        { "vsm.resolutionLodBiasDirectional", false, 'L' }, { "vsm.smrtRayCount", false, 'L' },
-        { "vsm.smrtSamplesPerRay", false, 'L' }, { "vsm.localSmrtRayCount", false, 'L' },
-        { "shadow.localMaxRes", false, 'I' }, { "contact.enabled", false, 'L' }, { "contact.steps", false, 'L' },
-        { "ocean.sunShadowRays", false, 'L' }, { "vsm.windRange", false, 'L' }, { "shadow.localWindRange", false, 'L' },
-        // Global illumination
-        { "gi.enabled", false, 'L' }, { "gi.far", false, 'L' }, { "gi.rays", false, 'L' }, { "gi.divisor", false, 'L' },
-        { "gi.farDivisor", false, 'L' }, { "gi.rayDistance", false, 'L' }, { "skyVis.enabled", false, 'L' },
-        { "skyVis.rays", false, 'L' }, { "skyVis.filterRadius", false, 'L' },
-        // Reflections
-        { "render.reflectionSource", false, 'L' }, { "ssr.ueQuality", false, 'L' }, { "reflections.resolution", false, 'R' },
-        { "rt.alphaMode", false, 'L' },
-        // Water
-        { "reflections.oceanResolution", false, 'R' }, { "ssr.waterNormalCascades", false, 'L' }, { "ocean.wakeHz", false, 'L' },
-        // Volumetrics: fog and clouds
-        { "fog.gridPixels", false, 'R' }, { "fog.gridZ", false, 'R' }, { "fog.volumetric", true, 'L' },
-        { "fog.samplesPerCell", true, 'L' }, { "skyVis.fogRays", false, 'L' }, { "cloud.viewSampleCountMax", true, 'L' },
-        // The march takes at least the min whatever the max says (cloud_march.hlsli): a ceiling on the max alone does
-        // nothing where the level's min is as high (wind_test 64).
-        { "cloud.viewSampleCountMin", true, 'L' },
-        { "cloud.shadowMapSampleCount", true, 'L' }, { "cloud.msOctaves", true, 'L' }, { "cloud.captureTexels", false, 'L' },
-        // Post-processing
-        { "bloom.method", true, 'L' }, { "bloom.convPercent", true, 'L' }, { "bloom.ghostIntensity", true, 'L' },
-        { "lightShafts.enabled", true, 'L' }, { "gtao.enabled", true, 'L' }, { "gtao.numSteps", true, 'L' },
-        { "gtao.numAngles", true, 'L' },
-        // Textures
-        { "streaming.poolSizeMB", false, 'L' }, { "streaming.mipBias", false, 'L' }, { "textures.anisotropy", false, 'L' },
-        // Effects. The boats' spray is capped by runtime ceilings over the ocean's own rate and mist (Scene::Sync), never
-        // written into its OceanRenderConfig: the editor saves that config into the level.
-        { "spray.rateMax", false, 'L' }, { "spray.mistMax", false, 'L' }, { "particles.spawnScale", false, 'L' },
-        { "particles.softWater", false, 'L' },
-        // Render resolution
-        { "dlss.mode", false, 'R' }, { "aa.renderScale", false, 'R' }, { "aa.fxaa", false, 'L' },
-    };
 
     std::string Lower(std::string s)
     {
@@ -216,7 +175,7 @@ namespace
                 if (!knob)
                 {
                     errors.push_back(where + "." + table.levelNames[static_cast<std::size_t>(i)] + ": no knob \"" + name +
-                                     "\" (Scalability.cpp kKnobs: the --set names the table may use)");
+                                     "\" (a settings registry row flagged SettingScalable: the --set names the table may use)");
                     continue;
                 }
                 if (op.kind != ScalabilityOp::Kind::Set && !knob->content)
@@ -253,11 +212,33 @@ namespace
     }
 }
 
-const std::vector<ScalabilityKnob>& ScalabilityKnobs() { return kKnobs; }
+// Every knob the table may name: the settings registry's rows flagged SettingScalable (architecture plan R2.n; the
+// kKnobs table this was). A row says what kKnobs said: content = SettingLevelOwned (the level's environment sets it; a
+// ceiling or "level" reads it back first), the class = its one SettingCost* bit ('?' = none or two: the self-test fails).
+const std::vector<ScalabilityKnob>& ScalabilityKnobs()
+{
+    static const std::vector<ScalabilityKnob> knobs = [] {
+        std::vector<ScalabilityKnob> out;
+        for (const SettingDesc& d : Registry().All())
+        {
+            if (!(d.flags & SettingScalable)) { continue; }
+            constexpr std::pair<std::uint32_t, char> kCost[] = { { SettingCostNextFrame, 'L' }, { SettingCostTargets, 'R' },
+                { SettingCostIdleGpu, 'I' }, { SettingCostCache, 'C' }, { SettingCostPipelines, 'P' }, { SettingCostBoot, 'B' } };
+            char cls = 0;
+            for (const auto& [bit, c] : kCost)
+            {
+                if (d.flags & bit) { cls = cls ? '?' : c; }
+            }
+            out.push_back({ d.name, (d.flags & SettingLevelOwned) != 0, cls ? cls : '?' });
+        }
+        return out;
+    }();
+    return knobs;
+}
 
 const ScalabilityKnob* FindScalabilityKnob(const std::string& name)
 {
-    for (const ScalabilityKnob& k : kKnobs)
+    for (const ScalabilityKnob& k : ScalabilityKnobs())
     {
         if (name == k.name) { return &k; }
     }
@@ -936,7 +917,12 @@ int RunScalabilitySelfTest()
         check(ok, std::string("the shipped table parses and validates (") + std::to_string(table.groups.size()) + " groups)");
         if (ok)
         {
-            // Every knob kKnobs names is used by the table, and every level of every group sets something.
+            // Every knob a Scalable row names is used by the table, and every level of every group sets something; every
+            // Scalable row says what a change of it costs (one SettingCost* bit).
+            for (const ScalabilityKnob& k : ScalabilityKnobs())
+            {
+                check(k.cls != '?', std::string("the Scalable row ") + k.name + " has one SettingCost* bit");
+            }
             std::set<std::string> used;
             for (const ScalabilityGroup& g : table.groups)
             {

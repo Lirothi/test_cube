@@ -50,6 +50,8 @@
 #include "core/threading/RenderThread.h"  // game thread plan G8: the Frame tab's switch
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
+#include "app/settings/SettingContext.h"     // R2.n: the Settings tab
+#include "core/settings/SettingsRegistry.h"  // ...through the registry
 
 namespace
 {
@@ -254,13 +256,13 @@ void DeveloperWindow::RefreshLevelList()
     }
 }
 
-const DeveloperWindow::TabEntry DeveloperWindow::kTabs[18] = {
+const DeveloperWindow::TabEntry DeveloperWindow::kTabs[19] = {
     { Tab::Scalability, "Scalability" }, { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
     { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" }, { Tab::Gi, "GI" },
     { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
     { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
     { Tab::Vsm, "VSM" }, { Tab::Tessy, "Tessy" }, { Tab::Physics, "Physics" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
-    { Tab::Bindings, "Bindings" }
+    { Tab::Bindings, "Bindings" }, { Tab::Settings, "Settings" }
 };
 
 bool DeveloperWindow::OpenTab(const std::string& label)
@@ -279,6 +281,156 @@ bool DeveloperWindow::OpenTab(const std::string& label)
         }
     }
     return false;
+}
+
+// Every --set / MCP set_settings name the settings registry holds (architecture plan R2.n: "Developer Controls, an
+// ordinary widget by type"): a checkbox for a Bool, an integer for an Int, a drag for a Float, a button for an action --
+// read and written through the row, as --set does; a family's names (race.*, sg.<group>, the ocean's colours...) by its
+// keys. The tags: P saved with the graphics, L the level's (the level file sets it; Ctrl+S saves the document, not
+// this), S the graphics levels manage it, A an action. Only the visible rows are read (a clipper over ~1000 names).
+bool DeveloperWindow::DrawSettingsTab(Scene& scene, SceneRenderSettings& settings)
+{
+    struct Entry
+    {
+        std::string name;
+        settings::SettingType type;
+        std::uint32_t flags;
+    };
+    static std::vector<Entry> entries;
+    static std::vector<int> shown;
+    static std::string shownFor = "\x01"; // the filter `shown` was made for; never a real one at first
+    // The list is made each time the tab opens: a family's keys change (sg.reload reads another scalability.json).
+    static int drawnFrame = -2;
+    static std::string held; // the row whose edit is in progress, and its value (see the Int / Float widgets)
+    static float heldValue = 0.0f;
+    const bool opened = ImGui::GetFrameCount() != drawnFrame + 1;
+    drawnFrame = ImGui::GetFrameCount();
+    const settings::SettingsRegistry& registry = settings::Registry();
+    if (opened)
+    {
+        shownFor = "\x01";
+        held.clear();
+        entries.clear();
+        for (const settings::SettingDesc& d : registry.All()) { entries.push_back({ d.name, d.type, d.flags }); }
+        for (const settings::SettingFamily& f : registry.Families())
+        {
+            std::vector<std::string> keys;
+            f.keys(keys);
+            for (const std::string& k : keys) { entries.push_back({ std::string(f.prefix) + k, f.type, f.flags }); }
+        }
+        std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.name < b.name; });
+    }
+    ImGui::TextWrapped("Every --set name (%zu), through the settings registry (app/settings/*SettingRows.cpp): what --set, "
+                       "--sweep and MCP set_settings write. Transient unless tagged P (saved with the graphics, as an edit "
+                       "in the other tabs).", entries.size());
+    ImGui::InputTextWithHint("##settingsFilter", "filter: a part of the name (vsm., bloom.int)", settingsFilter_,
+                             sizeof(settingsFilter_));
+    if (shownFor != settingsFilter_)
+    {
+        shown.clear();
+        for (int i = 0; i < static_cast<int>(entries.size()); ++i)
+        {
+            if (entries[static_cast<std::size_t>(i)].name.find(settingsFilter_) != std::string::npos) { shown.push_back(i); }
+        }
+        shownFor = settingsFilter_;
+    }
+    settings::SettingContext ctx{ scene, settings };
+    bool persistedChanged = false;
+    if (ImGui::BeginTable("SettingsRegistry", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable,
+                          ImVec2(0.0f, ImGui::GetContentRegionAvail().y)))
+    {
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 0.45f);
+        ImGui::TableSetupColumn("Tags", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 4.0f);
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableHeadersRow();
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(shown.size()));
+        while (clipper.Step())
+        {
+            for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+            {
+                const Entry& e = entries[static_cast<std::size_t>(shown[static_cast<std::size_t>(row)])];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(e.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::PushID(e.name.c_str());
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                float value = 0.0f;
+                const bool readable = registry.Read(ctx, e.name, value);
+                bool changed = false;
+                if (e.flags & settings::SettingAction)
+                {
+                    if (ImGui::SmallButton("Run")) { changed = registry.Apply(ctx, e.name, 1.0f); }
+                }
+                else if (!readable)
+                {
+                    // No reader (each boat's own vessel.*, what a script injects): only a value to send.
+                    if (ImGui::InputFloat("##send", &value, 0.0f, 0.0f, "%g", ImGuiInputTextFlags_EnterReturnsTrue))
+                    {
+                        changed = registry.Apply(ctx, e.name, value);
+                    }
+                }
+                else if (e.type == settings::SettingType::Bool)
+                {
+                    bool on = value != 0.0f;
+                    if (ImGui::Checkbox("##v", &on)) { changed = registry.Apply(ctx, e.name, on ? 1.0f : 0.0f); }
+                }
+                else
+                {
+                    // The edit in progress is held here, not re-read from the row: a row that clamps (sg.all 5 -> 3,
+                    // gi.rays 3 -> 16) would differ from the field's text every frame and be applied again on each
+                    // one. An Int, and a Float whose change rebuilds or idles something (targets, the GPU, a cache,
+                    // pipelines), is applied once, when the field lets go after an edit (Enter, a click elsewhere);
+                    // a cheap Float follows the drag.
+                    if (held == e.name) { value = heldValue; }
+                    bool edited = false;
+                    if (e.type == settings::SettingType::Int)
+                    {
+                        int i = static_cast<int>(value);
+                        edited = ImGui::InputInt("##v", &i, 0, 0); // no step buttons: the field is the one item
+                        value = static_cast<float>(i);
+                    }
+                    else
+                    {
+                        const float speed = std::max(std::abs(value) * 0.005f, 0.001f);
+                        edited = ImGui::DragFloat("##v", &value, speed, 0.0f, 0.0f, "%g");
+                    }
+                    constexpr std::uint32_t kCostly = settings::SettingCostTargets | settings::SettingCostIdleGpu |
+                                                      settings::SettingCostCache | settings::SettingCostPipelines |
+                                                      settings::SettingCostBoot;
+                    const bool live = e.type == settings::SettingType::Float && (e.flags & kCostly) == 0u;
+                    if (edited)
+                    {
+                        held = e.name;
+                        heldValue = value;
+                        if (live) { changed = registry.Apply(ctx, e.name, value); }
+                    }
+                    if (held == e.name && ImGui::IsItemDeactivated())
+                    {
+                        if (!live && ImGui::IsItemDeactivatedAfterEdit())
+                        {
+                            changed = registry.Apply(ctx, e.name, heldValue);
+                        }
+                        held.clear();
+                    }
+                }
+                persistedChanged |= changed && (e.flags & settings::SettingPersistent) != 0u;
+                ImGui::PopID();
+                ImGui::TableNextColumn();
+                char tags[8] = {};
+                int n = 0;
+                if (e.flags & settings::SettingPersistent) { tags[n++] = 'P'; }
+                if (e.flags & settings::SettingLevelOwned) { tags[n++] = 'L'; }
+                if (e.flags & settings::SettingScalable) { tags[n++] = 'S'; }
+                if (e.flags & settings::SettingAction) { tags[n++] = 'A'; }
+                ImGui::TextDisabled("%s", tags);
+            }
+        }
+        ImGui::EndTable();
+    }
+    return persistedChanged;
 }
 
 void DeveloperWindow::ToggleTextureInspector()
@@ -792,6 +944,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         {
         case Tab::Visibility: case Tab::Sky: case Tab::Debug: case Tab::Csm: case Tab::Vsm: case Tab::Tessy:
         case Tab::Streaming: case Tab::Memory:
+        case Tab::Settings: // a row reaches whatever its name does
             threading::WaitRenderForGame("DeveloperWindow::Draw (render-half tab)");
             break;
         default:
@@ -4170,6 +4323,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             if (activeTab_ == Tab::Memory)
             {
                 memoryTab_.Draw(renderer.GetDevice());
+            }
+
+            if (activeTab_ == Tab::Settings)
+            {
+                graphicsSettingsDirty |= DrawSettingsTab(scene, settings);
             }
 
             if (activeTab_ == Tab::Bindings)

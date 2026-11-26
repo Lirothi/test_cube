@@ -41,16 +41,11 @@ RWTexture2D<float4> ReflectionOut : register(u0);
 SamplerState gSmpLinear : register(s0); // trilinear clamp: the pyramids between their mips
 SamplerState gSmpPoint : register(s1);
 
+#include "shared/shader_types.h"
+#include "shared/reflection_glossy.h" // ReflectionGlossyCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer ReflectionGlossyCB : register(b0)
 {
-    float4x4 invView;
-    float4x4 invProj;
-    uint2 outSize;          // the reflection target, texels
-    float2 invOutSize;
-    float pixelsPerRadian;  // reflection texels per radian of view angle: 0.5 x height x P[1][1]
-    float planeTolerance;   // a tap off the centre's plane by more than this share of the view distance is not it
-    float normalPower;      // ...and its normals' agreement raised to this
-    uint mipCount;          // the pyramids' levels
+    REFLECTION_GLOSSY_FIELDS
 }
 
 static const uint kGlossyTaps = 16;

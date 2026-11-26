@@ -32,20 +32,21 @@ LITERAL = re.compile(r'L?"(--[a-z0-9][a-z0-9-]*)')
 BARE = re.compile(r'"(' + "|".join(re.escape(k) for k in BARE_READS) + r')"')
 ROW = re.compile(r'\{\s*"(--[a-z0-9][a-z0-9-]*)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)",\s*(true|false)\s*'
                  r'(?:,\s*&parse::(\w+)\s*)?\}')
-PARSE = "app/BootParse.cpp"
+PARSE = ("app/BootParse.cpp", "app/BootParseDev.cpp")  # R3.2b BootOptions' groups, R3.2c the debug switches
 
 
 def parse_check(files, out=print):
-    """R3.2b: a row that names its parse function (&parse::Fn) -- the function is in BootParse.cpp and reads that switch."""
+    """R3.2b/c: a row that names its parse function (&parse::Fn) -- the function is in BootParse.cpp or BootParseDev.cpp and reads
+    that switch."""
     findings = 0
-    code = strip_comments(files.get(PARSE, ""))
+    code = "\n".join(strip_comments(files.get(p, "")) for p in PARSE)
     for m in ROW.finditer(strip_comments(files.get(TABLE, ""))):
         name, fn = m.group(1), m.group(5)
         if not fn:
             continue
-        body = re.search(r"^void " + fn + r"\(const char\* cmd\)\n\{\n(.*?)^\}", code, re.S | re.M)
+        body = re.search(r"^void " + fn + r"\(const char\* \w+\)\n\{\n(.*?)^\}", code, re.S | re.M)
         if not body:
-            out(f"{TABLE}: {name} names parse::{fn}, which is not in sources/{PARSE}")
+            out(f"{TABLE}: {name} names parse::{fn}, which is not in sources/{PARSE[0]} or {PARSE[1]}")
             findings += 1
         elif f'"{name}' not in body.group(1):
             out(f"{TABLE}: {name} names parse::{fn}, which does not read {name}")
@@ -226,8 +227,8 @@ def selftest():
     pcode = ('void A(const char* cmd)\n{\n    if (std::strstr(cmd, "--a")) {}\n}\n\n'
              'void C(const char* cmd)\n{\n    if (std::strstr(cmd, "--a")) {}\n}\n')
     plines = []
-    pfindings = parse_check({TABLE: ptable, PARSE: pcode}, out=plines.append)
-    expected_parse = [f"{TABLE}: --b names parse::Missing, which is not in sources/{PARSE}",
+    pfindings = parse_check({TABLE: ptable, PARSE[1]: pcode}, out=plines.append)
+    expected_parse = [f"{TABLE}: --b names parse::Missing, which is not in sources/{PARSE[0]} or {PARSE[1]}",
                       f"{TABLE}: --c names parse::C, which does not read --c"]
     ok = plines == expected_parse and pfindings == 2
     failures += not ok

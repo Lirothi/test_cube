@@ -23,6 +23,8 @@
 #include "rendering/wind/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/sky_occlusion.h" // SkyOcclusionConstants's fields, once (R5.3)
 using namespace scene_internal;
 
 namespace
@@ -31,15 +33,11 @@ namespace
 // three entry points.
 struct SkyOcclusionConstants
 {
-    Math::mat4 invView;
-    Math::mat4 invProj;
-    Math::mat4 topViewProj;
-    Math::mat4 bottomViewProj;
-    Math::float4 mapParams;
-    Math::float4 heightParams;
-    std::uint32_t sizes[4] = { 0, 0, 0, 0 };
-    Math::float4 traceParams;
-    Math::float4 fadeParams;
+    // shaders/shared/sky_occlusion.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    using float4x4 = shader_shared::float4x4;
+    using uint4 = shader_shared::uint4;
+    SKY_OCCLUSION_FIELDS
 };
 static_assert(sizeof(SkyOcclusionConstants) == 4 * 64 + 5 * 16, "SkyOcclusionConstants mirrors sky_occlusion_cs.hlsl");
 

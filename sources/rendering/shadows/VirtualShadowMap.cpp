@@ -22,6 +22,10 @@
 #include "core/diagnostics/ArtifactWriter.h" // logs/vsm_pages.log (g_logPageStats file mirror)
 #include <chrono>
 #include "rendering/wind/WindState.h" // W5: wind params copied into each page's shadow view CB
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/vsm_scatter.h" // ScatterCB's fields, once (R5.3)
+#include "shaders/shared/vsm_water_mask.h" // WaterMaskCB's fields, once (R5.3)
+#include "shaders/shared/vsm_propagate.h" // PropagateCB's fields, once (R5.3)
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
 {
@@ -1229,7 +1233,11 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
         const std::uint32_t casters = shadowGpu ? shadowGpu->ActiveCasterCount() : 0u;
         if (waterMaskMat_ && waterMaskMat_->GetPipelineState() && boundsSrv.ptr != 0 && metaSrv.ptr != 0)
         {
-            struct WaterMaskCB { std::uint32_t numCasters, numViews, maskBase; float margin; };
+            struct WaterMaskCB {
+                // shaders/shared/vsm_water_mask.h (architecture plan R5.3): the fields, once for HLSL and C++.
+                using uint = shader_shared::uint;
+                VSM_WATER_MASK_FIELDS
+            };
             const WaterMaskCB maskCb{ casters, viewCount, RequestWords(), vsm::kWaterMaskMargin };
             if (casters > 0u)
             {
@@ -1402,8 +1410,11 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
 
         struct PropagateCB
         {
-            std::uint32_t numClipLevels, pagesPerAxis, pad0, pad1;
-            vsm::ClipmapLevelSquare level[vsm::kNumClipmapLevels];
+            // shaders/shared/vsm_propagate.h (architecture plan R5.3): the fields, once for HLSL and C++.
+            using float4 = shader_shared::float4;
+            using uint = shader_shared::uint;
+            using uint2 = shader_shared::uint2;
+            VSM_PROPAGATE_FIELDS(vsm::kNumClipmapLevels)
         };
         static_assert(sizeof(PropagateCB) ==
                           16 + sizeof(vsm::ClipmapLevelSquare) * vsm::kNumClipmapLevels,
@@ -1411,11 +1422,12 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         auto writePropagateCB = [&](std::uint8_t* dst)
         {
             PropagateCB c{};
-            c.numClipLevels = squares->count;
-            c.pagesPerAxis = vsm::kClipmapPagesAxis;
+            c.gNumClipLevels = squares->count;
+            c.gPagesPerAxis = vsm::kClipmapPagesAxis;
             for (std::uint32_t l = 0; l < squares->count && l < vsm::kNumClipmapLevels; ++l)
             {
-                c.level[l] = squares->level[l];
+                const vsm::ClipmapLevelSquare& sq = squares->level[l];
+                c.gLevelXform[l] = Math::float4(sq.centreX, sq.centreY, sq.extent, sq._pad);
             }
             std::memcpy(dst, &c, sizeof(c));
         };
@@ -2644,42 +2656,34 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
 
         struct ScatterCB
         {
-            std::uint32_t numCasters, numGroups, numLevels, pageIdShift;
-            // S5: local (spot/point) views scatter too. They follow the clipmap levels in the
-            // dispatch's y axis; every view's matrix, last matrix and LOD are the render slot's records (plan S9e).
-            std::uint32_t numLocalViews;
-            std::uint32_t perInstanceLod; // A/B lever; mirrors gPerInstanceLod
-            std::uint32_t _pad0[2];
-            // S5b.2: (on, prevValid, deferred capacity, 0). Mirrors gHzbParams.
-            DirectX::XMUINT4 hzbParams{ 0u, 0u, 0u, 0u };
-            std::uint32_t coarseBase = 0; // mirrors gCoarseBase
-            float coarsePixelsStatic = 0.0f;
-            float coarsePixelsDynamic = 0.0f;
-            float windReach = 0.0f;                         // mirrors gWindReach (vsm.windPageMarks)
-            DirectX::XMFLOAT4 windCams{ 0.0f, 0.0f, 0.0f, 0.0f }; // mirrors gWindCams
-            DirectX::XMFLOAT4 windLevelCams[vsm::kNumClipmapLevels]{}; // mirrors gWindLevelCams
+            // shaders/shared/vsm_scatter.h (architecture plan R5.3): the fields, once for HLSL and C++.
+            using float4 = shader_shared::float4;
+            using uint = shader_shared::uint;
+            using uint2 = shader_shared::uint2;
+            using uint4 = shader_shared::uint4;
+            VSM_SCATTER_FIELDS(vsm::kNumClipmapLevels)
         };
         static_assert(sizeof(ScatterCB) == 80 + 16 * vsm::kNumClipmapLevels, "ScatterCB mirrors vsm_page_scatter_cs.hlsl's cbuffer");
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
             [&](std::uint8_t* dst)
             {
                 ScatterCB c{};
-                c.numCasters = activeCasters;
-                c.numGroups = groups;
-                c.numLevels = vsm::kNumClipmapLevels;
+                c.gNumCasters = activeCasters;
+                c.gNumGroups = groups;
+                c.gNumLevels = vsm::kNumClipmapLevels;
                 // Single-draw page render: pack the physical page index into the high bits of every
                 // visible-list entry so ONE draw can serve all pages. MUST match the setup CB below —
                 // both write the same list and the VS decodes it with one rule.
-                c.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u;
-                c.numLocalViews = scatterLocals ? scatterLocalViews : 0u;
-                c.perInstanceLod = vsm::g_perInstanceCasterLod ? 1u : 0u;
-                c.hzbParams = DirectX::XMUINT4(dec.hzb ? 1u : 0u, dec.hzbPrevValid ? 1u : 0u, deferredCap_, 0u);
-                c.coarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
-                c.coarsePixelsStatic = vsm::g_coarsePagePixelsStatic;
-                c.coarsePixelsDynamic = vsm::g_coarsePagePixelsDynamic;
-                c.windReach = dec.windReach;
-                c.windCams = DirectX::XMFLOAT4(dec.windCams[0], dec.windCams[1], dec.windCams[2], dec.windCams[3]);
-                std::memcpy(c.windLevelCams, dec.windLevelCams, sizeof(c.windLevelCams));
+                c.gPageIdShift = singleDraw ? vsm::kPageIdShift : 0u;
+                c.gNumLocalViews = scatterLocals ? scatterLocalViews : 0u;
+                c.gPerInstanceLod = vsm::g_perInstanceCasterLod ? 1u : 0u;
+                c.gHzbParams = { dec.hzb ? 1u : 0u, dec.hzbPrevValid ? 1u : 0u, deferredCap_, 0u };
+                c.gCoarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
+                c.gCoarsePixelsStatic = vsm::g_coarsePagePixelsStatic;
+                c.gCoarsePixelsDynamic = vsm::g_coarsePagePixelsDynamic;
+                c.gWindReach = dec.windReach;
+                c.gWindCams = Math::float4(dec.windCams[0], dec.windCams[1], dec.windCams[2], dec.windCams[3]);
+                std::memcpy(c.gWindLevelCams, dec.windLevelCams, sizeof(c.gWindLevelCams));
                 std::memcpy(dst, &c, sizeof(c));
             },
             { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv,

@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
+#include "shaders/shared/glass_slots.h" // GLASS_PASS_SRV_COUNT: glass.hlsl's per-pass table
 #include "core/threading/ThreadRole.h" // game thread plan G8b: WaitRenderForGame in the game-reachable accessors
 
 namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWriter.h)
@@ -438,12 +439,12 @@ public:
     // glass.hlsl's per-pass table (rendering/renderables/GlassPassSrvs.h), gathered once by
     // SceneRenderer::Pass_Translucent; null = not this frame (a shadow map was missing), the glass
     // draws skip. Read by the recording workers after the pass set it.
-    void SetGlassPassSrvs(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15>* srvs)
+    void SetGlassPassSrvs(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT>* srvs)
     {
         glassPassSrvsValid_ = srvs != nullptr;
         if (srvs) { glassPassSrvs_ = *srvs; }
     }
-    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15>* GetGlassPassSrvs() const
+    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT>* GetGlassPassSrvs() const
     {
         return glassPassSrvsValid_ ? &glassPassSrvs_ : nullptr;
     }
@@ -1115,7 +1116,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE       sdsmMomentsSrv_{};                        // S16: glass EVSM atlas slot
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       localShadowPoolSrv_{};                    // S7 direct read: glass's t14
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15> glassPassSrvs_{};               // render::GlassPassSrvs
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_PASS_SRV_COUNT> glassPassSrvs_{};               // render::GlassPassSrvs
     bool                              glassPassSrvsValid_ = false;
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs

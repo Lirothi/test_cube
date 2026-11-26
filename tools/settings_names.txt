@@ -59,436 +59,489 @@ bloom.sunRaysVisibleExponent r
 bloom.sunRaysWidth r
 bloom.sunSplitRadiusDeg r
 bloom.threshold r
-bot.avoidBoats
-bot.braking
-bot.debug
-bot.easyPace
-bot.enabled
-bot.forget
-bot.grip
-bot.gripLearn
-bot.holdThrottle
-bot.learn
-bot.lookAhead
-bot.lookAheadCircle
-bot.lookAheadMin
-bot.margin
-bot.markRule
-bot.mediumPace
-bot.pace
-bot.plan
-bot.planBrake
-bot.planBrakeBend
-bot.planEvery
-bot.planGates
-bot.planLead
-bot.planMargin
-bot.planSwitch
-bot.planTurns
-bot.rivalClearance
-bot.slip
-bot.steerByRudder
-bot.steerGain
-bot.stepSteer
-bot.turnPower
-bot.turnPowerOver
-bot.turnWash
-bot.yawDamping
-camera.boatView
-camera.fly
-camera.mouseSmoothing
-camera.spin
-cloud.blueNoise
+bot.avoidBoats r
+bot.braking r
+bot.debug r
+bot.easyPace r
+bot.enabled r
+bot.forget r
+bot.grip r
+bot.gripLearn r
+bot.holdThrottle r
+bot.learn r
+bot.lookAhead r
+bot.lookAheadCircle r
+bot.lookAheadMin r
+bot.margin r
+bot.markRule r
+bot.mediumPace r
+bot.pace r
+bot.plan r
+bot.planBrake r
+bot.planBrakeBend r
+bot.planEvery r
+bot.planGates r
+bot.planLead r
+bot.planMargin r
+bot.planSwitch r
+bot.planTurns r
+bot.rivalClearance r
+bot.slip r
+bot.steerByRudder r
+bot.steerGain r
+bot.stepSteer r
+bot.turnPower r
+bot.turnPowerOver r
+bot.turnWash r
+bot.yawDamping r
+camera.boatView r
+camera.fly r
+camera.mouseSmoothing r
+camera.spin r
+cloud.albedo r
+cloud.blueNoise r
 cloud.captureTexels r
-cloud.debugView
-cloud.enabled
+cloud.cloudType r
+cloud.coverage r
+cloud.debugView r
+cloud.diffuseLight r
+cloud.distanceToSampleCountMaxKm r
+cloud.enabled r
+cloud.erosionPower r
+cloud.erosionStrength r
+cloud.erosionTileKm r
+cloud.extinctionScale r
+cloud.floorVariationClear r
+cloud.floorVariationCloudy r
+cloud.formationChangeSpeed r
+cloud.formationRoughness r
+cloud.highFrequencyDistanceKm r
+cloud.highFrequencyStrength r
+cloud.historyWeight r
+cloud.layerBottomKm r
+cloud.layerHeightKm r
+cloud.macroTileKm r
+cloud.macroVariation r
+cloud.msContribution r
+cloud.msEccentricity r
+cloud.msOcclusion r
 cloud.msOctaves r
-cloud.perSampleTransmittance
-cloud.seed
-cloud.shadowMap
+cloud.oceanBodyShadow r
+cloud.overcastEvenness r
+cloud.overcastFrom r
+cloud.perSampleTransmittance r
+cloud.phaseBlend r
+cloud.phaseG r
+cloud.phaseG2 r
+cloud.profileBaseErosion r
+cloud.profileBaseSoftness r
+cloud.profileBodyDensity r
+cloud.profileDome r
+cloud.profileErosionRise r
+cloud.profileHeavyErosionCut r
+cloud.profileHeavyThinning r
+cloud.profileHeight r
+cloud.profileSmallDensity r
+cloud.profileTopSoftness r
+cloud.reflectionHorizonFadeDeg r
+cloud.seed r
+cloud.shadowDepthBiasKm r
+cloud.shadowExtentKm r
+cloud.shadowHorizonFadeDeg r
+cloud.shadowMap r
 cloud.shadowMapSampleCount r
-cloud.shadowSampleCount
-cloud.temporal
+cloud.shadowSampleCount r
+cloud.shadowSnapKm r
+cloud.shadowStrength r
+cloud.shadowTracingDistanceKm r
+cloud.skyLightBottomOcclusion r
+cloud.skyLightIntensity r
+cloud.stopTracingTransmittance r
+cloud.temporal r
+cloud.tracingMaxDistanceKm r
+cloud.tracingStartMaxDistanceKm r
 cloud.viewSampleCountMax r
 cloud.viewSampleCountMin r
-cloudCompose.jitterScale
-cloudShadow.bilinearWeather
-cloudShadow.detailMean
-cloudShadow.updateFrames
-cloudTrace.mode
-color.agxPower
-color.agxSaturation
-color.agxSlope
-color.blueCorrection
-color.expandGamut
-color.gradeContrast
-color.gradeGain
-color.gradeGamma
-color.gradeOffset
-color.gradeSaturation
+cloud.weatherTileKm r
+cloud.windKmH r
+cloudCompose.jitterScale r
+cloudShadow.bilinearWeather r
+cloudShadow.detailMean r
+cloudShadow.updateFrames r
+cloudTrace.mode r
+color.agxPower r
+color.agxSaturation r
+color.agxSlope r
+color.blueCorrection r
+color.expandGamut r
+color.gradeContrast r
+color.gradeGain r
+color.gradeGamma r
+color.gradeOffset r
+color.gradeSaturation r
 color.localContrast
 color.localDetailStrength
 color.localHighlightContrast
 color.localShadowContrast
-color.toneCurve
-color.ueGamut
-color.vignette
+color.toneCurve r
+color.ueGamut r
+color.vignette r
 contact.enabled r
-contact.fadeBand
-contact.grazingFade
-contact.intensity
-contact.length
-contact.lengthInWorldSpace
-contact.localMode
-contact.maxDistance
-contact.minDistance
-contact.normalOffset
+contact.fadeBand r
+contact.grazingFade r
+contact.intensity r
+contact.length r
+contact.lengthInWorldSpace r
+contact.localMode r
+contact.maxDistance r
+contact.minDistance r
+contact.normalOffset r
 contact.steps r
-contact.temporal
-contact.thickness
+contact.temporal r
+contact.thickness r
 controls.invertY r
 controls.sensitivity r
-csm.accurateCull
+csm.accurateCull r
 csm.atlasRes r
-csm.blendFraction
-csm.depthBias
-csm.distanceFade
+csm.blendFraction r
+csm.depthBias r
+csm.distanceFade r
 csm.filterMode r
-csm.hzbCull
-csm.maxDistance
-csm.maxSlope
-csm.normalBias
-csm.overBlurCorrect
-csm.receiverBias
-csm.scissorOptim
-csm.scissorPad
-csm.sharpen
-csm.slopeScale
-debug.hud
-debug.probeRadius
-debug.probeSource
-debug.probeU
-debug.probeV
-debug.profilerOverlay
-debug.sunProbeAfterDlss
-debug.tex
-debug.texMip
-debug.texMode
+csm.hzbCull r
+csm.maxDistance r
+csm.maxSlope r
+csm.normalBias r
+csm.overBlurCorrect r
+csm.receiverBias r
+csm.scissorOptim r
+csm.scissorPad r
+csm.sharpen r
+csm.slopeScale r
+debug.hud r
+debug.probeRadius r
+debug.probeSource r
+debug.probeU r
+debug.probeV r
+debug.profilerOverlay r
+debug.sunProbeAfterDlss r
+debug.tex r
+debug.texMip r
+debug.texMode r
 display.backgroundFps r
 display.height r
 display.mode r
 display.monitor r
 display.width r
 dlss.mode r
-dlss.preset
-exposure.adaptationStartDistance
-exposure.aperture
-exposure.autoExposure
-exposure.blackBucketInfluence
-exposure.compensationEv
+dlss.preset r
+exposure.adaptationStartDistance r
+exposure.aperture r
+exposure.autoExposure r
+exposure.blackBucketInfluence r
+exposure.compensationEv r
 exposure.curve
-exposure.curveComp0
-exposure.curveComp1
-exposure.curveComp10
-exposure.curveComp11
-exposure.curveComp2
-exposure.curveComp3
-exposure.curveComp4
-exposure.curveComp5
-exposure.curveComp6
-exposure.curveComp7
-exposure.curveComp8
-exposure.curveComp9
-exposure.curveEv0
-exposure.curveEv1
-exposure.curveEv10
-exposure.curveEv11
-exposure.curveEv2
-exposure.curveEv3
-exposure.curveEv4
-exposure.curveEv5
-exposure.curveEv6
-exposure.curveEv7
-exposure.curveEv8
-exposure.curveEv9
-exposure.curvePoints
-exposure.enabled
-exposure.highPercentile
-exposure.iso
-exposure.localBlurredBlend
-exposure.localBlurredKernelPercent
+exposure.curveComp0 r
+exposure.curveComp1 r
+exposure.curveComp10 r
+exposure.curveComp11 r
+exposure.curveComp2 r
+exposure.curveComp3 r
+exposure.curveComp4 r
+exposure.curveComp5 r
+exposure.curveComp6 r
+exposure.curveComp7 r
+exposure.curveComp8 r
+exposure.curveComp9 r
+exposure.curveEv0 r
+exposure.curveEv1 r
+exposure.curveEv10 r
+exposure.curveEv11 r
+exposure.curveEv2 r
+exposure.curveEv3 r
+exposure.curveEv4 r
+exposure.curveEv5 r
+exposure.curveEv6 r
+exposure.curveEv7 r
+exposure.curveEv8 r
+exposure.curveEv9 r
+exposure.curvePoints r
+exposure.enabled r
+exposure.highPercentile r
+exposure.iso r
+exposure.localBlurredBlend r
+exposure.localBlurredKernelPercent r
 exposure.localContrast
-exposure.localDetailStrength
-exposure.localHighlightContrast
-exposure.localShadowContrast
-exposure.lowPercentile
-exposure.manualCompensationEv
-exposure.manualEv100
-exposure.maxEv100
-exposure.meterMaskInnerRadius
-exposure.meterMaskOuterRadius
-exposure.meterMaskSkyBias
-exposure.meterMaskStrength
-exposure.minEv100
-exposure.nightDesaturation
-exposure.nightVision
-exposure.shutter
-exposure.speedDown
-exposure.speedUp
-fog.albedo
-fog.conservativeDepth
-fog.debugView
-fog.density
-fog.depthOffset
-fog.depthThreshold
-fog.enabled
-fog.extinctionScale
-fog.fullyDirectionalDistance
+exposure.localDetailStrength r
+exposure.localHighlightContrast r
+exposure.localShadowContrast r
+exposure.lowPercentile r
+exposure.manualCompensationEv r
+exposure.manualEv100 r
+exposure.maxEv100 r
+exposure.meterMaskInnerRadius r
+exposure.meterMaskOuterRadius r
+exposure.meterMaskSkyBias r
+exposure.meterMaskStrength r
+exposure.minEv100 r
+exposure.nightDesaturation r
+exposure.nightVision r
+exposure.shutter r
+exposure.speedDown r
+exposure.speedUp r
+fog.albedo r
+fog.conservativeDepth r
+fog.debugView r
+fog.density r
+fog.depthOffset r
+fog.depthThreshold r
+fog.enabled r
+fog.extinctionScale r
+fog.fullyDirectionalDistance r
 fog.gridPixels r
 fog.gridZ r
-fog.heightFalloff
-fog.historyWeight
-fog.inSkyCapture
-fog.inscatterLuminance
-fog.jitter
-fog.localDistanceBias
-fog.localLightScatter
-fog.localLights
-fog.localSoftFading
-fog.maxOpacity
-fog.nonDirectionalDistance
-fog.phaseG
-fog.referenceHeight
+fog.heightFalloff r
+fog.historyWeight r
+fog.inSkyCapture r
+fog.inscatterLuminance r
+fog.jitter r
+fog.localDistanceBias r
+fog.localLightScatter r
+fog.localLights r
+fog.localSoftFading r
+fog.maxOpacity r
+fog.nonDirectionalDistance r
+fog.phaseG r
+fog.referenceHeight r
 fog.samplesPerCell r
-fog.skyAlongView
-fog.skyAmbient
-fog.skyBlur
-fog.skyVolScatter
-fog.startDistance
-fog.sunRtFallback
-fog.sunScatter
-fog.sunScatterB
-fog.sunScatterExp
-fog.sunScatterG
-fog.sunScatterR
-fog.sunScatterStart
-fog.sunVolScatter
-fog.temporal
+fog.skyAlongView r
+fog.skyAmbient r
+fog.skyBlur r
+fog.skyVolScatter r
+fog.startDistance r
+fog.sunRtFallback r
+fog.sunScatter r
+fog.sunScatterB r
+fog.sunScatterExp r
+fog.sunScatterG r
+fog.sunScatterR r
+fog.sunScatterStart r
+fog.sunVolScatter r
+fog.temporal r
 fog.volumetric r
-fog.volumetricDistance
-fog.volumetricFadeIn
-fog.volumetricStart
+fog.volumetricDistance r
+fog.volumetricFadeIn r
+fog.volumetricStart r
 frame.gbvCreationExcludesSubmission
-frame.maxFps
-frame.oneFrameThreadLag
-frame.recordDt
-frame.renderThread
-frame.rhiThread
-frame.timeScale
-frame.vsync
-gbuffer.hzb
-gbuffer.indirect
-gi.bounceVisibility
-gi.debug
+frame.maxFps r
+frame.oneFrameThreadLag r
+frame.recordDt r
+frame.renderThread r
+frame.rhiThread r
+frame.timeScale r
+frame.vsync r
+gbuffer.hzb r
+gbuffer.indirect r
+gi.bounceVisibility r
+gi.debug r
 gi.divisor r
 gi.enabled r
 gi.far r
 gi.farDivisor r
-gi.farSpacing
-gi.fixedRayPeriod
-gi.hysteresis
-gi.infiniteBounce
-gi.intensity
-gi.lights
+gi.farSpacing r
+gi.fixedRayPeriod r
+gi.hysteresis r
+gi.infiniteBounce r
+gi.intensity r
+gi.lights r
 gi.rayDistance r
 gi.rays r
-gi.skipInactive
-gi.skyRay
-gi.sleepPeriod
-gi.spacing
-gi.twoSidedSheets
-glass.wall
-gtao.denoise
+gi.skipInactive r
+gi.skyRay r
+gi.sleepPeriod r
+gi.spacing r
+gi.twoSidedSheets r
+glass.wall r
+gtao.denoise r
 gtao.enabled r
-gtao.filterPlaneTolerance
-gtao.filterRadius
-gtao.hzbMipBias
-gtao.intensity
+gtao.filterPlaneTolerance r
+gtao.filterRadius r
+gtao.hzbMipBias r
+gtao.intensity r
 gtao.numAngles r
 gtao.numSteps r
-gtao.skyIntensity
-gtao.skyMipBias
-gtao.skyRadius
-gtao.strength
-gtao.temporal
-gtao.temporalBlendWeight
-gtao.temporalClampRange
-gtao.thickness
-gtao.upsampleTolerance
-gtao.useGBufferNormal
-gtao.useHzb
-gtao.worldRadius
+gtao.skyIntensity r
+gtao.skyMipBias r
+gtao.skyRadius r
+gtao.strength r
+gtao.temporal r
+gtao.temporalBlendWeight r
+gtao.temporalClampRange r
+gtao.thickness r
+gtao.upsampleTolerance r
+gtao.useGBufferNormal r
+gtao.useHzb r
+gtao.worldRadius r
 image.brightnessEv r
 image.fovDeg r
-light.ambient
-light.bumpShadowing
-light.exposure
-light.foliageBackSky
-light.foliageTransmissionUe
-light.geometricTerminator
-light.groundAlbedo
-light.roughDiffuse
-light.skyFillIntensity
-light.skyIlluminanceLux
-light.skyIntensity
-light.sunIlluminanceLux
-light.sunIntensity
-light.sunMetalSpec
-light.sunTemperatureK
-light.terminatorOffset
-lightShafts.bloomMaxBrightness
-lightShafts.bloomScale
-lightShafts.bloomThreshold
+light.ambient r
+light.bumpShadowing r
+light.exposure r
+light.foliageBackSky r
+light.foliageTransmissionUe r
+light.geometricTerminator r
+light.groundAlbedo r
+light.roughDiffuse r
+light.skyFillIntensity r
+light.skyIlluminanceLux r
+light.skyIntensity r
+light.sunIlluminanceLux r
+light.sunIntensity r
+light.sunMetalSpec r
+light.sunTemperatureK r
+light.terminatorOffset r
+lightShafts.bloomMaxBrightness r
+lightShafts.bloomScale r
+lightShafts.bloomThreshold r
 lightShafts.enabled r
-lightShafts.length
-lightShafts.occlusionDepthRange
-lightShafts.smoothing
-lod.bound0
-lod.bound1
-lod.bound2
-lod.chunkDist0
+lightShafts.length r
+lightShafts.occlusionDepthRange r
+lightShafts.smoothing r
+lod.bound0 r
+lod.bound1 r
+lod.bound2 r
+lod.chunkDist0 r
 lod.chunkFactor r
-lod.debug
-lod.debugBoxes
-lod.debugCriteria
-lod.debugFilter
-lod.debugLabels
-lod.debugMaxBoxes
-lod.debugRange
-lod.debugRegular
-lod.distanceScale
-lod.enabled
-lod.forced
+lod.debug r
+lod.debugBoxes r
+lod.debugCriteria r
+lod.debugFilter r
+lod.debugLabels r
+lod.debugMaxBoxes r
+lod.debugRange r
+lod.debugRegular r
+lod.distanceScale r
+lod.enabled r
+lod.forced r
 lod.pixelError r
-lod.temporalLag
-lod.ue
-ocean.absorption0B
-ocean.absorption0G
-ocean.absorption0R
-ocean.absorption1B
-ocean.absorption1G
-ocean.absorption1R
-ocean.absorption2B
-ocean.absorption2G
-ocean.absorption2R
-ocean.absorption3B
-ocean.absorption3G
-ocean.absorption3R
+lod.temporalLag r
+lod.ue r
+ocean.absorption0B r
+ocean.absorption0G r
+ocean.absorption0R r
+ocean.absorption1B r
+ocean.absorption1G r
+ocean.absorption1R r
+ocean.absorption2B r
+ocean.absorption2G r
+ocean.absorption2R r
+ocean.absorption3B r
+ocean.absorption3G r
+ocean.absorption3R r
 ocean.contactFoam
-ocean.deepScatterB
-ocean.deepScatterG
-ocean.deepScatterR
-ocean.diffuseB
-ocean.diffuseG
-ocean.diffuseR
+ocean.deepScatterB r
+ocean.deepScatterG r
+ocean.deepScatterR r
+ocean.diffuseB r
+ocean.diffuseG r
+ocean.diffuseR r
 ocean.lowSunBodyLight
 ocean.readbackCascades
-ocean.reflectionNormalFilter
+ocean.reflectionNormalFilter r
 ocean.reflectionNormalStrength
-ocean.reflectionPrefilter
-ocean.roughnessScale
+ocean.reflectionPrefilter r
+ocean.roughnessScale r
 ocean.skyHorizonPull
-ocean.specularStrength
-ocean.sssB
-ocean.sssG
-ocean.sssR
-ocean.sunGlintSmear
-ocean.sunShadow
-ocean.sunShadowBody
+ocean.specularStrength r
+ocean.sssB r
+ocean.sssG r
+ocean.sssR r
+ocean.sunGlintSmear r
+ocean.sunShadow r
+ocean.sunShadowBody r
 ocean.sunShadowRays r
 ocean.surfDisplacement
 ocean.visible
-ocean.wakeAeration
-ocean.wakeBowBreaks
-ocean.wakeBowFadeIn
-ocean.wakeBowFoam
-ocean.wakeBowLace
-ocean.wakeBowLife
-ocean.wakeBowScallop
-ocean.wakeBowSpeedFull
-ocean.wakeBowSpread
-ocean.wakeBowThrow
-ocean.wakeBowWiden
-ocean.wakeBowWidth
-ocean.wakeBreaking
-ocean.wakeChurn
-ocean.wakeChurnSize
-ocean.wakeCrestCoverage
-ocean.wakeCrestFoam
-ocean.wakeDamping
-ocean.wakeDebug
-ocean.wakeDisplacement
-ocean.wakeEnabled
-ocean.wakeExtrapolate
-ocean.wakeFoam
-ocean.wakeFoamBoil
-ocean.wakeFoamCap
-ocean.wakeFoamFade
-ocean.wakeFoamFadeDense
-ocean.wakeFoamSoftness
-ocean.wakeFoamSpread
-ocean.wakeFoamStretch
-ocean.wakeFoamTile
-ocean.wakeFoamTileVary
+ocean.wakeAeration r
+ocean.wakeBowBreaks r
+ocean.wakeBowFadeIn r
+ocean.wakeBowFoam r
+ocean.wakeBowLace r
+ocean.wakeBowLife r
+ocean.wakeBowScallop r
+ocean.wakeBowSpeedFull r
+ocean.wakeBowSpread r
+ocean.wakeBowThrow r
+ocean.wakeBowWiden r
+ocean.wakeBowWidth r
+ocean.wakeBreaking r
+ocean.wakeChurn r
+ocean.wakeChurnSize r
+ocean.wakeCrestCoverage r
+ocean.wakeCrestFoam r
+ocean.wakeDamping r
+ocean.wakeDebug r
+ocean.wakeDisplacement r
+ocean.wakeEnabled r
+ocean.wakeExtrapolate r
+ocean.wakeFoam r
+ocean.wakeFoamBoil r
+ocean.wakeFoamCap r
+ocean.wakeFoamFade r
+ocean.wakeFoamFadeDense r
+ocean.wakeFoamSoftness r
+ocean.wakeFoamSpread r
+ocean.wakeFoamStretch r
+ocean.wakeFoamTile r
+ocean.wakeFoamTileVary r
 ocean.wakeHz r
-ocean.wakeNormal
-ocean.wakeShore
-ocean.wakeStrength
-ocean.wakeTexel
-ocean.wakeWashBow
-ocean.wakeWashFoam
-ocean.waterMask
+ocean.wakeNormal r
+ocean.wakeShore r
+ocean.wakeStrength r
+ocean.wakeTexel r
+ocean.wakeWashBow r
+ocean.wakeWashFoam r
+ocean.waterMask r
 ocean.windForce
-particles.airFromFog
-particles.clipHulls
-particles.collideHulls
+particles.airFromFog r
+particles.clipHulls r
+particles.collideHulls r
 particles.softWater r
 particles.spawnScale r
-physics.angularDamping
-physics.async
-physics.autoShapes
-physics.debug
-physics.debugRadius
-physics.enabled
-physics.forceLod
-physics.gravity
-physics.hullTolerance
-physics.kickInTick
-physics.killY
-physics.maxSteps
-physics.mooring
-physics.mooringSettle
-physics.mooringTurn
-physics.rollingResistance
-physics.stepDelayMs
-physics.stepHz
-physics.threads
-player.acceleration
-player.airControl
-player.braking
-player.crouchEyeHeight
-player.crouchHeight
-player.crouchSpeed
-player.eyeHeight
-player.friction
-player.height
-player.jumpSpeed
-player.maxSlopeDeg
-player.radius
-player.sprintSpeed
-player.stepHeight
-player.swimDepth
-player.swimSpeed
+physics.angularDamping r
+physics.async r
+physics.autoShapes r
+physics.debug r
+physics.debugRadius r
+physics.enabled r
+physics.forceLod r
+physics.gravity r
+physics.hullTolerance r
+physics.kickInTick r
+physics.killY r
+physics.maxSteps r
+physics.mooring r
+physics.mooringSettle r
+physics.mooringTurn r
+physics.rollingResistance r
+physics.stepDelayMs r
+physics.stepHz r
+physics.threads r
+player.acceleration r
+player.airControl r
+player.braking r
+player.crouchEyeHeight r
+player.crouchHeight r
+player.crouchSpeed r
+player.eyeHeight r
+player.friction r
+player.height r
+player.jumpSpeed r
+player.maxSlopeDeg r
+player.radius r
+player.sprintSpeed r
+player.stepHeight r
+player.swimDepth r
+player.swimSpeed r
 player.testAnchor
 player.testAutopilot
 player.testCrouch
@@ -503,233 +556,312 @@ player.testRudder
 player.testSprint
 player.testThrottle
 player.testView
-player.walkSpeed
+player.walkSpeed r
 race.close
-race.countdown
-race.difficulty
-race.drill
-race.drillGates
-race.drillRun
-race.drillTimeout
-race.finishWindow
-race.laps
-race.missPenalty
-race.resetOff
-race.resetPenalty
-race.resetSeconds
-race.solo
+race.countdown r
+race.difficulty r
+race.drill r
+race.drillGates r
+race.drillRun r
+race.drillTimeout r
+race.finishWindow r
+race.laps r
+race.missPenalty r
+race.resetOff r
+race.resetPenalty r
+race.resetSeconds r
+race.solo r
 race.start
-race.track
-race.watch
-raster.bindless
-reflections.geometricNormal
-reflections.glossyBlur
-reflections.hitReprojection
-reflections.lobe
+race.track r
+race.watch r
+raster.bindless r
+reflections.geometricNormal r
+reflections.glossyBlur r
+reflections.hitReprojection r
+reflections.lobe r
 reflections.oceanResolution r
 reflections.resolution r
-render.preExposure
+render.preExposure r
 render.reflectionSource r
-rt.alphaMissKeep
+rt.alphaMissKeep r
 rt.alphaMode r
-rt.alphaTest
-rt.cutoutOpacity
-rt.meshOpacity
-rt.windBlas
-rt.windRadius
+rt.alphaTest r
+rt.cutoutOpacity r
+rt.meshOpacity r
+rt.windBlas r
+rt.windRadius r
 scalability.autodetect
-scalability.gpuTimeScale
-scene.replicate
-sdsm.blur
-sdsm.blurMaxTexels
-sdsm.borderTexels
-sdsm.cacheDilation
+scalability.gpuTimeScale r
+scene.replicate r
+sdsm.blur r
+sdsm.blurMaxTexels r
+sdsm.borderTexels r
+sdsm.cacheDilation r
 sdsm.cacheFrames r
-sdsm.dilation
-sdsm.evsm
-sdsm.evsmNeg
-sdsm.evsmPos
-sdsm.minScaleOverSphere
+sdsm.dilation r
+sdsm.evsm r
+sdsm.evsmNeg r
+sdsm.evsmPos r
+sdsm.minScaleOverSphere r
 sdsm.partitions r
-sdsm.sizeHysteresis
-sdsm.stabilityFrames
-sdsm.texelSnap
-sdsm.zMargin
-sg.all
-sg.effects
-sg.gi
-sg.postProcess
-sg.reflections
+sdsm.sizeHysteresis r
+sdsm.stabilityFrames r
+sdsm.texelSnap r
+sdsm.zMargin r
+sg.all r
+sg.effects r
+sg.gi r
+sg.postProcess r
+sg.reflections r
 sg.reload
-sg.resolution
-sg.shadows
-sg.textures
+sg.resolution r
+sg.shadows r
+sg.textures r
 sg.unpin
-sg.viewDistance
-sg.volumetrics
-sg.water
-shadow.cullValidate
-shadow.giIndirect
-shadow.indirect
-shadow.localBiasTexel
-shadow.localBiasUe
-shadow.localBoundsCull
-shadow.localCache
-shadow.localCacheMaxPages
-shadow.localCacheWind
-shadow.localCompact
-shadow.localDirectRead
-shadow.localFadeUe
-shadow.localFilterUe
-shadow.localHullCull
-shadow.localMaxPages
+sg.viewDistance r
+sg.volumetrics r
+sg.water r
+shadow.cullValidate r
+shadow.giIndirect r
+shadow.indirect r
+shadow.localBiasTexel r
+shadow.localBiasUe r
+shadow.localBoundsCull r
+shadow.localCache r
+shadow.localCacheMaxPages r
+shadow.localCacheWind r
+shadow.localCompact r
+shadow.localDirectRead r
+shadow.localFadeUe r
+shadow.localFilterUe r
+shadow.localHullCull r
+shadow.localMaxPages r
 shadow.localMaxRes r
-shadow.localNormalTexels
-shadow.localPushTexels
-shadow.localRadiusThreshold
-shadow.localViewsPerList
+shadow.localNormalTexels r
+shadow.localPushTexels r
+shadow.localRadiusThreshold r
+shadow.localViewsPerList r
 shadow.localWindRange r
 shadow.mode r
-shadow.pointLinearDepth
-shadow.pointNearUe
-shadow.spotLinearDepth
-sky.aerialDebugView
-sky.aerialPerspective
-sky.aerialStartDepth
-sky.aerialViewDistanceScale
-sky.environmentLighting
-sky.groundAlbedo
-sky.heightFogContribution
-sky.keyTolerance
-sky.luminanceScale
-sky.lutDebugView
-sky.lutEnabled
-sky.lutValidate
-sky.mieAbsorptionScale
-sky.mieAnisotropy
-sky.mieScale
-sky.mode
-sky.multiScatteringFactor
-sky.ozoneScale
-sky.rayleighScale
-sky.skyLuminanceFactor
-skyVis.debug
-skyVis.diffuse
+shadow.pointLinearDepth r
+shadow.pointNearUe r
+shadow.spotLinearDepth r
+sky.aerialDebugView r
+sky.aerialPerspective r
+sky.aerialStartDepth r
+sky.aerialViewDistanceScale r
+sky.environmentLighting r
+sky.groundAlbedo r
+sky.heightFogContribution r
+sky.keyTolerance r
+sky.luminanceScale r
+sky.lutDebugView r
+sky.lutEnabled r
+sky.lutValidate r
+sky.mieAbsorptionScale r
+sky.mieAnisotropy r
+sky.mieScale r
+sky.mode r
+sky.multiScatteringFactor r
+sky.ozoneScale r
+sky.rayleighScale r
+sky.skyLuminanceFactor r
+skyVis.debug r
+skyVis.diffuse r
 skyVis.enabled r
-skyVis.fallback
-skyVis.fallbackFade
-skyVis.fallbackOpacity
-skyVis.fallbackResolution
-skyVis.fallbackStart
-skyVis.fallbackTexel
-skyVis.filter
-skyVis.filterDepth
-skyVis.filterFirst
-skyVis.filterNormalPower
+skyVis.fallback r
+skyVis.fallbackFade r
+skyVis.fallbackOpacity r
+skyVis.fallbackResolution r
+skyVis.fallbackStart r
+skyVis.fallbackTexel r
+skyVis.filter r
+skyVis.filterDepth r
+skyVis.filterFirst r
+skyVis.filterNormalPower r
 skyVis.filterRadius r
 skyVis.fogRays r
-skyVis.history
-skyVis.maxDistance
+skyVis.history r
+skyVis.maxDistance r
 skyVis.rays r
-skyVis.sampling
-skyVis.seed
-skyVis.seedNearFirst
-skyVis.specular
-spray.colorB
-spray.colorG
-spray.colorR
-spray.enabled
-spray.foamLight
-spray.forward
-spray.forwardScatter
-spray.mist
+skyVis.sampling r
+skyVis.seed r
+skyVis.seedNearFirst r
+skyVis.specular r
+spray.colorB r
+spray.colorG r
+spray.colorR r
+spray.enabled r
+spray.foamLight r
+spray.forward r
+spray.forwardScatter r
+spray.mist r
 spray.mistMax r
-spray.opacity
-spray.out
-spray.rate
+spray.opacity r
+spray.out r
+spray.rate r
 spray.rateMax r
-spray.sidePush
-spray.slam
-spray.softFade
-spray.up
-ssr.technique
-ssr.temporal
-ssr.temporalBlend
-ssr.temporalClampExpand
-ssr.ueGlossy
-ssr.ueIntensity
-ssr.ueMaxRoughness
+spray.sidePush r
+spray.slam r
+spray.softFade r
+spray.up r
+ssr.technique r
+ssr.temporal r
+ssr.temporalBlend r
+ssr.temporalClampExpand r
+ssr.ueGlossy r
+ssr.ueIntensity r
+ssr.ueMaxRoughness r
 ssr.ueQuality r
-ssr.ueRays
-ssr.ueRoughnessOverride
-ssr.ueSteps
-ssr.ueUseSurfaceRoughness
+ssr.ueRays r
+ssr.ueRoughnessOverride r
+ssr.ueSteps r
+ssr.ueUseSurfaceRoughness r
 ssr.waterExperiment
 ssr.waterNormalCascades r
-ssr.waterSurfaceNormal
-ssr.waterTemporal
-ssr.waterTemporalBlend
-ssr.waterTemporalInertia
-ssr.waterTemporalUnderDlss
-stats.pipeline
-streaming.boost
-streaming.dropMips
-streaming.dumpRows
-streaming.enabled
-streaming.forceMips
-streaming.framesForFullUpdate
-streaming.fullyLoadUsed
-streaming.hiddenScale
-streaming.maxIoInFlight
-streaming.maxPerFrame
-streaming.minMipForSplit
+ssr.waterSurfaceNormal r
+ssr.waterTemporal r
+ssr.waterTemporalBlend r
+ssr.waterTemporalInertia r
+ssr.waterTemporalUnderDlss r
+stats.pipeline r
+streaming.boost r
+streaming.dropMips r
+streaming.dumpRows r
+streaming.enabled r
+streaming.forceMips r
+streaming.framesForFullUpdate r
+streaming.fullyLoadUsed r
+streaming.hiddenScale r
+streaming.maxIoInFlight r
+streaming.maxPerFrame r
+streaming.minMipForSplit r
 streaming.mipBias r
-streaming.mipFade
-streaming.mipFadeIn
-streaming.mipFadeOut
-streaming.perTextureBias
+streaming.mipFade r
+streaming.mipFadeIn r
+streaming.mipFadeOut r
+streaming.perTextureBias r
 streaming.poolSizeMB r
-streaming.selftest
-streaming.tempMemoryMB
-sun.angularSize
-sun.azimuth
-sun.elevation
-sun.softAngle
-tessy.atlas
-tessy.camSplit
-tessy.clusterCull
-tessy.debug
-tessy.enabled
-tessy.gbuffer
-tessy.gbufferHzb
-tessy.lod
-tessy.lodBand
+streaming.selftest r
+streaming.tempMemoryMB r
+sun.angularSize r
+sun.azimuth r
+sun.elevation r
+sun.softAngle r
+tessy.atlas r
+tessy.camSplit r
+tessy.clusterCull r
+tessy.debug r
+tessy.enabled r
+tessy.gbuffer r
+tessy.gbufferHzb r
+tessy.lod r
+tessy.lodBand r
 tessy.lodPixelError r
-tessy.lodShadowTexels
-tessy.msCull
-tessy.ordered
-tessy.raster
-tessy.sdsm
-tessy.sunCut
-tessy.validate
-tessy.vsm
-tessy.vsmCameraCut
-tessy.windPad
+tessy.lodShadowTexels r
+tessy.msCull r
+tessy.ordered r
+tessy.raster r
+tessy.sdsm r
+tessy.sunCut r
+tessy.validate r
+tessy.vsm r
+tessy.vsmCameraCut r
+tessy.windPad r
 textures.anisotropy r
-tod.animate
-tod.day
-tod.fogUdsColor
-tod.month
-tod.moonEnabled
-tod.moonPhase
-tod.moonPhaseAuto
-tod.nightSky
-tod.realPositions
-tod.skyUdsMaterial
-tod.speed
-tod.time
-tod.udsMoon
-tod.year
+tod.airglowColorB r
+tod.airglowColorG r
+tod.airglowColorR r
+tod.airglowZenith r
+tod.animate r
+tod.dawn r
+tod.day r
+tod.dayLengthMin r
+tod.daySkyBrightness r
+tod.dusk r
+tod.extendTwilight r
+tod.fogDayDensity r
+tod.fogDayFullDeg r
+tod.fogDuskDeg r
+tod.fogDuskDensity r
+tod.fogNightDensity r
+tod.fogNightFullDeg r
+tod.fogUdsColor r
+tod.heightOffset r
+tod.lampDayBrightness r
+tod.lampRandomDelaySec r
+tod.lampSunElevationDeg r
+tod.lampTurnOnExponent r
+tod.lampTurnOnFlicker r
+tod.lampTurnOnSec r
+tod.latitude r
+tod.lightHandOverDeg r
+tod.lightUpdateThresholdDeg r
+tod.longitude r
+tod.mieNightScale r
+tod.milkyWay r
+tod.month r
+tod.moonAngleDeg r
+tod.moonDiscAdaptation r
+tod.moonDiscColorB r
+tod.moonDiscColorG r
+tod.moonDiscColorR r
+tod.moonEarthshine r
+tod.moonEnabled r
+tod.moonGlintPhaseFalloff r
+tod.moonGlow r
+tod.moonGlowRadiusDeg r
+tod.moonIlluminanceLux r
+tod.moonLightShaftBloomMaxBrightness r
+tod.moonLightShaftBloomScale r
+tod.moonLightShaftBloomThreshold r
+tod.moonLightShaftTintB r
+tod.moonLightShaftTintG r
+tod.moonLightShaftTintR r
+tod.moonNewBrightness r
+tod.moonOrbitOffsetDeg r
+tod.moonPathTiltDeg r
+tod.moonPathYawDeg r
+tod.moonPhase r
+tod.moonPhaseAuto r
+tod.moonSoftAngleDeg r
+tod.nightBrightness r
+tod.nightCameraEv100 r
+tod.nightCameraFollow r
+tod.nightCameraIndoorLift r
+tod.nightCameraOpenFrom r
+tod.nightCameraOpenFull r
+tod.nightExposureEv r
+tod.nightLengthMin r
+tod.nightSky r
+tod.northYawDeg r
+tod.ozoneBlendDeg r
+tod.ozoneNightTintB r
+tod.ozoneNightTintG r
+tod.ozoneNightTintR r
+tod.ozoneSunriseTintB r
+tod.ozoneSunriseTintG r
+tod.ozoneSunriseTintR r
+tod.pathTiltDeg r
+tod.pathYawDeg r
+tod.rayleighDayFullDeg r
+tod.rayleighDayStartDeg r
+tod.rayleighNightTintB r
+tod.rayleighNightTintG r
+tod.rayleighNightTintR r
+tod.realPositions r
+tod.siderealAtMidnight r
+tod.skyUdsMaterial r
+tod.speed r
+tod.stars r
+tod.sunSkyFullDeg r
+tod.sunSkyStartDeg r
+tod.time r
+tod.timeScale r
+tod.twinkle r
+tod.udsMoon r
+tod.utcOffset r
+tod.year r
 vessel.anchorDamping
 vessel.anchorScope
 vessel.anchorStiffness
@@ -771,71 +903,71 @@ vessel.wash
 vessel.waveForce
 vessel.yawDrag
 vessel.yawLinear
-vis.chunkMask
-vis.cutAngle
-vis.cutDistance
-vis.indirectQueries
-vis.maxPixelsFraction
-vis.method
-vis.neverTestDistance
-vis.probablyVisibleTime
-vis.queryLatency
-vsm.clipmapDepthBias
-vsm.clipmapDepthBiasDecay
-vsm.clipmapDepthBiasFloor
-vsm.clipmapFirstLevel
-vsm.clipmapNormalBias
-vsm.clipmapPan
-vsm.clipmapZRangeScale
-vsm.coarseCacheDynamic
-vsm.coarsePagePixelsDynamic
-vsm.coarsePagePixelsStatic
-vsm.cullBackfacingPixels
-vsm.distantLightMode
-vsm.dynamicResMaxLodBias
-vsm.dynamicResMaxPoolLoad
-vsm.hzbCull
-vsm.lightActiveFrameCount
-vsm.lightPageRemap
-vsm.localDepthPushTexels
-vsm.localLateralTexels
-vsm.localMipFromPixel
-vsm.localSmrtExtrapolateMaxSlope
-vsm.localSmrtMaxRayAngle
-vsm.localSmrtMaxSlopeBias
+vis.chunkMask r
+vis.cutAngle r
+vis.cutDistance r
+vis.indirectQueries r
+vis.maxPixelsFraction r
+vis.method r
+vis.neverTestDistance r
+vis.probablyVisibleTime r
+vis.queryLatency r
+vsm.clipmapDepthBias r
+vsm.clipmapDepthBiasDecay r
+vsm.clipmapDepthBiasFloor r
+vsm.clipmapFirstLevel r
+vsm.clipmapNormalBias r
+vsm.clipmapPan r
+vsm.clipmapZRangeScale r
+vsm.coarseCacheDynamic r
+vsm.coarsePagePixelsDynamic r
+vsm.coarsePagePixelsStatic r
+vsm.cullBackfacingPixels r
+vsm.distantLightMode r
+vsm.dynamicResMaxLodBias r
+vsm.dynamicResMaxPoolLoad r
+vsm.hzbCull r
+vsm.lightActiveFrameCount r
+vsm.lightPageRemap r
+vsm.localDepthPushTexels r
+vsm.localLateralTexels r
+vsm.localMipFromPixel r
+vsm.localSmrtExtrapolateMaxSlope r
+vsm.localSmrtMaxRayAngle r
+vsm.localSmrtMaxSlopeBias r
 vsm.localSmrtRayCount r
-vsm.localSmrtSamplesPerRay
-vsm.localSmrtTexelDitherScale
-vsm.localTexelBias
-vsm.logPageStats
-vsm.lruFrames
-vsm.markCoarsePages
-vsm.maxDistantUpdatePerFrame
-vsm.maxLightAge
-vsm.pageCaching
-vsm.pageDilation
-vsm.perInstanceCasterLod
-vsm.redrawUnrequestedFrames
-vsm.requestLightCull
+vsm.localSmrtSamplesPerRay r
+vsm.localSmrtTexelDitherScale r
+vsm.localTexelBias r
+vsm.logPageStats r
+vsm.lruFrames r
+vsm.markCoarsePages r
+vsm.maxDistantUpdatePerFrame r
+vsm.maxLightAge r
+vsm.pageCaching r
+vsm.pageDilation r
+vsm.perInstanceCasterLod r
+vsm.redrawUnrequestedFrames r
+vsm.requestLightCull r
 vsm.resolutionLodBiasDirectional r
-vsm.resolutionLodBiasLocal
-vsm.resolutionLodBiasLocalMoving
-vsm.shadowLodBias
-vsm.shadowLodBiasNearTier
-vsm.shadowLodTierStride
-vsm.smrtAdaptiveRayCount
-vsm.smrtExtrapolateMaxSlope
+vsm.resolutionLodBiasLocal r
+vsm.resolutionLodBiasLocalMoving r
+vsm.shadowLodBias r
+vsm.shadowLodBiasNearTier r
+vsm.shadowLodTierStride r
+vsm.smrtAdaptiveRayCount r
+vsm.smrtExtrapolateMaxSlope r
 vsm.smrtRayCount r
-vsm.smrtRayLengthScale
+vsm.smrtRayLengthScale r
 vsm.smrtSamplesPerRay r
-vsm.smrtScreenRayLength
-vsm.smrtScreenRaySamples
-vsm.smrtSourceAngleDeg
-vsm.smrtTemporalDither
-vsm.smrtTexelDitherScale
-vsm.waterCasterMask
-vsm.windPageMarks
+vsm.smrtScreenRayLength r
+vsm.smrtScreenRaySamples r
+vsm.smrtSourceAngleDeg r
+vsm.smrtTemporalDither r
+vsm.smrtTexelDitherScale r
+vsm.waterCasterMask r
+vsm.windPageMarks r
 vsm.windRange r
-vsm.windSliceTexels
-wind.freeze
-wind.freezeAt
+vsm.windSliceTexels r
+wind.freeze r
+wind.freezeAt r

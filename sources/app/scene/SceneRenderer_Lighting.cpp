@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include "app/scene/SceneRenderer.h"
+#include "shaders/shared/compose_slots.h" // R5.3: the compose pass's registers by name
 #include "shaders/shared/lighting_slots.h" // the lighting pass's registers by name (architecture plan R5.3)
 
 #include <algorithm>
@@ -1217,37 +1218,48 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             }
         }
 
-        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+        const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() }; // COMPOSE_S_*
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, COMPOSE_SRV_COUNT> srv{};
+        srv[COMPOSE_T_LIGHT_TARGET] = D.lightSRV;
+        srv[COMPOSE_T_GB2] = D.gbSRV[2];
+        srv[COMPOSE_T_GB0] = D.gbSRV[0];
+        srv[COMPOSE_T_GB1] = D.gbSRV[1];
+        srv[COMPOSE_T_DEPTH] = D.depthSRV;
+        srv[COMPOSE_T_SKYBOX] = skybox->EnvironmentSrv();
+        srv[COMPOSE_T_REFLECTION] = D.reflectionSRV;
+        srv[COMPOSE_T_GB_AUX] = D.gbAuxSRV;
+        srv[COMPOSE_T_SHORE_WETNESS] = wetnessSrv;
+        // The F8 IBL set. When this sky has none they are filled with the display cube and the depth SRV: the table must
+        // be fully populated (a null descriptor in a VOLATILE range is undefined), and the shader never reads them because
+        // `skySpecMipCount` is 0.
+        srv[COMPOSE_T_SKY_SPECULAR] = skybox->HasIbl() ? skybox->SpecularSrv() : skybox->EnvironmentSrv();
+        srv[COMPOSE_T_SKY_IRRADIANCE] = skybox->HasIbl() ? skybox->IrradianceSrv() : skybox->EnvironmentSrv();
+        srv[COMPOSE_T_BRDF_LUT] = skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV;
+        srv[COMPOSE_T_GTAO] = D.gtaoUpsampledSRV; // P6B dynamic AO, gated by `gtaoEnabled`
+        // The integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps the VOLATILE range populated on frames
+        // without the pass.
+        srv[COMPOSE_T_FOG_VOLUME] = decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv();
+        // B3 aerial perspective volume; never sampled when the pass was skipped.
+        srv[COMPOSE_T_SKY_AERIAL] = skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv();
+        // B6.2 SkyView LUT, gated by `skyViewPlanet.z`; the dummy keeps the VOLATILE range populated in HDRI mode, where
+        // the shader never reads it.
+        srv[COMPOSE_T_SKY_VIEW_LUT] = skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv();
+        // Plan C2 resolved clouds + front depth, gated by `cloudParams.x`.
+        srv[COMPOSE_T_CLOUD] = decisions_.volumetricCloud ? D.cloudResolvedSRV : renderer->VsmDummyTexSrv();
+        srv[COMPOSE_T_CLOUD_DEPTH] = decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv();
+        // The furthest HZB, trace mode 0's bilateral upsampling (gated by `cloudParams.w`).
+        srv[COMPOSE_T_CLOUD_HZB] = D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv();
+        // The sky's transmittance LUT, the sun's disc (gated by `sunDiscDir.w`).
+        srv[COMPOSE_T_SUN_TRANSMITTANCE] =
+            skyAtmosphere_.TransmittanceSrv().ptr != 0 ? skyAtmosphere_.TransmittanceSrv() : renderer->VsmDummyTexSrv();
+        // Plan S, the RT sky visibility (lighting's), gated by `skyVisParams.x`.
+        srv[COMPOSE_T_SKY_VIS] = D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv();
+        // Every slot has its line above: an empty handle here is a slot the table forgot.
+        assert(std::all_of(srv.begin(), srv.end(), [](const D3D12_CPU_DESCRIPTOR_HANDLE& h) { return h.ptr != 0; }));
         RecordComputeDispatch(renderer, t.cl, composeMaterial.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteComposeConstants(constants, dest); },
-            // t9..t11 are the F8 IBL set. When this sky has none they are filled with the display
-            // cube and the depth SRV: the table must be fully populated (a null descriptor in a
-            // VOLATILE range is undefined), and the shader never reads them because
-            // `skySpecMipCount` is 0.
-            { D.lightSRV, D.gbSRV[2], D.gbSRV[0], D.gbSRV[1], D.depthSRV,
-              skybox->EnvironmentSrv(), D.reflectionSRV, D.gbAuxSRV, wetnessSrv,
-              skybox->HasIbl() ? skybox->SpecularSrv() : skybox->EnvironmentSrv(),
-              skybox->HasIbl() ? skybox->IrradianceSrv() : skybox->EnvironmentSrv(),
-              skybox->HasIbl() ? skybox->GetBrdfLut()->GetSRVCPU() : D.depthSRV,
-              D.gtaoUpsampledSRV, // t12: P6B dynamic AO, gated by `gtaoEnabled`
-              // t13: the integrated fog volume, gated by `fogVolumeParams.x`; the dummy keeps
-              // the VOLATILE range populated on frames without the pass.
-              decisions_.volumetricFog ? D.fogIntegratedSRV : renderer->VsmDummyTexSrv(),
-              // t14: B3 aerial perspective volume; never sampled when the pass was skipped.
-              skyAtmosphere_.AerialBuilt() ? skyAtmosphere_.AerialSrv() : renderer->VsmDummyTexSrv(),
-              // t15: B6.2 SkyView LUT, gated by `skyViewPlanet.z`; the dummy keeps the VOLATILE
-              // range populated in HDRI mode, where the shader never reads it.
-              skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv(),
-              // t16/t17: plan C2 resolved clouds + front depth, gated by `cloudParams.x`.
-              decisions_.volumetricCloud ? D.cloudResolvedSRV : renderer->VsmDummyTexSrv(),
-              decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv(),
-              // t18: the furthest HZB, trace mode 0's bilateral upsampling (gated by `cloudParams.w`).
-              D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv(),
-              // t19: the sky's transmittance LUT, the sun's disc (gated by `sunDiscDir.w`).
-              skyAtmosphere_.TransmittanceSrv().ptr != 0 ? skyAtmosphere_.TransmittanceSrv() : renderer->VsmDummyTexSrv(),
-              // t20: plan S, the RT sky visibility (lighting's t17), gated by `skyVisParams.x`.
-              D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv() },
-            { D.sceneUAV },
+            srv,
+            { D.sceneUAV }, // u: COMPOSE_U_SCENE_COLOR, the only one
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
             D.scene.Get());

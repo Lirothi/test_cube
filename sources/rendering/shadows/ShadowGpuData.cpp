@@ -38,6 +38,7 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // Tessy N4: tessy::g_atlas
 #include "rendering/wind/WindState.h" // W8: g_windFadeStart/End (distance-fade mover re-check)
+#include "shaders/shared/shadow_cull.h" // ShadowCullCB's fields, once (R5.3)
 
 // ---- Ring: upload-heap kFrameCount-region structured buffer ----------------
 
@@ -248,13 +249,13 @@ constexpr D3D12_RESOURCE_STATES kInstancesReadState =
 // (its wind-only casters go to its static rows).
 struct ShadowCullCB
 {
-    std::uint32_t numCasters = 0, numViews = 0, numGroups = 0, camView = 0xFFFFFFFFu;
-    std::uint32_t localSplit = 0, clipFirst = render::ShadowViewClipmapSlot(0u),
-                  clipEnd = render::ShadowViewClipmapSlot(render::kShadowViewClipmapLevels), giFirst = 0;
-    float camPos[3] = { 0.0f, 0.0f, 0.0f };
-    float radiusThresholdSq = 0.0f;
-    ShadowGpuData::ViewMask windRigid{};
+    // shaders/shared/shadow_cull.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    using uint = shader_shared::uint;
+    using uint4 = shader_shared::uint4;
+    SHADOW_CULL_FIELDS((render::kShadowViewCeiling + 127u) / 128u)
 };
+static_assert(sizeof(ShadowCullCB::gWindRigid) == sizeof(ShadowGpuData::ViewMask), "a ViewMask is gWindRigid's rows");
 static_assert(sizeof(ShadowCullCB) == 48 + sizeof(ShadowGpuData::ViewMask),
               "ShadowCullCB mirrors shadow_cull_cs.hlsl's CullParams");
 
@@ -862,7 +863,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     // Tessy's cluster view reads the camera row, so every caster the camera draws must be IN it: pass B (the casters
     // last frame's pyramid hid) does not run while the view is asked for.
     const bool tessyViewWanted = tessy::g_enabled && tessy::g_debugView != 0u && dec.gbuffer;
-    dec.camHzb = !tessyViewWanted && dec.gbuffer && camHzbParams_.on != 0u && camCullPostMat_ != nullptr &&
+    dec.camHzb = !tessyViewWanted && dec.gbuffer && camHzbParams_.gCamHzbOn != 0u && camCullPostMat_ != nullptr &&
                  camDeferred_.Valid() && camArgsB_.Valid() && camVisibleListB_.Valid() && deferredCount_.Valid() &&
                  camHzbPrev_ != nullptr && camHzbCur_ != nullptr && camHzbPrevSrv_.ptr != 0 && camHzbCurSrv_.ptr != 0;
     camHzbThisFrame_ = dec.camHzb;
@@ -872,7 +873,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     cascadeHzb_.FillParams(hzbParams_, dec.hzb);
     {
         std::uint32_t mask = 0;
-        for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c) { mask |= hzbParams_.prevValid[c] ? (1u << c) : 0u; }
+        for (unsigned c = 0; c < render::CascadeHzb::kCascades; ++c) { mask |= hzbParams_.gHzbPrevValid[c] ? (1u << c) : 0u; }
         if (mask != hzbPrevValidMask_)
         {
             LOG_INFO(logging::LogCategory::RenderShadow, "cascade hzb cull: on={} prev-valid cascades {}{}{}{} (frame {})",
@@ -3838,20 +3839,17 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     const auto clearCB = [&](std::uint32_t rows, std::uint32_t cam)
     {
         ShadowCullCB c{};
-        c.numCasters = numCasters;
-        c.numViews = rows;
-        c.numGroups = numGroups;
-        c.camView = cam;
+        c.gNumCasters = numCasters;
+        c.gNumViews = rows;
+        c.gNumGroups = numGroups;
+        c.gCamView = cam;
         return c;
     };
     ShadowCullCB cullCB = clearCB(numViews, camView);
-    cullCB.localSplit = dec.localSplit ? 1u : 0u;
-    cullCB.giFirst = staticCount_; // S9e: casters past it are GI (UploadCasterLods' isGi)
-    cullCB.camPos[0] = dec.localCamPos.x;
-    cullCB.camPos[1] = dec.localCamPos.y;
-    cullCB.camPos[2] = dec.localCamPos.z;
-    cullCB.radiusThresholdSq = dec.localRadiusSq;
-    cullCB.windRigid = dec.localWindRigid;
+    cullCB.gLocalSplit = dec.localSplit ? 1u : 0u;
+    cullCB.gGiFirst = staticCount_; // S9e: casters past it are GI (UploadCasterLods' isGi)
+    cullCB.gLocalCam = Math::float4(dec.localCamPos, dec.localRadiusSq);
+    std::memcpy(cullCB.gWindRigid, dec.localWindRigid.data(), sizeof(cullCB.gWindRigid));
     auto writeCB = [&](std::uint8_t* dst) { std::memcpy(dst, &cullCB, sizeof(cullCB)); };
     const UINT cbSize = static_cast<UINT>(sizeof(ShadowCullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
@@ -3931,7 +3929,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     const D3D12_CPU_DESCRIPTOR_HANDLE camHzbPrevSrv = (dec.camHzb && camHzbPrevSrv_.ptr != 0) ? camHzbPrevSrv_ : renderer->GetDeferredForFrame().shadowSRV;
     const D3D12_CPU_DESCRIPTOR_HANDLE camDeferredUav = cullUav_[9 * render::kFrameCount + f];
     CameraHzbParams camHzb = camHzbParams_;
-    camHzb.on = dec.camHzb ? 1u : 0u;
+    camHzb.gCamHzbOn = dec.camHzb ? 1u : 0u;
     // S4: the camera tables of the cull (t9..t11, u4/u5); placeholders on a frame without the
     // camera row (the shader never reads them then, the table just may not have holes).
     const D3D12_CPU_DESCRIPTOR_HANDLE camGroupSrv = (dec.gbuffer && perGroupVgCam_.Valid()) ? perGroupVgCam_.Srv(f) : perGroupVg_.Srv(f);
@@ -4301,9 +4299,9 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
     auto writeCB = [&](std::uint8_t* dst)
     {
         ShadowCullCB c{};
-        c.numCasters = numCasters;
-        c.numViews = dec.views;
-        c.numGroups = numGroups;
+        c.gNumCasters = numCasters;
+        c.gNumViews = dec.views;
+        c.gNumGroups = numGroups;
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(ShadowCullCB));
@@ -4333,8 +4331,8 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
         if (!cb0.cpu || !cb2.cpu) { finish(false); return; }
         writeCB(static_cast<std::uint8_t*>(cb0.cpu));
         CameraHzbParams camOff{};
-        camOff.on = 0u;
-        camOff.prevValid = 0u;
+        camOff.gCamHzbOn = 0u;
+        camOff.gCamHzbPrevValid = 0u;
         std::memcpy(cb2.cpu, &camOff, sizeof(camOff));
 
         D3D12_GPU_VIRTUAL_ADDRESS cullHzbCB = dec.hzbCB;
@@ -4346,7 +4344,7 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
                 static_cast<UINT>(sizeof(render::CascadeHzb::GpuParams)), render::kConstantBufferAlignment);
             if (!cb1.cpu) { finish(false); return; }
             render::CascadeHzb::GpuParams hzbOff{};
-            hzbOff.on = 0u;
+            hzbOff.gHzbOn = 0u;
             std::memcpy(cb1.cpu, &hzbOff, sizeof(hzbOff));
             cullHzbCB = cb1.gpu;
         }
@@ -4670,12 +4668,12 @@ ShadowGpuData::SdsmHzbState ShadowGpuData::SetSdsmHzbViews(Renderer* renderer, s
     }
     render::CascadeHzb::GpuParams p{};
     cascadeHzb_.FillParams(p, true);
-    s.viewRect[0] = p.viewRect[0];
-    s.viewRect[1] = p.viewRect[1];
-    s.viewRect[2] = p.viewRect[2];
-    s.viewRect[3] = p.viewRect[3];
-    s.hzbSize[0] = p.hzbSize[0];
-    s.hzbSize[1] = p.hzbSize[1];
+    s.viewRect[0] = p.gHzbViewRect[0];
+    s.viewRect[1] = p.gHzbViewRect[1];
+    s.viewRect[2] = p.gHzbViewRect[2];
+    s.viewRect[3] = p.gHzbViewRect[3];
+    s.hzbSize[0] = p.gHzbSize.x;
+    s.hzbSize[1] = p.gHzbSize.y;
     return s;
 }
 
@@ -4989,8 +4987,8 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 t.triCount = c.triCount;
                 t.windAlongMax = c.windAlongMax;
                 t.windLeafMax = c.windLeafMax;
-                t.center = c.boxCenter;
-                t.extent = c.boxExtent;
+                t.center = Math::float3(c.boxCenter);
+                t.extent = Math::float3(c.boxExtent);
                 t.radius = c.sphere.w;
                 if (hasLocal) // N6: its meshlets, their vertex lists and triangles copied per range (shared LODs share them)
                 {
@@ -5049,8 +5047,8 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 t.triCount = c.triCount;
                 t.windAlongMax = c.windAlongMax;
                 t.windLeafMax = c.windLeafMax;
-                t.center = c.boxCenter;
-                t.extent = c.boxExtent;
+                t.center = Math::float3(c.boxCenter);
+                t.extent = Math::float3(c.boxExtent);
                 t.radius = c.sphere.w;
                 if (hasLocal)
                 {
@@ -5482,7 +5480,7 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     // jittered matrix, SceneRenderer fills it every frame), the lamps by ViewRects, the partitions by their matrices. Not
     // the cluster view (it culls nothing).
     const bool rectCull = tessy::g_clusterCull && (sun ? (partitionSrv.ptr != 0 && sunTexels > 0.0f)
-                                                       : camera ? (byRun && camHzbParams_.viewRect[2] > 0)
+                                                       : camera ? (byRun && camHzbParams_.gCamViewRect[2] > 0)
                                                                 : viewRect_.Valid());
     if (rectCull) { c.flags |= kFlagRectCull; }
     c.rectSize[0] = c.rectSize[1] = sun ? sunTexels : 0.0f;
@@ -5499,7 +5497,7 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     const bool camHzb = byRun && dec.tessyCamHzb;
     c.camDeferCap = camHzb ? kTessyCamDeferCap : 0u;
     CameraHzbParams hzb = camHzbParams_;
-    hzb.on = camHzb ? 1u : 0u;
+    hzb.gCamHzbOn = camHzb ? 1u : 0u;
     // The camera's runs are a handful of groups with thousands of tests each: the 1024-thread twin. (The SDSM partitions
     // are split instead -- 16 groups a partition, each a slice of its virtual groups.)
     Material* const kernel = (camera && tessyCameraCullMat_) ? tessyCameraCullMat_.get() : tessyAtlasCullMat_.get();

@@ -1,4 +1,5 @@
 #include "rendering/shadows/CascadeHzb.h"
+#include "shaders/shared/hzb_build.h" // HzbLightCB's fields, once (R5.3)
 
 #include <algorithm>
 #include <cstring>
@@ -18,13 +19,11 @@ namespace
     // Mirrors HzbCB of hzb_build_cs.hlsl under HZB_LIGHT=1.
     struct HzbLightCB
     {
-        std::uint32_t dstSize[2];
-        std::uint32_t srcSize[2];
-        std::uint32_t fromDepth;
-        std::uint32_t writeClosest;
-        std::uint32_t pad1, pad2;
-        std::uint32_t srcOffset[2];
-        std::uint32_t pad3[2];
+        // shaders/shared/hzb_build.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using uint = shader_shared::uint;
+        using uint2 = shader_shared::uint2;
+        HZB_BUILD_FIELDS
+        HZB_BUILD_LIGHT_FIELDS
     };
     static_assert(sizeof(HzbLightCB) == 48, "HzbCB (HZB_LIGHT) layout");
 
@@ -191,20 +190,20 @@ void CascadeHzb::FillParams(GpuParams& out, bool on) const
     std::memset(&out, 0, sizeof(out));
     for (unsigned c = 0; c < kCascades; ++c)
     {
-        out.prevViewProj[c] = prevViewProjRev_[c];
-        out.viewProj[c] = viewProjRev_[c];
-        out.prevValid[c] = (on && PrevValid(c)) ? 1u : 0u;
+        out.gHzbPrevViewProj[c] = prevViewProjRev_[c];
+        out.gHzbViewProj[c] = viewProjRev_[c];
+        out.gHzbPrevValid[c] = (on && PrevValid(c)) ? 1u : 0u;
     }
     // Half the content: the library derives mip-0 texels as view pixels >> 1, and mip 0 here is a
     // quarter of the tile (see EnsureResources).
     const std::int32_t view = static_cast<std::int32_t>((contentRes_ + 1u) / 2u);
-    out.viewRect[0] = 0;
-    out.viewRect[1] = 0;
-    out.viewRect[2] = view;
-    out.viewRect[3] = view;
-    out.hzbSize[0] = width_;
-    out.hzbSize[1] = height_;
-    out.on = on ? 1u : 0u;
+    out.gHzbViewRect[0] = 0;
+    out.gHzbViewRect[1] = 0;
+    out.gHzbViewRect[2] = view;
+    out.gHzbViewRect[3] = view;
+    out.gHzbSize.x = width_;
+    out.gHzbSize.y = height_;
+    out.gHzbOn = on ? 1u : 0u;
 }
 
 void CascadeHzb::MarkBuilt(std::uint64_t frameNumber)
@@ -231,14 +230,14 @@ void CascadeHzb::RecordBuild(Renderer* renderer, ID3D12GraphicsCommandList* cl, 
             const UINT dstW = std::max(1u, width_ >> mip);
             const UINT dstH = std::max(1u, height_ >> mip);
             HzbLightCB k{};
-            k.dstSize[0] = dstW;
-            k.dstSize[1] = dstH;
-            k.srcSize[0] = srcW;
-            k.srcSize[1] = srcH;
+            k.dstSize.x = dstW;
+            k.dstSize.y = dstH;
+            k.srcSize.x = srcW;
+            k.srcSize.y = srcH;
             k.fromDepth = (mip == 0) ? 1u : 0u;
             k.writeClosest = 0u;
-            k.srcOffset[0] = originX;
-            k.srcOffset[1] = originY;
+            k.srcOffset.x = originX;
+            k.srcOffset.y = originY;
             // u0/u2 are the source mips (mip 0 reads the atlas instead; the table must stay
             // full, so they point at mip 0 as inert placeholders); u1 the destination; u3 the
             // closest chain's destination, never written (writeClosest = 0) -- bound to the

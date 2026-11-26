@@ -4,26 +4,11 @@
 #ifndef DDGI_CONSTANTS_HLSLI
 #define DDGI_CONSTANTS_HLSLI
 
+#include "shared/shader_types.h"
+#include "shared/ddgi_constants.h" // DdgiConstants's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer DdgiConstants : register(b0)
 {
-    float4x4 rayRotation;   // this update's random rotation of the Fibonacci directions
-    int4 volumeBase;        // xyz the volume's first world cell, w its generation
-    float4 volumeParams;    // x spacing (m), y hysteresis, z ray reach (m), w depth clamp (m)
-    uint4 schedule;         // x 1/N of the probes per frame, y this frame's phase, z probes this frame, w frame seed
-    float3 sunDirWS;  float ambientIntensity;
-    float3 lightRgb;  float skyIrradianceScale;
-    uint tlasIndex;   uint geomInfoIndex;    uint rayUavIndex;        uint irradianceIndex;
-    uint depthIndex;  uint stateIndex;       uint skyIrradianceIndex; uint spotLightIndex;
-    uint spotCount;   uint pointLightIndex;  uint pointCount;         uint twoSidedSheets; // gi.twoSidedSheets: a two-sided material's back is its other face
-    uint bounceOn;    float skyRayDistance;  uint meshOpacity;        uint traceFlags; // rt.meshOpacity: the meshes' cutout opacity; kDdgiTrace*
-    uint blendRays;      // the blended rays this update traces (gi.rays: 16-64, a multiple of 16)
-    uint fixedRayPeriod; // a probe traces its fixed rays every this many of its updates (gi.fixedRayPeriod; 1 = every one)
-    uint updateIndex;    // the volume's update cycle (frames / divisor): each probe sees it rise by one per update
-    uint usageIndex;     // the trace's bindless index of this cascade's usage stamps (ddgi_usage_cs.hlsl)
-    uint frameStamp;     // this frame's stamp, as ddgi_usage_cs wrote it
-    uint sleepPeriod;    // an idle probe updates one turn in this many (gi.sleepPeriod; 1 = every turn)
-    uint _ddgiPad1;
-    uint _ddgiPad2;
+    DDGI_CONSTANTS_FIELDS
 }
 
 // How long a probe stays AWAKE after a pixel last read it (ddgi_usage_cs stamps every pixel's probes within 16 frames).

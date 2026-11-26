@@ -3,10 +3,11 @@
 #define SKY_DEBUG_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "sky_aerial_common.hlsli"
+#include "shared/shader_types.h"
+#include "shared/sky_lut_debug.h" // DebugCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer DebugCB : register(b0)
 {
-    uint2 size; uint view; float startDepthMetres;
-    float4x4 invProj, projNoJitter;
+    SKY_LUT_DEBUG_FIELDS
 };
 Texture2D<float4> Transmittance : register(t0);
 Texture2D<float4> MultiScatter : register(t1);

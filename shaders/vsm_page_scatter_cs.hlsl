@@ -42,34 +42,11 @@
 
 #define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a); the per-group LOD bucket count
 
+#include "shared/shader_types.h"
+#include "shared/vsm_scatter.h" // ScatterCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer ScatterCB : register(b0)
 {
-    uint gNumCasters;   // active caster SLOT count (also the per-page slice stride)
-    uint gNumGroups;    // mesh-group count
-    uint gNumLevels;    // active clipmap levels (VSM_NUM_CLIPMAP_LEVELS)
-    // Single-draw page render: see the identically-named field in vsm_page_setup_cs.hlsl's SetupCB.
-    // Both writers of PageVisibleList must pack identically, so this is fed from the same CPU value.
-    uint gPageIdShift;
-    uint gNumLocalViews; // local (spot/point) views scattered after the clipmap levels; 0 = none
-    uint gPerInstanceLod; // 1 = bucket FLOOR casters by their receiver LOD; 0 = old per-view (A/B)
-    uint2 _pad0;
-    // S5b.2: x = the HZB test is on, y = last frame's pyramid + PrevPageTable are valid (a render
-    // with a build happened last frame, same level), z = DeferredPairs capacity, w unused.
-    uint4 gHzbParams;
-    // UE's r.Shadow.Virtual.CoarsePagePixelThresholdStatic / Dynamic: an instance under this many texels stays out of a page only the coarse
-    // marks asked for. gCoarseBase = their bitfield in Request; 0 = no such pages (vsm::g_coarseCacheDynamic).
-    uint  gCoarseBase;
-    float gCoarsePixelsStatic;
-    float gCoarsePixelsDynamic;
-    // The wind's page marks (vsm.windPageMarks): a caster that sways marks its pages for the setup's wind dirt only where the
-    // shadow VS sways it -- a vertex's sway fades to 0 at gWindReach (m) from the camera in xz (shadow_indirect_csm.hlsl
-    // WindOffset's w2), so a box wholly past it, this frame and last, draws the same rigid pose both frames. 0 = no marks
-    // (the wind holds still: the same clock and gusts, the camera where it was).
-    float gWindReach;
-    float4 gWindCams;   // xy = this frame's camera xz, zw = last frame's (the fade's centre): a local view's
-    // A clipmap level's (vsm.windSliceTexels): xy = the camera its pose was taken at, zw = the one at its take before -- a
-    // level redraws its swaying pages only when it takes a pose, and then from the last one to this.
-    float4 gWindLevelCams[TC_VSM_CLIPMAP_LEVELS];
+    VSM_SCATTER_FIELDS(TC_VSM_CLIPMAP_LEVELS)
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };

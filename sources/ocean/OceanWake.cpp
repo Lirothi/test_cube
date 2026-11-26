@@ -16,6 +16,8 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderContextPool.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/ocean_wake.h" // WakeCB's fields, once (R5.3)
 
 using Microsoft::WRL::ComPtr;
 
@@ -24,18 +26,12 @@ namespace
 // CPU mirror of WakeCB (shaders/ocean_wake_cs.hlsl) -- keep the two in step.
 struct WakeCB
 {
-    std::uint32_t resolution; float texel; float centerX; float centerZ;
-    std::int32_t shiftX; std::int32_t shiftY; float deltaTime; std::uint32_t clear;
-    float gravity; float dampingK2; float strength; std::uint32_t hullCount;
-    float edgeTexels; float edgeRate; std::uint32_t shoreValid; float shoreCamHeight;
-    float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
-    float shoreZFar; float breakRate; float foamFade; float foamDiffusion;
-    float washStrength; float washThreshold; float crestStrength; float crestCoverage;
-    float foamFadeDense; std::uint32_t frontCount; float washBow; float pad3;
-    float hulls[16 * 3 * 4];
-    float frontBounds[8 * 8 * 4];   // the bow waves' fronts, eight pieces each: (min x, min z, max x, max z) world
-    float frontInfo[8 * 4];         // (points, outward side +-1, the residue's rate factor, 0)
-    float frontPoints[8 * 128 * 4]; // (x, z, the band's foam, half width m), newest first
+    // shaders/shared/ocean_wake.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    using uint = shader_shared::uint;
+    // OceanWake's kMaxHulls, kMaxFronts, kMaxFrontPoints / kFrontPiece, kMaxFrontPoints (private to it: the record's
+    // static_assert in Dispatch checks the arrays against them).
+    OCEAN_WAKE_FIELDS(16, 8, 128 / 16, 128)
 };
 static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16 + 8 * 8 * 16 + 8 * 16 + 8 * 128 * 16, "WakeCB mirrors the shader's cbuffer");
 
@@ -756,46 +752,46 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             renderer->EmitPoint(cl, rec.uavPoint);
 
             WakeCB cb{};
-            cb.resolution = kResolution;
-            cb.texel = rec.texel;
-            cb.centerX = rec.center.x;
-            cb.centerZ = rec.center.y;
-            cb.shiftX = rec.shiftX;
-            cb.shiftY = rec.shiftY;
-            cb.deltaTime = rec.dt;
-            cb.clear = rec.clear ? 1u : 0u;
-            cb.gravity = kGravity;
+            cb.Resolution = kResolution;
+            cb.Texel = rec.texel;
+            cb.CenterX = rec.center.x;
+            cb.CenterZ = rec.center.y;
+            cb.ShiftX = rec.shiftX;
+            cb.ShiftY = rec.shiftY;
+            cb.DeltaTime = rec.dt;
+            cb.Clear = rec.clear ? 1u : 0u;
+            cb.Gravity = kGravity;
             const float kMax = kPi / rec.texel; // the shortest wave the field holds: 2 texels
-            cb.dampingK2 = rec.tuning.damping / (kMax * kMax);
-            cb.strength = rec.tuning.strength;
-            cb.hullCount = rec.hullCount;
-            cb.edgeTexels = kEdgeShare * static_cast<float>(kResolution);
-            cb.edgeRate = kEdgeRate;
-            cb.shoreValid = rec.hasShore ? 1u : 0u;
-            cb.shoreCamHeight = rec.shore.camHeight;
-            cb.shoreCenterX = rec.shore.center.x;
-            cb.shoreCenterZ = rec.shore.center.y;
-            cb.shoreInvExtent = rec.shore.invExtent;
-            cb.shoreZNear = rec.shore.zNear;
-            cb.shoreZFar = rec.shore.zFar;
-            cb.breakRate = rec.hasShore ? rec.tuning.breaking : 0.0f;
-            cb.foamFade = rec.tuning.foamFade;
-            cb.foamFadeDense = rec.tuning.foamFadeDense;
-            cb.foamDiffusion = std::min(rec.tuning.foamSpread * rec.dt / (rec.texel * rec.texel), kFoamDiffusionCap);
-            cb.washStrength = rec.wash ? rec.tuning.washFoam : 0.0f;
-            cb.washThreshold = kWashThreshold;
-            cb.washBow = rec.tuning.washBow;
-            cb.crestStrength = rec.tuning.crestFoam;
-            cb.crestCoverage = rec.tuning.crestCoverage;
+            cb.DampingK2 = rec.tuning.damping / (kMax * kMax);
+            cb.Strength = rec.tuning.strength;
+            cb.HullCount = rec.hullCount;
+            cb.EdgeTexels = kEdgeShare * static_cast<float>(kResolution);
+            cb.EdgeRate = kEdgeRate;
+            cb.ShoreValid = rec.hasShore ? 1u : 0u;
+            cb.ShoreCamHeight = rec.shore.camHeight;
+            cb.ShoreCenterX = rec.shore.center.x;
+            cb.ShoreCenterZ = rec.shore.center.y;
+            cb.ShoreInvExtent = rec.shore.invExtent;
+            cb.ShoreZNear = rec.shore.zNear;
+            cb.ShoreZFar = rec.shore.zFar;
+            cb.BreakRate = rec.hasShore ? rec.tuning.breaking : 0.0f;
+            cb.FoamFade = rec.tuning.foamFade;
+            cb.FoamFadeDense = rec.tuning.foamFadeDense;
+            cb.FoamDiffusion = std::min(rec.tuning.foamSpread * rec.dt / (rec.texel * rec.texel), kFoamDiffusionCap);
+            cb.WashStrength = rec.wash ? rec.tuning.washFoam : 0.0f;
+            cb.WashThreshold = kWashThreshold;
+            cb.WashBow = rec.tuning.washBow;
+            cb.CrestStrength = rec.tuning.crestFoam;
+            cb.CrestCoverage = rec.tuning.crestCoverage;
             static_assert(sizeof(HullGpu) == 12 * sizeof(float), "three float4 a hull");
-            std::memcpy(cb.hulls, rec.hulls, sizeof(HullGpu) * rec.hullCount);
-            cb.frontCount = rec.frontsLay ? rec.frontCount : 0u;
+            std::memcpy(cb.Hulls, rec.hulls, sizeof(HullGpu) * rec.hullCount);
+            cb.FrontCount = rec.frontsLay ? rec.frontCount : 0u;
             static_assert(sizeof(Math::float4) == 4 * sizeof(float), "a front's point is one float4");
-            static_assert(sizeof(cb.frontBounds) == sizeof(rec.frontBounds) && sizeof(cb.frontInfo) == sizeof(rec.frontInfo) &&
-                          sizeof(cb.frontPoints) == sizeof(rec.frontPoints), "the fronts' record mirrors WakeCB");
-            std::memcpy(cb.frontBounds, rec.frontBounds, sizeof(Math::float4) * (kMaxFrontPoints / kFrontPiece) * rec.frontCount);
-            std::memcpy(cb.frontInfo, rec.frontInfo, sizeof(Math::float4) * rec.frontCount);
-            std::memcpy(cb.frontPoints, rec.frontPoints, sizeof(Math::float4) * kMaxFrontPoints * rec.frontCount);
+            static_assert(sizeof(cb.FrontBounds) == sizeof(rec.frontBounds) && sizeof(cb.FrontInfo) == sizeof(rec.frontInfo) &&
+                          sizeof(cb.FrontPoints) == sizeof(rec.frontPoints), "the fronts' record mirrors WakeCB");
+            std::memcpy(cb.FrontBounds, rec.frontBounds, sizeof(Math::float4) * (kMaxFrontPoints / kFrontPiece) * rec.frontCount);
+            std::memcpy(cb.FrontInfo, rec.frontInfo, sizeof(Math::float4) * rec.frontCount);
+            std::memcpy(cb.FrontPoints, rec.frontPoints, sizeof(Math::float4) * kMaxFrontPoints * rec.frontCount);
 
             const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
             const auto writeCb = [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); };

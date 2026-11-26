@@ -15,6 +15,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/hzb_cull_selftest.h" // SelfTestConstants's fields, once (R5.3)
+#include "shaders/shared/hzb_selftest_box.h" // TestBox's fields, once (R5.3)
+#include "shaders/shared/hzb_selftest_result.h" // TestResult's fields, once (R5.3)
 
 #pragma comment(lib, "dxcompiler.lib")
 
@@ -48,35 +52,30 @@ int Verdict(const char* text, int failures)
 
 struct SelfTestConstants
 {
-    Math::mat4 localToWorld;
-    Math::mat4 worldToClip;
-    Math::mat4 viewToClip;
-    int viewRect[4];
-    std::uint32_t hzbSize[2];
-    std::uint32_t boxCount;
-    std::uint32_t footprint;
-    Math::mat4 orthoWorldToClip; // S5b: the ortho cases' projection (reverse-Z), own pyramid in t2
+    // shaders/shared/hzb_cull_selftest.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4x4 = shader_shared::float4x4;
+    using int4 = shader_shared::int4;
+    using uint = shader_shared::uint;
+    using uint2 = shader_shared::uint2;
+    HZB_SELFTEST_FIELDS
 };
 static_assert(sizeof(SelfTestConstants) == 288, "SelfTestCB layout drifted from the shader");
 
 struct TestBox
 {
-    float center[4];
-    float extent[4];
+    // shaders/shared/hzb_selftest_box.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    HZB_SELFTEST_BOX_FIELDS
 };
 static_assert(sizeof(TestBox) == 32, "TestBox stride");
 
 struct TestResult
 {
-    hzb::Int4 pixels;
-    hzb::Int4 hzbTexels;
-    int level;
-    float minDepth;
-    std::uint32_t flags;
-    std::uint32_t visible;
-    float depth;
-    float rectMinZ;
-    float pad[2];
+    // shaders/shared/hzb_selftest_result.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float2 = shader_shared::float2;
+    using int4 = shader_shared::int4;
+    using uint = shader_shared::uint;
+    HZB_SELFTEST_RESULT_FIELDS
 };
 static_assert(sizeof(TestResult) == 64, "TestResult stride");
 
@@ -261,11 +260,11 @@ TestResult Mirror(const TestCase& c, const SelfTestConstants& k, const Pyramid& 
     {
         const hzb::Int4 viewRect{ k.viewRect[0], k.viewRect[1], k.viewRect[2], k.viewRect[3] };
         const hzb::ScreenRect rect = hzb::GetScreenRect(viewRect, cull.rectMin, cull.rectMax, static_cast<int>(k.footprint));
-        r.pixels = rect.pixels;
-        r.hzbTexels = rect.hzbTexels;
+        r.pixels = { rect.pixels.x, rect.pixels.y, rect.pixels.z, rect.pixels.w };
+        r.hzbTexels = { rect.hzbTexels.x, rect.hzbTexels.y, rect.hzbTexels.z, rect.hzbTexels.w };
         r.level = rect.hzbLevel;
         r.flags |= rect.overlapsPixelCenter ? kFlagOverlapsPixel : 0u;
-        const hzb::Int2 size{ static_cast<int>(k.hzbSize[0]), static_cast<int>(k.hzbSize[1]) };
+        const hzb::Int2 size{ static_cast<int>(k.hzbSize.x), static_cast<int>(k.hzbSize.y) };
         r.minDepth = hzb::GetMinDepth(size, rect, [&](int x, int y, int level)
         {
             return pyr.mip[level][static_cast<size_t>(y) * pyr.w[level] + x];
@@ -536,8 +535,8 @@ int RunHzbCullSelfTest()
     k.orthoWorldToClip = view * Math::mat4::OrthoOffCenterLH(-kOrthoHalfW, kOrthoHalfW, -kOrthoHalfH, kOrthoHalfH,
                                                              kOrthoFar, kOrthoNear);
     k.viewRect[0] = 0; k.viewRect[1] = 0; k.viewRect[2] = kViewW; k.viewRect[3] = kViewH;
-    k.hzbSize[0] = static_cast<std::uint32_t>(pyr.w[0]);
-    k.hzbSize[1] = static_cast<std::uint32_t>(pyr.h[0]);
+    k.hzbSize.x = static_cast<std::uint32_t>(pyr.w[0]);
+    k.hzbSize.y = static_cast<std::uint32_t>(pyr.h[0]);
     k.boxCount = kCaseCount;
     k.footprint = kFootprint;
 

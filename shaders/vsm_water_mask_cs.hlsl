@@ -13,12 +13,11 @@
     "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
+#include "shared/shader_types.h"
+#include "shared/vsm_water_mask.h" // WaterMaskCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer WaterMaskCB : register(b0)
 {
-    uint  gNumCasters;
-    uint  gNumViews;
-    uint  gMaskBase; // the mask's first word: the bitfield's length
-    float gMargin;   // m round every box (vsm::kWaterMaskMargin)
+    VSM_WATER_MASK_FIELDS
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };

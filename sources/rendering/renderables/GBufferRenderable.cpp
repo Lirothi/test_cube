@@ -15,6 +15,8 @@
 #include "rendering/renderables/GlassPassSrvs.h" // RenderTranslucent: the glass pass's table
 #include "materials/MaterialDataManager.h"
 #include "rendering/wind/WindState.h" // W8: WindDistanceFade
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/glass_params.h" // GlassMaterialCB's fields, once (R5.3)
 
 namespace
 {
@@ -27,18 +29,12 @@ uint32_t ToObjectId32(std::uint64_t id)
 // BuildGlassMaterials checks every offset against the reflection and refuses a PSO that disagrees.
 struct GlassMaterialCB
 {
-    Math::mat4 world;
-    Math::mat4 prevWorld;
-    Math::float4 absorptionThickness; // xyz unused (no absorption in the thin model), w = thickness (m)
-    Math::float4 tintRoughness;       // unread by GLASS_MATERIAL
-    Math::float4 matExtra;            // x = IOR, y = reflection strength
-    std::uint32_t objectId;
-    std::uint32_t objectIdPad[3];
-    Math::float4 matBaseColor;
-    Math::float4 matSurface;          // metal, rough, transmission factor, alpha cutoff (-1 = no split)
-    Math::float4 matTexFlags;
-    Math::float4 matTexOffsScale;
-    Math::float4 matGlass;            // x = transmission map present, y = mrMultiply
+    // shaders/shared/glass_params.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    using float4x4 = shader_shared::float4x4;
+    using uint = shader_shared::uint;
+    using uint3 = shader_shared::uint3;
+    GLASS_PARAMS_FIELDS
 };
 static_assert(sizeof(Math::mat4) == 64, "GlassMaterialCB mirrors glass.hlsl's float4x4");
 static_assert(sizeof(GlassMaterialCB) == 272, "GlassMaterialCB mirrors glass.hlsl's GlassParams");
@@ -1249,14 +1245,14 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
         // the opaque depth copy at t18 (the refraction's landing; glassRefraction.x is 0 without it), the RT sky
         // visibility at t19 (glassSkyVis.x gates it). An absent map binds the null texture; its flag keeps the
         // shader from reading it.
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kGlassPassSrvCount + 5> srvs{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, GLASS_MATERIAL_SRV_COUNT> srvs{};
         std::copy(passSrvs->begin(), passSrvs->end(), srvs.begin());
-        srvs[render::kGlassNormalMapSlot] = md->hasNormal ? md->normal.GetSRVCPU() : nullTex;
-        srvs[render::kGlassPassSrvCount + 0] = md->hasAlbedo ? md->albedo.GetSRVCPU() : nullTex;
-        srvs[render::kGlassPassSrvCount + 1] = md->hasMR ? md->mr.GetSRVCPU() : nullTex;
-        srvs[render::kGlassPassSrvCount + 2] = md->hasTransmission ? md->transmission.GetSRVCPU() : nullTex;
-        srvs[render::kGlassPassSrvCount + 3] = depthCopySrv.ptr != 0 ? depthCopySrv : nullTex;
-        srvs[render::kGlassPassSrvCount + 4] = skyVisSrv.ptr != 0 ? skyVisSrv : nullTex;
+        srvs[GLASS_T_NORMAL_MAP] = md->hasNormal ? md->normal.GetSRVCPU() : nullTex;
+        srvs[GLASS_T_MAT_ALBEDO] = md->hasAlbedo ? md->albedo.GetSRVCPU() : nullTex;
+        srvs[GLASS_T_MAT_MR] = md->hasMR ? md->mr.GetSRVCPU() : nullTex;
+        srvs[GLASS_T_MAT_TRANSMISSION] = md->hasTransmission ? md->transmission.GetSRVCPU() : nullTex;
+        srvs[GLASS_T_OPAQUE_DEPTH] = depthCopySrv.ptr != 0 ? depthCopySrv : nullTex;
+        srvs[GLASS_T_SKY_VIS] = skyVisSrv.ptr != 0 ? skyVisSrv : nullTex;
 
         draws.push_back(GlassDraw{ static_cast<UINT>(s), static_cast<uint32_t>(slot), alloc.gpu,
                                    renderer->StageSrvUavTable(srvs).gpu });

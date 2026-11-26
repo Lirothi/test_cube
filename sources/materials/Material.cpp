@@ -80,8 +80,16 @@ bool Material::IsBindlessTextureShader(const std::wstring& shaderFile)
 // back through BuildGraphicsPSO).
 static bool ChoosesBindless(Renderer* r, const Material::GraphicsDesc& gd)
 {
-    return render::g_rasterBindless && r && r->GetBindlessHeap() && r->GetBindlessHeap()->DynamicResourcesSupported() &&
-           Material::IsBindlessTextureShader(gd.shaderFile);
+    if (!r || !r->GetBindlessHeap() || !r->GetBindlessHeap()->DynamicResourcesSupported() ||
+        !Material::IsBindlessTextureShader(gd.shaderFile)) {
+        return false;
+    }
+    // Tessy N5's mesh shader twin (gbuffer_indirect.hlsl TESSY_GBUFFER_MS) exists only as the bindless permutation: a
+    // raster.bindless toggle rebuilds it bindless still -- unused while the knob is off (the merged path it serves needs
+    // the knob), where a build without it was an #error retried every frame (318 failed compiles in a 3-s run).
+    const bool twin = std::any_of(gd.defines.begin(), gd.defines.end(),
+                                  [](const auto& p) { return p.first == "TESSY_GBUFFER_MS" && p.second != "0"; });
+    return render::g_rasterBindless || twin;
 }
 
 // Local-light plan S10a: the layout counts the shaders size their arrays and loops by, from the C++ that sizes the

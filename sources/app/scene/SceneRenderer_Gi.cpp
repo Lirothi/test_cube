@@ -20,38 +20,34 @@
 #include "rendering/lighting/Skybox.h"
 #include "rendering/view/Camera.h"
 #include "app/scene/SceneRenderInternal.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/ddgi_constants.h" // DdgiConstants's fields, once (R5.3)
+#include "shaders/shared/ddgi_usage.h" // DdgiUsageConstants's fields, once (R5.3)
 
 namespace {
 // Mirrors `cbuffer DdgiConstants` in shaders/ddgi_constants.hlsli (row-major; a matrix, then rows of 4).
 struct DdgiConstants
 {
-    Math::mat4 rayRotation;
-    int32_t volumeBase[4] = { 0, 0, 0, 0 };
-    float volumeParams[4] = { 0.5f, 0.9f, 30.0f, 1.0f };
-    uint32_t schedule[4] = { 1, 0, 0, 0 };
-    Math::float3 sunDirWS;    float ambientIntensity = 0.0f;
-    Math::float3 lightRgb;    float skyIrradianceScale = 1.0f;
-    uint32_t tlasIndex = 0;   uint32_t geomInfoIndex = 0;   uint32_t rayUavIndex = 0;        uint32_t irradianceIndex = 0;
-    uint32_t depthIndex = 0;  uint32_t stateIndex = 0;      uint32_t skyIrradianceIndex = 0; uint32_t spotLightIndex = 0;
-    uint32_t spotCount = 0;   uint32_t pointLightIndex = 0; uint32_t pointCount = 0;         uint32_t twoSidedSheets = 1;
-    uint32_t bounceOn = 0;    float skyRayDistance = 15.0f; uint32_t meshOpacity = 1;        uint32_t traceFlags = 0;
-    uint32_t blendRays = 64;  uint32_t fixedRayPeriod = 1;  uint32_t updateIndex = 0;        uint32_t usageIndex = 0;
-    uint32_t frameStamp = 0;  uint32_t sleepPeriod = 1;     uint32_t pad1 = 0;               uint32_t pad2 = 0;
+    // shaders/shared/ddgi_constants.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float3 = shader_shared::float3;
+    using float4 = shader_shared::float4;
+    using float4x4 = shader_shared::float4x4;
+    using int4 = shader_shared::int4;
+    using uint = shader_shared::uint;
+    using uint4 = shader_shared::uint4;
+    DDGI_CONSTANTS_FIELDS
 };
 static_assert(sizeof(DdgiConstants) == 64 + 11 * 16, "DdgiConstants mirrors ddgi_constants.hlsli");
 
 // Mirrors `cbuffer DdgiUsageCB` in shaders/ddgi_usage_cs.hlsl.
 struct DdgiUsageConstants
 {
-    Math::mat4 invView;
-    Math::mat4 invProj;
-    Math::float4 cameraPos;
-    int32_t nearBase[4] = { 0, 0, 0, 0 };
-    Math::float4 nearParams;
-    int32_t farBase[4] = { 0, 0, 0, 0 };
-    Math::float4 farParams;
-    uint32_t grid[4] = { 0, 0, 0, 0 };
-    uint32_t stamp[4] = { 0, 0, 0, 0 };
+    // shaders/shared/ddgi_usage.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4 = shader_shared::float4;
+    using float4x4 = shader_shared::float4x4;
+    using int4 = shader_shared::int4;
+    using uint4 = shader_shared::uint4;
+    DDGI_USAGE_FIELDS
 };
 static_assert(sizeof(DdgiUsageConstants) == 2 * 64 + 7 * 16, "DdgiUsageConstants mirrors ddgi_usage_cs.hlsl");
 // ddgi_constants.hlsli kDdgiTrace*: what a probe ray's hit is lit by.
@@ -85,12 +81,12 @@ DdgiConstants MakeVolumeConstants(const DdgiVolume::Frame& f, const SceneRenderS
     c.volumeBase[1] = f.baseCell[1];
     c.volumeBase[2] = f.baseCell[2];
     c.volumeBase[3] = static_cast<int32_t>(f.generation);
-    c.volumeParams[0] = f.spacing;
-    c.volumeParams[1] = std::clamp(s.giHysteresis, 0.0f, 0.99f);
-    c.volumeParams[2] = std::max(s.giRayDistance, 1.0f);
+    c.volumeParams.x = f.spacing;
+    c.volumeParams.y = std::clamp(s.giHysteresis, 0.0f, 0.99f);
+    c.volumeParams.z = std::max(s.giRayDistance, 1.0f);
     // The depth moments only need to say "an occluder nearer than any point the probe lights":
     // those are at most a cell diagonal away, so twice the spacing keeps FP16 precise.
-    c.volumeParams[3] = 2.0f * f.spacing;
+    c.volumeParams.w = 2.0f * f.spacing;
     c.schedule[0] = f.divisor;
     c.schedule[1] = f.phase;
     c.schedule[2] = f.probes;

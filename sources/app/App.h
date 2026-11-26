@@ -18,8 +18,7 @@
 #include "core/task/TaskSystem.h"
 #include "app/BootOptions.h"
 
-// `frame.timeScale`: the world's clock runs this many times faster (App.cpp). The HUD says so while it is not 1.
-extern float g_timeScale;
+#include "app/FrameRequests.h" // g_timeScale: the world's clock runs this many times faster
 
 // True while the local model has a request in flight. The frame loop reads it and caps the
 // frame rate, because the renderer at 640 fps and the model's experts want the same cores

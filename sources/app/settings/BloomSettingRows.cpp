@@ -36,7 +36,7 @@ const SettingDesc kBloomRows[] = {
                [](SettingContext& c, float value) { B(c).radius = value; return true; },
                [](SettingContext& c, float& out) { out = B(c).radius; return true; }),
     // P8C: 0 = the pyramid, 1 = FFT convolution.
-    TC_SETTING("bloom.method", Int, SettingLevelOwned | SettingScalable,
+    TC_SETTING("bloom.method", Int, SettingLevelOwned | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { B(c).method = static_cast<uint32_t>(std::max(0.0f, value)); return true; },
                [](SettingContext& c, float& out) { out = static_cast<float>(B(c).method); return true; }),
     TC_SETTING("bloom.blades", Int, SettingLevelOwned,
@@ -67,7 +67,7 @@ const SettingDesc kBloomRows[] = {
     TC_SETTING("bloom.convSize", Float, SettingLevelOwned,
                [](SettingContext& c, float value) { B(c).convSize = value; return true; },
                [](SettingContext& c, float& out) { out = B(c).convSize; return true; }),
-    TC_SETTING("bloom.convPercent", Float, SettingLevelOwned | SettingScalable,
+    TC_SETTING("bloom.convPercent", Float, SettingLevelOwned | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { B(c).convPercent = value; return true; },
                [](SettingContext& c, float& out) { out = B(c).convPercent; return true; }),
     // the FFT's fused frame order
@@ -196,7 +196,7 @@ const SettingDesc kBloomRows[] = {
     TC_SETTING("bloom.ghostThreshold", Float, SettingLevelOwned,
                [](SettingContext& c, float value) { B(c).convGhostThreshold = value; return true; },
                [](SettingContext& c, float& out) { out = B(c).convGhostThreshold; return true; }),
-    TC_SETTING("bloom.ghostIntensity", Float, SettingLevelOwned | SettingScalable,
+    TC_SETTING("bloom.ghostIntensity", Float, SettingLevelOwned | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { B(c).convGhostIntensity = value; return true; },
                [](SettingContext& c, float& out) { out = B(c).convGhostIntensity; return true; }),
     TC_SETTING("bloom.firefly", Bool, SettingLevelOwned,

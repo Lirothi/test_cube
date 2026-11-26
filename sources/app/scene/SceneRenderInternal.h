@@ -8,6 +8,8 @@
 // same symbols are not silently duplicated per translation unit) and the free functions became
 // `inline` (a header included by more than one TU would otherwise multiply-define them).
 
+#include "shaders/shared/shader_types.h" // R5.3: the HLSL type names for C++
+#include "shaders/shared/glass_view.h"   // ...and GlassView's fields, once
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
@@ -26,6 +28,7 @@
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/wind/WindState.h"
+#include "shaders/shared/water_composite.h" // WaterCompositeConstants's fields, once (R5.3)
 
 namespace scene_internal
 {
@@ -172,63 +175,28 @@ namespace scene_internal
     // CBV address must be 256-byte aligned; the block's last 16 bytes (the G-buffer's light) are not written there.
     inline constexpr std::uint32_t kSdsmViewCbStride = 256u;
 
-    // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
+    // glass_view_cb.hlsli's `cbuffer GlassView : register(b1)` (glass, particles, the ocean): the fields are ONE list,
+    // shaders/shared/glass_view.h (architecture plan R5.3), spelled here with the HLSL type names for C++.
     struct GlassViewCB
     {
-        mat4   view;
-        mat4   proj;
-        mat4   viewProj;
-        mat4   viewProjNoJitter;
-        mat4   prevViewProjNoJitter;
-        mat4   invView;
-        mat4   invProj;
-        float4 camPosSky;
-        float4 sunDirAmbient;
-        float4 sunColorExposure;
-        float4 camDirWS;
-        float4 screenSizeInv;
-        float4 shadowAtlasSizeInv;
-        float4 shadowBiasNDC;
-        float4 cascadeTexelWS;
-        float4 cascadeSplitsVS;
-        float4 cascadeScaleBias[4];
-        float4 spotShadowInfo;
-        float4 lightCounts;
-        mat4   lightViewProj[4];
-        float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
-        float4 clipmapParams;         // Step 24f: x = the first level's number, y = normalBias, z = depthBias (NDC)
-        mat4   clipmapViewProj[vsm::kNumClipmapLevels]; // Step 24f: directional clipmap level viewProjs
-        mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
-        float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
-        float4 csmFilterMode;         // S8: x = kernel, y = receiver bias, z = sharpen, w = over-blur
-        float4 csmFilterParams;       // w = receiver normal bias in texels
-        float4 smrtParams;            // SMRT: x = rayCount, y = samplesPerRay, z = lengthScale, w = maxSlope
-        float4 smrtParams2;           // x = source radius (sin), y = texel dither scale, z = the clipmap's resolution LOD bias
-        // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
-        // parameters and the analytic medium, so glass and particles sit in the air the sand is in.
-        float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
-        float4 fogVolumeZParams;      // (B, O, S, the volume's start in view depth)
-        float4 fogParams0;            // PackHeightFog: density, height falloff, reference height, start distance
-        float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
-        float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
-        float4 csmSdsmParams;         // S15: x = active SDSM partitions, 0 = not SDSM mode
-        float4 glassRefraction;       // x = the glass shell's wall (m), 0 = straight through (glass.hlsl); y = 1: the depth copy is bound
-        float4 glassSkyVis;           // plan S: lighting's skyVisParams, for the glass slots' sky terms
-        float4 fogInscatter;          // PackHeightFog's: UE's fog colour, w = 1 = in use (appended at the tail)
-        float4 fogSunDirectional;     // PackHeightFog's: the sun lobe's own coloured term / 4 pi (appended at the tail)
+        using float4 = shader_shared::float4;
+        using float4x4 = shader_shared::float4x4;
+        GLASS_VIEW_FIELDS(vsm::kNumClipmapLevels)
     };
+    static_assert(sizeof(GlassViewCB) == 2368,
+        "GlassViewCB must stay byte-identical to cbuffer GlassView (2368 bytes in HLSL's reflection) -- uploaded by memcpy.");
 
     // MIRRORS WaterCompositeCB in shaders/water_composite_cs.hlsl (ocean G-buffer plan S4), uploaded
     // by raw memcpy: a matrix and two 16-byte rows.
     struct WaterCompositeConstants
     {
-        mat4 invViewProj{};
-        float3 camPos{};
-        float roughnessDistance = 1.0f;
-        float2 invRenderSize{};
-        float preExposure = 1.0f;
-        uint32_t uvBreakup = 1u; // 1 = read the flat mirror at the planar UV offset, 0 = at the pixel itself
-        float4 prefilter{};      // the reflection prefilter's sigma across / along columns (render px, 0 = off); zw unused
+        // shaders/shared/water_composite.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float2 = shader_shared::float2;
+        using float3 = shader_shared::float3;
+        using float4 = shader_shared::float4;
+        using float4x4 = shader_shared::float4x4;
+        using uint = shader_shared::uint;
+        WATER_COMPOSITE_FIELDS
     };
     static_assert(sizeof(WaterCompositeConstants) == 112,
         "WaterCompositeConstants must stay byte-identical to WaterCompositeCB in "

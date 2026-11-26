@@ -42,20 +42,11 @@
 #include "utils.hlsli"
 #include "rt_geometry.hlsli"
 
+#include "shared/shader_types.h"
+#include "shared/sky_visibility.h" // SkyVisibility's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer SkyVisibility : register(b0)
 {
-    float4x4 invView;
-    float4x4 invProj;
-    float4x4 prevInvViewProj; // last frame's clip -> world: where the history's depths put a point (UE PrevScreenToTranslatedWorld)
-    uint tlasIndex;     uint gb1Index;      uint depthIndex;    uint velocityIndex;
-    uint accumUavIndex; uint historyIndex;  uint countUavIndex; uint countHistoryIndex; // counts: R8_UNORM, n / 255
-    uint outWidth;      uint outHeight;     uint rayCount;      uint frameIndex;
-    float maxDistance;  float historyWeight; uint historyValid; uint seedEnabled; // skyVis.seed (0 = start from own rays)
-    float filterDepthTolerance; float filterNormalPower; // skyVis.filterDepth / filterNormalPower: the gather's and the seed's
-    uint samplingMode; uint meshOpacity;              // skyVis.sampling: 0 white noise, 1 interleaved gradient noise; rt.meshOpacity
-    uint rawUavIndex;   uint rawIndex;      uint targetUavIndex; uint filterRadius; // skyVisRaw (CSTrace's UAV, CSAccumulate's SRV); the target
-    uint filterEnabled; uint debugView;     uint accumIndex;    uint filterFirst; // skyVis.filter, skyVis.debug 1; this
-                                                                    // frame's accumulation (SRV); skyVis.filterFirst
+    SKY_VISIBILITY_FIELDS
 }
 
 SamplerState gSmp      : register(s0); // linear clamp

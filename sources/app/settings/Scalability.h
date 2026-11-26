@@ -192,6 +192,7 @@ namespace settings
         // `--set` / MCP / --sweep wrote `name`: scalability leaves it alone for the rest of the process.
         void Pin(const std::string& name);
         void ClearPins() { pinned_.clear(); }
+        void Unpin(const std::string& name) { pinned_.erase(name); } // MCP reset_settings put the name back
         const std::set<std::string>& Pins() const { return pinned_; }
 
         // What the cell of a group at a level asks a knob to be, with the knob's current value (for a ceiling, the

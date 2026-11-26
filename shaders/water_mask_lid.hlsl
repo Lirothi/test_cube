@@ -9,10 +9,11 @@
 // camera standing at the cap's height still counts. The projection is the water's own (the jittered one: the same pixels).
 #define WATER_MASK_LID_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
+#include "shared/shader_types.h"
+#include "shared/water_mask_lid.h" // WaterMaskLidCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer WaterMaskLidCB : register(b0)
 {
-    row_major float4x4 modelViewProj; // the hull's model space -> the water's clip space
-    float4 modelViewZ;                // the view depth: dot(float4(p, 1), modelViewZ), as the surface's viewDepth
+    WATER_MASK_LID_FIELDS
 };
 
 RWTexture2DArray<uint> Crossings : register(u0);

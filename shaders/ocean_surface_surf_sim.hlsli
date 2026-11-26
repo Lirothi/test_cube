@@ -20,7 +20,10 @@
 #include "height_fog.hlsli"
 #include "fog_common.hlsli" // volumetric fog plan A5: the froxel volume on the water // P7: the same medium the modern surface and compose use
 
-cbuffer OceanCB : register(b0)
+#include "shared/shader_types.h" // TC_REGISTER
+#include "shared/ocean_slots.h"  // the surface's registers by name (architecture plan R5.3), shared with the C++
+
+cbuffer OceanCB : TC_REGISTER(b, OCEAN_B_OCEAN)
 {
     float4x4 model;
     float4x4 view;
@@ -117,47 +120,47 @@ cbuffer OceanCB : register(b0)
     float4 bodyShadowParams;
 };
 
-Texture2DArray<float4> DisplacementDerivatives : register(t0);
-Texture2DArray<float4> PrevDisplacementDerivatives : register(t1);
-Texture2DArray<float4> FoamTurbulence : register(t2);
-Texture2D SceneColorTexture : register(t3);
-TextureCube SkyboxTexture : register(t4);
+Texture2DArray<float4> DisplacementDerivatives : TC_REGISTER(t, OCEAN_T_DISPLACEMENT);
+Texture2DArray<float4> PrevDisplacementDerivatives : TC_REGISTER(t, OCEAN_T_PREV_DISPLACEMENT);
+Texture2DArray<float4> FoamTurbulence : TC_REGISTER(t, OCEAN_T_FOAM_TURBULENCE);
+Texture2D SceneColorTexture : TC_REGISTER(t, OCEAN_T_SCENE_COLOR);
+TextureCube SkyboxTexture : TC_REGISTER(t, OCEAN_T_SKYBOX);
 // P5/F8: the shared environment. `SkySpecular` is the GGX-prefiltered radiance whose mip IS a
 // roughness (see ibl_common.hlsli), `SkyIrradiance` is the cosine-convolved fill. Both are inert
 // unless skyParams.y says this level's sky was imported with them, in which case the water stops
 // guessing a mip off the display cube and reads the same environment every other surface does.
-TextureCube SkySpecular : register(t18);
-TextureCube SkyIrradiance : register(t19);
-Texture3D<float4> FogVolume : register(t20); // volumetric fog plan A5: the integrated froxel volume
-Texture2D DistantRoughnessMap : register(t5);
-Texture2D FoamDetailMap : register(t6);
-Texture2D FoamAlbedoTex : register(t7);
-Texture2D FoamUnderwaterTex : register(t8);
-Texture2D FoamTrailTex : register(t9);
-Texture2D ContactFoamTex : register(t10);
-Texture2D ShoreFoamAlbedoTex : register(t11);
-Texture2D SceneDepthTexture : register(t12);
-Texture2D ShoreDepthTexture : register(t13);
+TextureCube SkySpecular : TC_REGISTER(t, OCEAN_T_SKY_SPECULAR);
+TextureCube SkyIrradiance : TC_REGISTER(t, OCEAN_T_SKY_IRRADIANCE);
+Texture3D<float4> FogVolume : TC_REGISTER(t, OCEAN_T_FOG_VOLUME); // volumetric fog plan A5: the integrated froxel volume
+Texture2D DistantRoughnessMap : TC_REGISTER(t, OCEAN_T_DISTANT_ROUGHNESS);
+Texture2D FoamDetailMap : TC_REGISTER(t, OCEAN_T_FOAM_DETAIL);
+Texture2D FoamAlbedoTex : TC_REGISTER(t, OCEAN_T_FOAM_ALBEDO);
+Texture2D FoamUnderwaterTex : TC_REGISTER(t, OCEAN_T_FOAM_UNDERWATER);
+Texture2D FoamTrailTex : TC_REGISTER(t, OCEAN_T_FOAM_TRAIL);
+Texture2D ContactFoamTex : TC_REGISTER(t, OCEAN_T_SHORE_FOAM_MASK);
+Texture2D ShoreFoamAlbedoTex : TC_REGISTER(t, OCEAN_T_SHORE_FOAM_ALBEDO);
+Texture2D SceneDepthTexture : TC_REGISTER(t, OCEAN_T_SCENE_DEPTH);
+Texture2D ShoreDepthTexture : TC_REGISTER(t, OCEAN_T_SHORE_DEPTH);
 // surf sim injection (debug views): the shore SDF already rides the shared table at t14; the
 // legacy surface never read it before. x: metres to the waterline (negative inland), y: depth.
-Texture2D<float2> ShoreSdfTexture : register(t14);
+Texture2D<float2> ShoreSdfTexture : TC_REGISTER(t, OCEAN_T_SHORE_SDF);
 // t15 RETIRED (plan S4): the screen-space reflection is traced after this draw and composited by
 // Main_WaterReflection. The table is positional, so the slot stays and is filled with a stand-in.
 // surf sim injection: the sim's height field (x: height m, y: vertical velocity) and its surf
 // foam field (r: coverage).
-Texture2D<float2> SurfSimWaveTex : register(t16);
-Texture2D<float> SurfSimFoamTex : register(t17);
-Texture2D<float4> WakeTex : register(t26); // the boat wake's field: x height (m), y vertical velocity
-Texture2D<float4> WakeFoamTex : register(t27); // its foam: x 0..2 (1 and over fresh white water), yz the way it was laid
+Texture2D<float2> SurfSimWaveTex : TC_REGISTER(t, OCEAN_T_SURF_SIM_WAVE);
+Texture2D<float> SurfSimFoamTex : TC_REGISTER(t, OCEAN_T_SURF_SIM_FOAM);
+Texture2D<float4> WakeTex : TC_REGISTER(t, OCEAN_T_WAKE); // the boat wake's field: x height (m), y vertical velocity
+Texture2D<float4> WakeFoamTex : TC_REGISTER(t, OCEAN_T_WAKE_FOAM); // its foam: x 0..2 (1 and over fresh white water), yz the way it was laid
                                                // times x, w the bow waves' breakers as they stand now
 // The wake foam's detail (tools/gen_wake_foam.py, textures/ocean/WakeFoam.png, wakeFoamTile m a tile): R the lace as a gaussianised
 // rank, G the churned white water's height, BA its slope along u and v (0.5 + slope / (2 kWakeFoamSlopeMax)).
-Texture2D<float4> WakeFoamDetailTex : register(t29);
-RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
-SamplerState LinearWrapSampler : register(s0);
-SamplerState LinearClampSampler : register(s1);
-SamplerState PointSampler : register(s2);
-SamplerState AnisotropicWrapSampler : register(s3);
+Texture2D<float4> WakeFoamDetailTex : TC_REGISTER(t, OCEAN_T_WAKE_FOAM_DETAIL);
+RWTexture2D<uint> ShoreWetnessStampMap : TC_REGISTER(u, OCEAN_U_WETNESS_STAMP);
+SamplerState LinearWrapSampler : TC_REGISTER(s, OCEAN_S_LINEAR_WRAP);
+SamplerState LinearClampSampler : TC_REGISTER(s, OCEAN_S_LINEAR_CLAMP);
+SamplerState PointSampler : TC_REGISTER(s, OCEAN_S_POINT_CLAMP);
+SamplerState AnisotropicWrapSampler : TC_REGISTER(s, OCEAN_S_ANISO_WRAP);
 
 // The hulls the surface is not drawn inside (ocean/WaterMask.h, mesh.json "waterMask"; OceanRenderable fills it every
 // frame). What keeps the water out is the hulls' LIDS -- their caps and curtains, drawn by Main_WaterMask into the two
@@ -165,19 +168,13 @@ SamplerState AnisotropicWrapSampler : register(s3);
 // inside where the crossings in front of it, counted from the camera's own place, are odd. The hulls' rows and their
 // columns (t28, water_mask_columns.hlsli) are the PLAN, only for ocean.waterMask:3.
 #define WATER_MASK_MAX_HULLS 4
-cbuffer WaterMaskCB : register(b2)
+#include "shared/ocean_water_mask.h" // WaterMaskCB's fields, once for HLSL and C++ (architecture plan R5.3)
+cbuffer WaterMaskCB : TC_REGISTER(b, OCEAN_B_WATER_MASK)
 {
-    uint4 waterMaskCount; // x hulls this frame, y 1 = discard, 2 = paint the kept-out water magenta (ocean.waterMask:2),
-                          // 3 = discard, and paint red the water drawn OVER a hull's plan (a leak, a wave over the deck);
-                          // z the boats whose bow wave breakers come in over a gate (wakeBowGate);
-                          // w bit 1: the lids were drawn this frame (t30 holds them), bit 0: the camera is inside a basin
-    float4 waterMaskHull[WATER_MASK_MAX_HULLS * 5];
-    // OceanWake::BowGates, two a boat: (the bow wave's roots' midpoint x z, the hull's forward x z), (the gate's length m,
-    // half its lane m, 0, 0).
-    float4 wakeBowGate[WATER_MASK_MAX_HULLS * 2];
+    OCEAN_WATER_MASK_FIELDS(WATER_MASK_MAX_HULLS)
 };
-StructuredBuffer<float4> WaterMaskColumns : register(t28);
-Texture2DArray<uint> WaterMaskCrossings : register(t30);
+StructuredBuffer<float4> WaterMaskColumns : TC_REGISTER(t, OCEAN_T_WATER_MASK_COLUMNS);
+Texture2DArray<uint> WaterMaskCrossings : TC_REGISTER(t, OCEAN_T_WATER_MASK_CROSSINGS);
 #include "water_mask_columns.hlsli"
 
 // How much of the bow waves' breakers (the foam field's w) the water at a point shows: nothing on the line a boat's arms
@@ -458,6 +455,9 @@ DerivativesSet SampleDerivatives(float2 worldXZ, float4 weights, uint cascadesCo
     return derivatives;
 }
 
+#if OCEAN_SURF_SIM_SRV_COUNT != 31 || OCEAN_SAMPLER_COUNT != 5
+#error "OCEAN_SURFACE_RS (ocean_surface_surf_sim.hlsli): the SRV / sampler table sizes no longer match shared/ocean_slots.h"
+#endif
 [RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {

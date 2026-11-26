@@ -15,6 +15,8 @@
 
 #pragma pack_matrix(row_major)
 
+#include "shared/shader_types.h"   // TC_REGISTER
+#include "shared/compose_slots.h"  // the pass's registers by name (architecture plan R5.3), shared with the C++
 #include "utils.hlsli"
 #include "ibl_common.hlsli"
 #include "height_fog.hlsli"
@@ -23,45 +25,45 @@
 #include "sky_view_mapping.hlsli"
 #include "sky_visibility.hlsli" // plan S: the sky specular's occlusion, lighting_cs's own line
 
-Texture2D LightTarget : register(t0);
-Texture2D GB2 : register(t1);
-Texture2D GB0 : register(t2);
-Texture2D GB1 : register(t3);
-Texture2D DepthT : register(t4);
-TextureCube SkyboxTex : register(t5);
-Texture2D ReflectionTexture : register(t6);
-Texture2D GBAux : register(t7);
-Texture2D<uint> ShoreWetness : register(t8);
-TextureCube SkySpecular : register(t9);
-TextureCube SkyIrradiance : register(t10);
-Texture2D BrdfLut : register(t11);
+Texture2D LightTarget : TC_REGISTER(t, COMPOSE_T_LIGHT_TARGET);
+Texture2D GB2 : TC_REGISTER(t, COMPOSE_T_GB2);
+Texture2D GB0 : TC_REGISTER(t, COMPOSE_T_GB0);
+Texture2D GB1 : TC_REGISTER(t, COMPOSE_T_GB1);
+Texture2D DepthT : TC_REGISTER(t, COMPOSE_T_DEPTH);
+TextureCube SkyboxTex : TC_REGISTER(t, COMPOSE_T_SKYBOX);
+Texture2D ReflectionTexture : TC_REGISTER(t, COMPOSE_T_REFLECTION);
+Texture2D GBAux : TC_REGISTER(t, COMPOSE_T_GB_AUX);
+Texture2D<uint> ShoreWetness : TC_REGISTER(t, COMPOSE_T_SHORE_WETNESS);
+TextureCube SkySpecular : TC_REGISTER(t, COMPOSE_T_SKY_SPECULAR);
+TextureCube SkyIrradiance : TC_REGISTER(t, COMPOSE_T_SKY_IRRADIANCE);
+Texture2D BrdfLut : TC_REGISTER(t, COMPOSE_T_BRDF_LUT);
 // P6B item 7: dynamic screen-space AO at RENDER resolution, gated by `gtaoEnabled`.
-Texture2D GtaoTex : register(t12);
+Texture2D GtaoTex : TC_REGISTER(t, COMPOSE_T_GTAO);
 // Volumetric fog: the integrated froxel volume (light, transmittance) per slice, sampled by view
 // depth. A placeholder on frames without the volume (never read then: fogVolumeParams.x == 0).
-Texture3D<float4> FogVolume : register(t13);
-Texture3D<float4> SkyAerialVolume : register(t14);
+Texture3D<float4> FogVolume : TC_REGISTER(t, COMPOSE_T_FOG_VOLUME);
+Texture3D<float4> SkyAerialVolume : TC_REGISTER(t, COMPOSE_T_SKY_AERIAL);
 // t15: the SkyView LUT, read ONLY for sky pixels and ONLY to make the fog's in-scattering colour
 // the same value the skybox drew. Empty in HDRI mode -- `skyViewPlanet.z` gates it.
-Texture2D<float4> SkyViewLut : register(t15);
+Texture2D<float4> SkyViewLut : TC_REGISTER(t, COMPOSE_T_SKY_VIEW_LUT);
 // Plan C2: the resolved clouds at half resolution (rgb pre-exposed luminance, a transmittance) and
 // the cloud's front depth in km, gated by `cloudParams.x`; dummies keep the range populated otherwise.
-Texture2D<float4> CloudTex : register(t16);
-Texture2D<float> CloudDepthTex : register(t17);
+Texture2D<float4> CloudTex : TC_REGISTER(t, COMPOSE_T_CLOUD);
+Texture2D<float> CloudDepthTex : TC_REGISTER(t, COMPOSE_T_CLOUD_DEPTH);
 // t18: the FURTHEST HZB (mip 0 = half the render resolution), read only by trace mode 0's bilateral
 // upsampling (cloudParams.w 2) -- the scene depth each half-res cloud texel was traced against.
-Texture2D<float> CloudHzbTex : register(t18);
+Texture2D<float> CloudHzbTex : TC_REGISTER(t, COMPOSE_T_CLOUD_HZB);
 // t19: the sky's transmittance LUT, for the sun's disc (gated by `sunDiscDir.w`).
-Texture2D<float4> SunTransmittanceLut : register(t19);
+Texture2D<float4> SunTransmittanceLut : TC_REGISTER(t, COMPOSE_T_SUN_TRANSMITTANCE);
 // t20: plan S, the RT sky visibility (lighting_cs t17, the same texture), gated by skyVisParams.x.
-Texture2D<float4> SkyVisTex : register(t20);
+Texture2D<float4> SkyVisTex : TC_REGISTER(t, COMPOSE_T_SKY_VIS);
 
-RWTexture2D<float4> SceneColor : register(u0);
+RWTexture2D<float4> SceneColor : TC_REGISTER(u, COMPOSE_U_SCENE_COLOR);
 
-SamplerState gSmp : register(s0); // LinearClamp (color)
-SamplerState gSmpPoint : register(s1); // PointClamp (depth)
+SamplerState gSmp : TC_REGISTER(s, COMPOSE_S_LINEAR_CLAMP); // LinearClamp (color)
+SamplerState gSmpPoint : TC_REGISTER(s, COMPOSE_S_POINT_CLAMP); // PointClamp (depth)
 
-cbuffer PerFrame : register(b0)
+cbuffer PerFrame : TC_REGISTER(b, COMPOSE_B_PER_FRAME)
 {
     float4x4 invView; // view  -> world
     float4x4 invProj; // clip  -> view
@@ -413,6 +415,9 @@ float CombinedAo(float materialAo, float2 uv)
 }
 
 [numthreads(8,8,1)]
+#if COMPOSE_SRV_COUNT != 21 || COMPOSE_SAMPLER_COUNT != 2
+#error "COMPOSE_CS_RS: the SRV / sampler table sizes no longer match shared/compose_slots.h"
+#endif
 [RootSignature(COMPOSE_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {

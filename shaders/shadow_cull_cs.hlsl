@@ -47,48 +47,29 @@
     "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
+#include "shared/shader_types.h"
+#include "shared/shadow_cull.h" // CullParams' fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CullParams : register(b0)
 {
-    uint gNumCasters;
-    uint gNumViews;
-    uint gNumGroups;
-    uint gCamView;      // S4: the camera's frustum slot, or 0xFFFFFFFF when the camera row is off
-    uint gLocalSplit;   // S7: 1 = the local views' static casters into StaticArgs / StaticVisibleList
-    uint gClipFirst;    // S9e: the clipmap slots [gClipFirst, gClipEnd) -- every other view past the cascades is local
-    uint gClipEnd;
-    uint gGiFirst;      // S9e: casters from here on are GI (exempt from the radius threshold)
-    float4 gLocalCam;   // S9e: xyz the camera, w (RadiusThreshold x LODDistanceFactor)^2, 0 = off
-    // render::g_localShadowWindRange: one bit per view slot -- a local view whose light is past the range, whose wind-only
-    // casters are static (ShadowGpuData::ViewMask). Zero on a frame without the split.
-    uint4 gWindRigid[(TC_SHADOW_VIEW_CEILING + 127) / 128];
+    SHADOW_CULL_FIELDS((TC_SHADOW_VIEW_CEILING + 127) / 128)
 };
 
 // Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
 // with z FLIPPED (reverse-Z for the library; the pyramid stores 1 - z to match).
 static const uint kHzbCascades = 4u;
+#include "shared/shader_types.h"
+#include "shared/cascade_hzb.h" // CascadeHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CascadeHzbCB : register(b1)
 {
-    row_major float4x4 gHzbPrevViewProj[4];
-    row_major float4x4 gHzbViewProj[4];
-    uint4 gHzbPrevValid;   // per cascade: 1 = the pyramid holds last frame's tile
-    int4  gHzbViewRect;    // (0, 0, content, content) -- the tile's content rect, full resolution
-    uint2 gHzbSize;        // mip 0 of the pyramids
-    uint  gHzbOn;          // 0 = no test this frame (placeholders bound in t5..t8)
-    uint  gHzbPad;
+    CASCADE_HZB_FIELDS
 };
 
 // S5: mirrors ShadowGpuData::CameraHzbParams. The prev pair is last frame's camera (no jitter),
 // the current pair this frame's (jittered, like the pyramid it is tested against).
+#include "shared/camera_hzb.h" // CameraHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CameraHzbCB : register(b2)
 {
-    row_major float4x4 gCamPrevViewProj;
-    row_major float4x4 gCamPrevViewToClip;
-    row_major float4x4 gCamViewProj;
-    row_major float4x4 gCamViewToClip;
-    int4  gCamViewRect;      // (0, 0, renderWidth, renderHeight)
-    uint2 gCamHzbSize;       // mip 0 of the camera pyramid
-    uint  gCamHzbPrevValid;  // last frame's pyramid is this camera's, same size, built last frame
-    uint  gCamHzbOn;
+    CAMERA_HZB_FIELDS
 };
 
 struct CasterBounds

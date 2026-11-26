@@ -148,8 +148,9 @@ frame WITHOUT the editor's panels (scene + HUD, comparable with a headless `--sh
 sends no picture back unless `image`; `reset_settings` puts every environment object back to the open
 document and `fog.debugView` / `fog.skyAlongView` back to 0 (a debug view used to survive it: 2026-10-31 a whole
 sweep measured `fog.debugView:4`) (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*`, `skyVis.*`, `gi.*`,
-`render.*` -- are not in the document and stay as last set: a bisect that turns `skyVis.enabled:0` off for one
-arm runs every later arm without it unless each arm names it); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
+`render.*` -- are not in the document; since 2026-11-26 (architecture plan R2.n) `reset_settings` first puts back every
+name `set_settings` changed to its value before, so they no longer stay as last set -- a name without a reader stays
+and the answer names it); `get_settings {names: "a.b;prefix."}` reads any name; `get_readouts` returns the metered/adapted EV100, the pre-exposure,
 the sun probe (disc colour, visible share) and the frame rate; `set_camera {lookAt: "sun",
 offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
 optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
@@ -173,9 +174,9 @@ carries `pixelProbe`: the brightest PRE-EXPOSED pixel of the window (rgb), the s
 input's local exposure, a 4x4 box at it and the window's mean (bloom_conv_cs.hlsl stage 11, read back
 with the exposure record). That is how the 65504-nit clip of the light target was found (2026-10-15).
 `run_action setSurface {metal, roughness}` makes an object chrome/lacquer/matte live (undo restores).
-**`set_settings` is transient but STICKY**: a knob stays as last set until `reset_settings` (or a relaunch), so a
-script that toggles one and dies, or a later script that never names it, measures a different scene. Start every
-series with `reset_settings`. It cost a wrong conclusion on 2026-10-24: a leftover `sky.environmentLighting:0` lit
+**`set_settings` is transient; `reset_settings` undoes it**: a knob stays as set until `reset_settings` (or a
+relaunch), so a script that toggles one and dies, or a later script that never names it, measures a different scene.
+Start every series with `reset_settings` -- since R2.n (2026-11-26) it puts back project-wide knobs too. It cost a wrong conclusion on 2026-10-24: a leftover `sky.environmentLighting:0` lit
 the night with the daytime HDRI's 12,000 lux fill (x skyFillIntensity 2) and read as "the night sky is 1.8 lux".
 `get_readouts` carries `skyFill` (`environment` true = the procedural sky's capture, false = the HDRI; `exposure`,
 `hdriLux`, `irradianceScale`) to tell which fill is lighting the frame.

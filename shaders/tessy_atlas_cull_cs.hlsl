@@ -83,16 +83,11 @@ cbuffer AtlasCullCB : register(b0)
 
 // N5: mirrors ShadowGpuData::CameraHzbParams (shadow_cull_cs.hlsl's b2). Bound on every row set; read only with
 // gCamDeferCap != 0 (the camera's runs, the camera's two-pass HZB on this frame).
+#include "shared/shader_types.h"
+#include "shared/camera_hzb.h" // CameraHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CameraHzbCB : register(b1)
 {
-    row_major float4x4 gCamPrevViewProj;
-    row_major float4x4 gCamPrevViewToClip;
-    row_major float4x4 gCamViewProj;
-    row_major float4x4 gCamViewToClip;
-    int4  gCamViewRect;
-    uint2 gCamHzbSize;
-    uint  gCamHzbPrevValid;
-    uint  gCamHzbOn;
+    CAMERA_HZB_FIELDS
 };
 
 struct ViewFrustum { float4 planes[16]; }; // shadow_cull_cs.hlsl's; a local view's slots 0-5 are its frustum

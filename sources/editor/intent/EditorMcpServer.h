@@ -169,6 +169,14 @@ namespace editormcp
         virtual ~RuntimeHost() = default;
         // One `--set` name and value through the SAME table `--set` / `--sweep` use; false = unknown.
         virtual bool Apply(const std::string& name, float value) = 0;
+        // get_settings: one name's value now (false = unknown, or a name without a reader), and every name the table
+        // knows that starts with `prefix` (architecture plan R2.n: the settings registry's rows and families).
+        virtual bool Read(const std::string& name, float& out) = 0;
+        virtual std::vector<std::string> Names(const std::string& prefix) = 0;
+        // reset_settings: every name Apply changed since the last Restore back to the value it had before the first
+        // change (a name without a reader stays as set, and is named), the graphics levels' pins on them gone; the
+        // answer says what it did. Then the document is re-applied over it.
+        virtual std::string Restore() = 0;
         // Re-meter from scratch, so a changed scene does not inherit the previous adaptation.
         virtual void ResetExposure() = 0;
         // What the frame measured (exposure, the sun probe, frame rate), as a JSON object; with

@@ -12,7 +12,7 @@
 #define OCEAN_SURFACE_COMMON_HLSLI
 #include "cloud_shadow_common.hlsli" // plan C3: the cloud shadow map's read, shared with the lighting and the fog
 
-Texture2D<float4> CloudShadowMap : register(t21); // plan C3: the cloud shadow map (a dummy when no clouds; cloudShadowParams.x gates the read)
+Texture2D<float4> CloudShadowMap : TC_REGISTER(t, OCEAN_T_CLOUD_SHADOW); // plan C3: the cloud shadow map (a dummy when no clouds; cloudShadowParams.x gates the read)
 
 // Plan C3 on the water: the sun's visibility through the cloud column above this point, the SAME
 // map and helper the deferred lighting and the fog multiply into the sun. The water had no sun
@@ -40,11 +40,11 @@ float CloudSunVisibility(float3 worldPos)
 #define GLASS_VIEW_CB_STRUCT 1
 #include "glass_view_cb.hlsli"
 #include "forward_sun_shadow.hlsli"
-Texture2D ShadowAtlas : register(t22);                          // the sun's cascade / SDSM atlas
-StructuredBuffer<uint> VsmPageTable : register(t23);
-Texture2D VsmPool : register(t24);
-StructuredBuffer<SdsmPartition> SdsmPartitions : register(t25); // the inert dummy outside SDSM (csmSdsmParams.x gates)
-SamplerComparisonState ShadowCompareSampler : register(s4);
+Texture2D ShadowAtlas : TC_REGISTER(t, OCEAN_T_SHADOW_ATLAS);                          // the sun's cascade / SDSM atlas
+StructuredBuffer<uint> VsmPageTable : TC_REGISTER(t, OCEAN_T_VSM_PAGE_TABLE);
+Texture2D VsmPool : TC_REGISTER(t, OCEAN_T_VSM_POOL);
+StructuredBuffer<SdsmPartition> SdsmPartitions : TC_REGISTER(t, OCEAN_T_SDSM_PARTITIONS); // the inert dummy outside SDSM (csmSdsmParams.x gates)
+SamplerComparisonState ShadowCompareSampler : TC_REGISTER(s, OCEAN_S_SHADOW_COMPARE);
 
 // sunShapeParams.z: 0 = no geometry shadow (`ocean.sunShadow:0`, the A/B); w: the VSM clipmap's SMRT rays
 // (`ocean.sunShadowRays`, at most the frame's; 0 = its single tap). Legacy and SDSM read their cascades either way.

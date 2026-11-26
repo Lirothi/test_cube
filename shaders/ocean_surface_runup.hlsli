@@ -13,7 +13,10 @@
 #include "height_fog.hlsli"
 #include "fog_common.hlsli" // volumetric fog plan A5: the froxel volume on the water // P7: the same medium compose applies to opaque geometry
 
-cbuffer OceanCB : register(b0)
+#include "shared/shader_types.h" // TC_REGISTER
+#include "shared/ocean_slots.h"  // the surface's registers by name (architecture plan R5.3), shared with the C++
+
+cbuffer OceanCB : TC_REGISTER(b, OCEAN_B_OCEAN)
 {
     float4x4 model;
     float4x4 view;
@@ -97,40 +100,40 @@ cbuffer OceanCB : register(b0)
     float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
 };
 
-Texture2DArray<float4> DisplacementDerivatives : register(t0);
-Texture2DArray<float4> PrevDisplacementDerivatives : register(t1);
-Texture2DArray<float4> FoamTurbulence : register(t2);
-Texture2D SceneColorTexture : register(t3);
-TextureCube SkyboxTexture : register(t4);
+Texture2DArray<float4> DisplacementDerivatives : TC_REGISTER(t, OCEAN_T_DISPLACEMENT);
+Texture2DArray<float4> PrevDisplacementDerivatives : TC_REGISTER(t, OCEAN_T_PREV_DISPLACEMENT);
+Texture2DArray<float4> FoamTurbulence : TC_REGISTER(t, OCEAN_T_FOAM_TURBULENCE);
+Texture2D SceneColorTexture : TC_REGISTER(t, OCEAN_T_SCENE_COLOR);
+TextureCube SkyboxTexture : TC_REGISTER(t, OCEAN_T_SKYBOX);
 // P5/F8: the shared environment. `SkySpecular` is the GGX-prefiltered radiance whose mip IS a
 // roughness (see ibl_common.hlsli), `SkyIrradiance` is the cosine-convolved fill. Both are inert
 // unless skyParams.y says this level's sky was imported with them, in which case the water stops
 // guessing a mip off the display cube and reads the same environment every other surface does.
-TextureCube SkySpecular : register(t18);
-TextureCube SkyIrradiance : register(t19);
-Texture3D<float4> FogVolume : register(t20); // volumetric fog plan A5: the integrated froxel volume
-Texture2D DistantRoughnessMap : register(t5);
-Texture2D FoamDetailMap : register(t6);
-Texture2D FoamAlbedoTex : register(t7);
-Texture2D FoamUnderwaterTex : register(t8);
-Texture2D FoamTrailTex : register(t9);
-Texture2D ShoreFoamBreakupMaskTex : register(t10);
-Texture2D ShoreFoamAlbedoTex : register(t11);
-Texture2D SceneDepthTexture : register(t12);
-Texture2D ShoreDepthTexture : register(t13);
+TextureCube SkySpecular : TC_REGISTER(t, OCEAN_T_SKY_SPECULAR);
+TextureCube SkyIrradiance : TC_REGISTER(t, OCEAN_T_SKY_IRRADIANCE);
+Texture3D<float4> FogVolume : TC_REGISTER(t, OCEAN_T_FOG_VOLUME); // volumetric fog plan A5: the integrated froxel volume
+Texture2D DistantRoughnessMap : TC_REGISTER(t, OCEAN_T_DISTANT_ROUGHNESS);
+Texture2D FoamDetailMap : TC_REGISTER(t, OCEAN_T_FOAM_DETAIL);
+Texture2D FoamAlbedoTex : TC_REGISTER(t, OCEAN_T_FOAM_ALBEDO);
+Texture2D FoamUnderwaterTex : TC_REGISTER(t, OCEAN_T_FOAM_UNDERWATER);
+Texture2D FoamTrailTex : TC_REGISTER(t, OCEAN_T_FOAM_TRAIL);
+Texture2D ShoreFoamBreakupMaskTex : TC_REGISTER(t, OCEAN_T_SHORE_FOAM_MASK);
+Texture2D ShoreFoamAlbedoTex : TC_REGISTER(t, OCEAN_T_SHORE_FOAM_ALBEDO);
+Texture2D SceneDepthTexture : TC_REGISTER(t, OCEAN_T_SCENE_DEPTH);
+Texture2D ShoreDepthTexture : TC_REGISTER(t, OCEAN_T_SHORE_DEPTH);
 // Shore SDF: plan-view distance to the waterline over the WHOLE level (2 km at ~1.95 m per texel),
 // built once per load by ocean_shore_sdf.hlsl. Negative inland. It answers exactly one question —
 // how far is land — which is what the wave's vertical damping needs, and unlike a camera-following
 // window it has an answer everywhere. Nothing reads it for foam, run-up or normals: those want
 // DEPTH, which is what the shore map above is for.
-Texture2D ShoreSdfTexture : register(t14);
+Texture2D ShoreSdfTexture : TC_REGISTER(t, OCEAN_T_SHORE_SDF);
 // t15 RETIRED (plan S4): the screen-space reflection is traced after this draw and composited by
 // Main_WaterReflection. The table is positional, so the slot stays and is filled with a stand-in.
-RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
-SamplerState LinearWrapSampler : register(s0);
-SamplerState LinearClampSampler : register(s1);
-SamplerState PointClampSampler : register(s2);
-SamplerState AnisotropicWrapSampler : register(s3);
+RWTexture2D<uint> ShoreWetnessStampMap : TC_REGISTER(u, OCEAN_U_WETNESS_STAMP);
+SamplerState LinearWrapSampler : TC_REGISTER(s, OCEAN_S_LINEAR_WRAP);
+SamplerState LinearClampSampler : TC_REGISTER(s, OCEAN_S_LINEAR_CLAMP);
+SamplerState PointClampSampler : TC_REGISTER(s, OCEAN_S_POINT_CLAMP);
+SamplerState AnisotropicWrapSampler : TC_REGISTER(s, OCEAN_S_ANISO_WRAP);
 
 struct VSInput
 {
@@ -602,6 +605,9 @@ void StampShoreWetness(float2 worldXZ, float signedDepth, float shoreWeight)
     }
 }
 
+#if OCEAN_RUNUP_SRV_COUNT != 26 || OCEAN_SAMPLER_COUNT != 5
+#error "OCEAN_SURFACE_RS (ocean_surface_runup.hlsli): the SRV / sampler table sizes no longer match shared/ocean_slots.h"
+#endif
 [RootSignature(OCEAN_SURFACE_RS)]
 VSOutput VSMain(VSInput input)
 {

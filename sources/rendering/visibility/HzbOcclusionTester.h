@@ -26,6 +26,8 @@
 
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/visibility/OcclusionHistory.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/vis_test.h" // HzbTestConstants's fields, once (R5.3)
 
 class Material;
 class Renderer;
@@ -35,13 +37,12 @@ namespace vis
 // Mirrors VisTestCB of vis_test_cs.hlsl.
 struct HzbTestConstants
 {
-    Math::mat4 worldToClip;
-    Math::mat4 viewToClip;
-    std::int32_t viewRect[4];
-    std::uint32_t hzbWidth = 0;
-    std::uint32_t hzbHeight = 0;
-    std::uint32_t boxCount = 0;
-    std::uint32_t pad0 = 0;
+    // shaders/shared/vis_test.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4x4 = shader_shared::float4x4;
+    using int4 = shader_shared::int4;
+    using uint = shader_shared::uint;
+    using uint2 = shader_shared::uint2;
+    VIS_TEST_FIELDS
 };
 static_assert(sizeof(HzbTestConstants) == 160, "VisTestCB layout");
 

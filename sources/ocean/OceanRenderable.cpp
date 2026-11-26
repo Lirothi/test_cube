@@ -1,4 +1,5 @@
 #include "ocean/OceanRenderable.h"
+#include "shaders/shared/ocean_slots.h" // the surface's registers by name (R5.3)
 #include "rendering/core/RasterSettings.h" // render::g_textureAnisotropy
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 
@@ -29,6 +30,9 @@
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/wind/WindState.h" // W8: g_windFreeze pins the shared wind/ocean clock
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/water_mask_lid.h" // LidCB's fields, once (R5.3)
+#include "shaders/shared/ocean_water_mask.h" // WaterMaskCB's fields, once (R5.3)
 
 using Microsoft::WRL::ComPtr;
 
@@ -939,27 +943,23 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // readable here by construction.
     auto fallbackSrv = deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : deferred.sceneSRV;
 
-    // MUST match numDescriptors in OCEAN_SURFACE_RS. Pushing past the end is a silent buffer
-    // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
-    // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
-    // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 31> srvs{};
-    size_t srvCount = 0;
-
-    auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
+    // The table by the slot names both surfaces declare (shaders/shared/ocean_slots.h, architecture plan R5.3): the
+    // surf-sim surface reads all OCEAN_SURF_SIM_SRV_COUNT, the run-up one the first OCEAN_RUNUP_SRV_COUNT. Each slot is
+    // set once below; an empty one is a slot this list forgot (asserted before the table is staged).
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, OCEAN_SURF_SIM_SRV_COUNT> srvs{};
+    auto setSrv = [&](std::size_t slot, D3D12_CPU_DESCRIPTOR_HANDLE srv)
     {
-        assert(srvCount < srvs.size() && "ocean SRV table overrun - grow srvs AND OCEAN_SURFACE_RS");
-        srvs[srvCount++] = srv;
+        assert(slot < srvs.size() && srvs[slot].ptr == 0 && "an ocean SRV slot set twice or past the table");
+        srvs[slot] = srv;
     };
-
-    auto pushTexture = [&](Texture2D& tex)
+    auto setTexture = [&](std::size_t slot, Texture2D& tex)
     {
         D3D12_CPU_DESCRIPTOR_HANDLE srv = tex.GetSRVCPU();
         if (srv.ptr == 0)
         {
             srv = fallbackSrv;
         }
-        pushSrv(srv);
+        setSrv(slot, srv);
     };
 
     D3D12_CPU_DESCRIPTOR_HANDLE displacementSrv = simulation_->GetDisplacementSRV();
@@ -967,7 +967,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         displacementSrv = fallbackSrv;
     }
-    pushSrv(displacementSrv);
+    setSrv(OCEAN_T_DISPLACEMENT, displacementSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE prevDisplacementSrv = {};
     if (simulation_->HasPreviousDisplacement())
@@ -978,17 +978,17 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         prevDisplacementSrv = displacementSrv;
     }
-    pushSrv(prevDisplacementSrv);
+    setSrv(OCEAN_T_PREV_DISPLACEMENT, prevDisplacementSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE foamSrv = simulation_->GetFoamTurbulenceSRV();
     if (foamSrv.ptr == 0)
     {
         foamSrv = fallbackSrv;
     }
-    pushSrv(foamSrv);
+    setSrv(OCEAN_T_FOAM_TURBULENCE, foamSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE sceneSrv = deferred.sceneOpaqueSRV.ptr != 0 ? deferred.sceneOpaqueSRV : fallbackSrv;
-    pushSrv(sceneSrv.ptr != 0 ? sceneSrv : fallbackSrv);
+    setSrv(OCEAN_T_SCENE_COLOR, sceneSrv.ptr != 0 ? sceneSrv : fallbackSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE skySrv{};
     if (sky && sky->GetTex())
@@ -999,24 +999,24 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         skySrv = fallbackSrv;
     }
-    pushSrv(skySrv);
+    setSrv(OCEAN_T_SKYBOX, skySrv);
 
     // t5 DistantRoughnessMap and t6 FoamDetailMap — the same asset today, so the same texture is
     // bound twice rather than loaded twice. The table shape is unchanged.
-    pushTexture(gustNoiseTexture_);
-    pushTexture(gustNoiseTexture_);
-    pushTexture(foamAlbedoTexture_);
-    pushTexture(foamUnderwaterTexture_);
-    pushTexture(foamTrailTexture_);
-    pushTexture(shoreFoamBreakupMaskTexture_);
-    pushTexture(shoreFoamAlbedoTexture_);
+    setTexture(OCEAN_T_DISTANT_ROUGHNESS, gustNoiseTexture_);
+    setTexture(OCEAN_T_FOAM_DETAIL, gustNoiseTexture_);
+    setTexture(OCEAN_T_FOAM_ALBEDO, foamAlbedoTexture_);
+    setTexture(OCEAN_T_FOAM_UNDERWATER, foamUnderwaterTexture_);
+    setTexture(OCEAN_T_FOAM_TRAIL, foamTrailTexture_);
+    setTexture(OCEAN_T_SHORE_FOAM_MASK, shoreFoamBreakupMaskTexture_);
+    setTexture(OCEAN_T_SHORE_FOAM_ALBEDO, shoreFoamAlbedoTexture_);
 
     D3D12_CPU_DESCRIPTOR_HANDLE depthSrv = deferred.depthCopySRV.ptr != 0 ? deferred.depthCopySRV : deferred.depthSRV;
     if (depthSrv.ptr == 0)
     {
         depthSrv = fallbackSrv;
     }
-    pushSrv(depthSrv);
+    setSrv(OCEAN_T_SCENE_DEPTH, depthSrv);
 
     D3D12_CPU_DESCRIPTOR_HANDLE shoreDepthSrv = fallbackSrv;
     if (simulation_ && simulation_->GetShoreDepthSrv().ptr != 0)
@@ -1027,7 +1027,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         shoreDepthSrv = depthSrv;
     }
-    pushSrv(shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
+    setSrv(OCEAN_T_SHORE_DEPTH, shoreDepthSrv.ptr != 0 ? shoreDepthSrv : fallbackSrv);
 
     // Shore SDF. Falls back to the near depth map only so the slot is never null; the shader's
     // own bounds check keeps a wrong reading out of the result.
@@ -1036,11 +1036,11 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         shoreSdfSrv = simulation_->GetShoreSdfSrv();
     }
-    pushSrv(shoreSdfSrv.ptr != 0 ? shoreSdfSrv : fallbackSrv);
+    setSrv(OCEAN_T_SHORE_SDF, shoreSdfSrv.ptr != 0 ? shoreSdfSrv : fallbackSrv);
 
     // t15 RETIRED (ocean G-buffer plan S4): the reflection is traced after this draw and composited by
     // Main_WaterReflection. The table is positional, so the slot keeps a readable stand-in.
-    pushSrv(fallbackSrv);
+    setSrv(OCEAN_T_RETIRED_15, fallbackSrv);
 
     // surf sim injection: t16 height + t17 foam. Fall back so the slots are never garbage; the
     // shader only samples them when surfSimParams.w says a debug view is active (S4 adds the
@@ -1052,8 +1052,8 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         if (surfSim_->GetWaveSrv().ptr != 0) { surfWaveSrv = surfSim_->GetWaveSrv(); }
         if (surfSim_->GetSurfFoamSrv().ptr != 0) { surfFoamSrv = surfSim_->GetSurfFoamSrv(); }
     }
-    pushSrv(surfWaveSrv);
-    pushSrv(surfFoamSrv);
+    setSrv(OCEAN_T_SURF_SIM_WAVE, surfWaveSrv);
+    setSrv(OCEAN_T_SURF_SIM_FOAM, surfFoamSrv);
 
     // P5 (t18/t19): the shared environment. Fall back to the display cube so the table is never
     // half-populated; the shader gates on skyParams.y, which is 0 without derivatives.
@@ -1064,40 +1064,41 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         if (sky->SpecularSrv().ptr != 0) { specSrv = sky->SpecularSrv(); }
         if (sky->IrradianceSrv().ptr != 0) { irrSrv = sky->IrradianceSrv(); }
     }
-    pushSrv(specSrv);
-    pushSrv(irrSrv);
+    setSrv(OCEAN_T_SKY_SPECULAR, specSrv);
+    setSrv(OCEAN_T_SKY_IRRADIANCE, irrSrv);
     // t20: the volumetric fog's integrated volume (plan A5). Bound every frame -- Main_Transparent
     // declares it PIXEL-readable every frame -- and gated in the shader by fogVolumeParams.x.
-    pushSrv(deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : fallbackSrv);
+    setSrv(OCEAN_T_FOG_VOLUME, deferred.fogIntegratedSRV.ptr != 0 ? deferred.fogIntegratedSRV : fallbackSrv);
     // t21: plan C3, the cloud shadow map (Main_Transparent declares it PIXEL-readable on the frames
     // it exists; SceneRenderer hands the SRV over with the projection), gated by cloudShadowParams.x.
-    pushSrv(cloudShadowSrv_.ptr != 0 ? cloudShadowSrv_ : fallbackSrv);
+    setSrv(OCEAN_T_CLOUD_SHADOW, cloudShadowSrv_.ptr != 0 ? cloudShadowSrv_ : fallbackSrv);
     // t22-t25: the sun's shadow (OceanSunShadow), the transports Pass_Transparent publishes before this draw and
     // glass reads the same way (GlassPassSrvs): the sun atlas (EVSM moments under S16), the VSM page table and pool,
     // the SDSM partitions. A buffer slot falls back to the inert dummy BUFFER, never a texture; the shader reads the
     // page table and pool only under vsmParams.x and the partitions only under csmSdsmParams.x.
     const D3D12_CPU_DESCRIPTOR_HANDLE sunAtlasSrv =
         renderer->GetSdsmMomentsSrv().ptr != 0 ? renderer->GetSdsmMomentsSrv() : deferred.shadowSRV;
-    pushSrv(sunAtlasSrv.ptr != 0 ? sunAtlasSrv : fallbackSrv);
-    pushSrv(renderer->GetVsmPageTableSrv().ptr != 0 ? renderer->GetVsmPageTableSrv() : renderer->VsmDummyBufferSrv());
-    pushSrv(renderer->GetVsmPoolSrv().ptr != 0 ? renderer->GetVsmPoolSrv() : fallbackSrv);
-    pushSrv(renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv() : renderer->VsmDummyBufferSrv());
+    setSrv(OCEAN_T_SHADOW_ATLAS, sunAtlasSrv.ptr != 0 ? sunAtlasSrv : fallbackSrv);
+    setSrv(OCEAN_T_VSM_PAGE_TABLE, renderer->GetVsmPageTableSrv().ptr != 0 ? renderer->GetVsmPageTableSrv() : renderer->VsmDummyBufferSrv());
+    setSrv(OCEAN_T_VSM_POOL, renderer->GetVsmPoolSrv().ptr != 0 ? renderer->GetVsmPoolSrv() : fallbackSrv);
+    setSrv(OCEAN_T_SDSM_PARTITIONS, renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv() : renderer->VsmDummyBufferSrv());
     // t26: the boat wake's field (ocean/OceanWake), left pixel-readable by Main_OceanWake on the frames it runs; read only
     // under wakeParams.z, which is 0 on every other frame -- the fallback keeps the slot readable then.
     const bool wakeRead = GetWakeParams().z > 0.0f;
-    pushSrv(wakeRead && wake_->GetSrv().ptr != 0 ? wake_->GetSrv() : fallbackSrv);
+    setSrv(OCEAN_T_WAKE, wakeRead && wake_->GetSrv().ptr != 0 ? wake_->GetSrv() : fallbackSrv);
     // t27: its foam, this frame's of the two (the same frames, the same gate).
-    pushSrv(wakeRead && wake_->GetFoamSrv().ptr != 0 ? wake_->GetFoamSrv() : fallbackSrv);
+    setSrv(OCEAN_T_WAKE_FOAM, wakeRead && wake_->GetFoamSrv().ptr != 0 ? wake_->GetFoamSrv() : fallbackSrv);
     // t28: the water masks' columns -- the plan, for ocean.waterMask:3 (read only under WaterMaskCB's hull count); before the
     // first mask the inert dummy BUFFER.
-    pushSrv(waterMaskSrv_.ptr != 0 ? waterMaskSrv_ : renderer->VsmDummyBufferSrv());
+    setSrv(OCEAN_T_WATER_MASK_COLUMNS, waterMaskSrv_.ptr != 0 ? waterMaskSrv_ : renderer->VsmDummyBufferSrv());
     // t29: the boat wake's foam detail (the lace it thins into, the churned white water's relief): a file texture.
-    pushTexture(wakeFoamDetailTexture_);
+    setTexture(OCEAN_T_WAKE_FOAM_DETAIL, wakeFoamDetailTexture_);
     // t30: the lids' two nearest crossings a pixel (Main_WaterMask, left pixel-readable there and declared so by
     // Main_Transparent); read only under WaterMaskCB's w bit 1, which is set only on a frame that drew them.
-    pushSrv((waterMaskLidFlags_ & 2u) != 0u && waterMaskCrossingsSrv_.ptr != 0 ? waterMaskCrossingsSrv_ : fallbackSrv);
+    setSrv(OCEAN_T_WATER_MASK_CROSSINGS, (waterMaskLidFlags_ & 2u) != 0u && waterMaskCrossingsSrv_.ptr != 0 ? waterMaskCrossingsSrv_ : fallbackSrv);
 
-    auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
+    assert(std::all_of(srvs.begin(), srvs.end(), [](const D3D12_CPU_DESCRIPTOR_HANDLE& h) { return h.ptr != 0; }));
+    auto tbl = renderer->StageSrvUavTable(srvs, srvs.size());
     ctx.srvTable[0] = tbl.gpu;
 
     // b2: the hulls the surface is not drawn inside (ocean/WaterMask.h; shaders/ocean_surface_surf_sim.hlsli WaterMaskCB):
@@ -1108,25 +1109,26 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     {
         struct WaterMaskCB
         {
-            std::uint32_t count[4];
-            float hulls[ocean::kWaterMaskMaxHulls * 5][4];
-            Math::float4 bowGates[ocean::kWaterMaskMaxHulls * 2];
+            // shaders/shared/ocean_water_mask.h (architecture plan R5.3): the fields, once for HLSL and C++.
+            using float4 = shader_shared::float4;
+            using uint4 = shader_shared::uint4;
+            OCEAN_WATER_MASK_FIELDS(ocean::kWaterMaskMaxHulls)
         };
         static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 7 * 16, "WaterMaskCB must match the HLSL cbuffer");
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(WaterMaskCB), render::kConstantBufferAlignment);
         WaterMaskCB& m = *reinterpret_cast<WaterMaskCB*>(cb.cpu);
-        std::memset(&m, 0, sizeof(m.count));
+        std::memset(&m, 0, sizeof(m.waterMaskCount));
         // This frame's hulls as EnsureWaterMaskColumns packed them (ocean::g_waterMaskFrame, the particles read the same).
         const ocean::WaterMaskFrame& frame = ocean::g_waterMaskFrame;
         const std::uint32_t hulls = ocean::g_waterMask != 0 && waterMaskSrv_.ptr != 0 ? frame.hulls : 0u;
-        std::memcpy(m.hulls, frame.rows, sizeof(float) * 4u * 5u * hulls);
-        m.count[0] = hulls;
-        m.count[1] = static_cast<std::uint32_t>(ocean::g_waterMask); // 2 = paint instead of discard
-        m.count[3] = ocean::g_waterMask != 0 ? waterMaskLidFlags_ : 0u;
+        std::memcpy(m.waterMaskHull, frame.rows, sizeof(float) * 4u * 5u * hulls);
+        m.waterMaskCount[0] = hulls;
+        m.waterMaskCount[1] = static_cast<std::uint32_t>(ocean::g_waterMask); // 2 = paint instead of discard
+        m.waterMaskCount[3] = ocean::g_waterMask != 0 ? waterMaskLidFlags_ : 0u;
         // Where each boat's bow wave breakers come in this frame (OceanWake::BowGates).
         const OceanRenderConfig& wakeRender = GetRenderConfig();
-        m.count[2] = WakeEnabled() && wake_->IsReady() && wakeRender.wakeBowFoam > 0.0f
-            ? wake_->BowGates(m.bowGates, ocean::kWaterMaskMaxHulls, std::clamp(wakeRender.wakeBowFadeIn, 0.0f, 2.0f)) : 0u;
+        m.waterMaskCount[2] = WakeEnabled() && wake_->IsReady() && wakeRender.wakeBowFoam > 0.0f
+            ? wake_->BowGates(m.wakeBowGate, ocean::kWaterMaskMaxHulls, std::clamp(wakeRender.wakeBowFadeIn, 0.0f, 2.0f)) : 0u;
         ctx.cbv[2] = cb.gpu;
     }
 
@@ -1610,8 +1612,10 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWaterMaskPass(
             const D3D12_GPU_DESCRIPTOR_HANDLE uavTable = renderer->StageSrvUavTable({ waterMaskCrossingsUav_ }).gpu;
             struct LidCB
             {
-                Math::mat4 modelViewProj;
-                Math::float4 modelViewZ;
+                // shaders/shared/water_mask_lid.h (architecture plan R5.3): the fields, once for HLSL and C++.
+                using float4 = shader_shared::float4;
+                using float4x4 = shader_shared::float4x4;
+                WATER_MASK_LID_FIELDS
             };
             static_assert(sizeof(LidCB) == 80, "LidCB must match water_mask_lid.hlsl WaterMaskLidCB");
             for (std::uint32_t d = 0; d < waterMaskLidDrawCount_; ++d)

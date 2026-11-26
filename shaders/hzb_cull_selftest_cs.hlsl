@@ -17,36 +17,24 @@
 
 // Mirrors hzb::SelfTestConstants. row_major is what -Zpr gives every engine shader; spelled out
 // so tools/check_shaders.py (which runs dxc without -Zpr) compiles the same layout.
+#include "shared/shader_types.h"
+#include "shared/hzb_cull_selftest.h" // SelfTestCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer SelfTestCB : register(b0)
 {
-    row_major float4x4 localToWorld;
-    row_major float4x4 worldToClip;
-    row_major float4x4 viewToClip;
-    int4  viewRect;     // (0, 0, width, height)
-    uint2 hzbSize;      // mip 0 of the pyramid
-    uint  boxCount;
-    uint  footprint;    // 4
-    row_major float4x4 orthoWorldToClip; // S5b: the ortho cases' projection (reverse-Z)
+    HZB_SELFTEST_FIELDS
 };
 
+#include "shared/hzb_selftest_box.h" // TestBox's fields, once for HLSL and C++ (architecture plan R5.3)
 struct TestBox
 {
-    float4 center;      // xyz; w = 1 for an ortho case
-    float4 extent;      // xyz half-extents
+    HZB_SELFTEST_BOX_FIELDS
 };
 
 // Mirrors hzb::SelfTestResult (64 bytes).
+#include "shared/hzb_selftest_result.h" // TestResult's fields, once for HLSL and C++ (architecture plan R5.3)
 struct TestResult
 {
-    int4  pixels;
-    int4  hzbTexels;
-    int   level;        // -1 when the HZB was not consulted
-    float minDepth;     // 0 when not consulted
-    uint  flags;        // kFlag* below
-    uint  visible;
-    float depth;        // rect.depth (nearest device depth)
-    float rectMinZ;
-    float2 pad;
+    HZB_SELFTEST_RESULT_FIELDS
 };
 
 static const uint kFlagCrossesNear   = 1u;

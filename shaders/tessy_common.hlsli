@@ -4,18 +4,11 @@
 
 // Matches ShadowGpuData::TessyCluster (64 bytes). One per (virtual group x cluster): the classic index range it covers
 // in the mega IB (the VS path and the validator) and, since N6, its meshlets (TessyMeshlets) the mesh shader emits.
+#include "shared/shader_types.h"
+#include "shared/tessy_cluster.h" // TessyCluster's fields, once for HLSL and C++ (architecture plan R5.3)
 struct TessyCluster
 {
-    uint   firstIndex;   // mega-absolute
-    uint   triCount;     // <= 128
-    float  windAlongMax;
-    float  windLeafMax;
-    float3 center;       // object space
-    float  radius;
-    float3 extent;
-    uint   firstMeshlet; // N6
-    uint   meshletCount; // N6: 1 (a regular mesh's cluster) to ~5 (a leaf card's)
-    uint3  pad;
+    TESSY_CLUSTER_FIELDS
 };
 // N6, matches ShadowGpuData::TessyMeshlet: {vertex list offset in TessyClusterVerts, vertices (<= kTessyMeshletMaxVerts),
 // triangle offset in TessyClusterTris (three 8-bit places in that list each), triangles}.
@@ -40,14 +33,10 @@ static const uint kTessyCamDagBit = 0x8000u;
 
 // N7: matches Mesh::ClusterLod / ShadowGpuData::TessyClusterLod (48 bytes) -- the sphere and error of the simplification
 // that made a DAG cluster (lod*) and of the one that consumes it (parent*; a root's parentError is FLT_MAX).
+#include "shared/tessy_cluster_lod.h" // TessyClusterLod's fields, once for HLSL and C++ (architecture plan R5.3)
 struct TessyClusterLod
 {
-    float4 lodSphere;
-    float4 parentSphere;
-    float lodError;
-    float parentError;
-    uint level;
-    uint pad;
+    TESSY_CLUSTER_LOD_FIELDS
 };
 // A world matrix's scale: its largest axis (what a DAG error and sphere radius grow by).
 float TessyWorldScale(float4x4 w) { return max(length(w[0].xyz), max(length(w[1].xyz), length(w[2].xyz))); }

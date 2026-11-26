@@ -1,12 +1,8 @@
-#include "app/game/PlayerStart.h"
+#include "app/FrameRequests.h" // what a --set asks of the frame (R2.2)
 #include "app/App.h"
 #include "app/AppResources.h"
 #include "app/BuildVersion.h"
-#include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
-#include "rendering/core/DlssHandler.h"     // --set dlss.preset (g_dlssPresetOverride)
-#include "rendering/core/GpuAlloc.h"        // gpu::SetCreationExcludesSubmission
-#include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"
@@ -21,7 +17,6 @@
 #include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
-#include "rendering/lighting/SkyAtmosphere.h" // render::g_skyKeyTolerance_game (--set sky.keyTolerance)
 #include "core/logging/Log.h"
 #include <algorithm>
 #include <cassert>
@@ -42,29 +37,7 @@
 #include <wrl/client.h>
 #include <dxgi1_4.h> // the auto-detect's GPU identity (EnumAdapterByLuid)
 #include "rendering/wind/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
-#include "vfx/ParticleTypes.h" // --set=particles.airFromFog
 
-// "--set=camera.fly:<m/s>" / MCP set_settings: fly along the camera's own view, negative = backwards, 0 stops --
-// a person flying through a tunnel in a running editor (the camera's heading is its own; --cam-fly's is the world's).
-float g_camFlyForward = 0.0f;
-// `frame.recordDt` (MCP, for a film; 0 = off): the world advances by exactly this many seconds on a frame an MCP
-// screenshot captures and stands on every other frame -- so a script sets the boat's helm and the camera, takes the
-// frame, and the next one is 1/60 s of the world later whatever the PNG cost. A real-time capture drops and doubles
-// frames; a `burst` without this lets the clocks drift apart (the wake fell behind the boat).
-float g_recordDt = 0.0f;
-// `frame.timeScale` (--set / MCP; 1 = real time): the world's clock runs this many times faster -- a three-lap race of
-// five minutes in forty seconds at 8. Everything of the world goes by the frame's dt (the ocean's and the wind's clock,
-// the physics' steps, the boats' water, the bots, the race's clock), so the dt is what is scaled, capped at 0.1 s as a
-// frame's always is: a frame too slow for the scale slows the world, it does not jump it. What a scaled run is: the game
-// at (frame rate / scale) frames a second -- at 240 fps and 4 the physics steps once a frame and the water's heights
-// land 30 times a second of the world, as at 60 fps; past frame rate / 15 the physics drops steps (physics.maxSteps).
-float g_timeScale = 1.0f;
-// "--set=dlss.mode:<sl::DLSSMode>" / MCP set_settings: switch the upscaler in a RUNNING process, at the frame's safe
-// point (the dev window's combo path). 0 = off (native), 2 = Balanced, 6 = DLAA. -1 = nothing asked.
-int g_requestDlssMode = -1;
-// "--set=aa.renderScale:<0.25..1>": the render scale without DLSS (the resolution group's native road), at the same safe
-// point as dlss.mode. < 0 = nothing asked.
-float g_requestRenderScale = -1.0f;
 std::atomic<bool> g_modelBusy{ false };
 std::atomic<bool> g_modelBusyBackground{ false };
 
@@ -75,23 +48,16 @@ BootOptions& Boot()
 }
 
 #include "app/levels/JsonLevel.h"
-#include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
 #include "ocean/OceanBuoyancy.h"    // get_readouts "floaters"
 #include "ocean/OceanReadback.h"
-#include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
-#include "ocean/OceanSimulation.h"
-#include "ocean/OceanWakeKnobs.h" // --set=ocean.wake*
-#include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
-#include "rendering/streaming/StreamingSettings.h" // --set=streaming.* (texture streaming A2)
-#include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
-#include "rendering/debug/LodDebugView.h" // --set=lod.debug (LOD selection debug view)
+#include "ocean/OceanRenderable.h"  // get_readouts: the wake's fronts
+#include "rendering/shadows/TessySettings.h" // get_readouts: the Tessy state
 #include "rendering/core/Screenshot.h"
 #include "app/harness/CaptureHarnesses.h" // R3.3: --shot, --sweep, --profdump, --trace
 #include "app/harness/GateHarnesses.h" // R3.3: --mem-readout, --scalability-check, --rt-audit
 #include "app/harness/IntentHarness.h" // R3.3: --intent's end
 #include "app/harness/SettingsDumpHarness.h" // R2.0: --settings-dump
 #include "app/diagnostics/SceneStress.h"      // R3.3e: --scene-stress, a harness of this loop
-#include "input/InputActions.h"   // R12.3: player.test* go into the keys' channel
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
 #include "core/threading/ThreadRole.h" // game thread plan: the frame's phases and their roles
@@ -100,18 +66,11 @@ BootOptions& Boot()
 #include "app/diagnostics/RtAudit.h"     // G9: --rt-audit
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
-#include "app/scene/SkyOcclusionMap.h"      // skyVis.fallbackResolution / fallbackTexel: the map's own ranges
 #include "app/settings/Scalability.h"       // sg.* (docs/scalability_plan.md)
 #include "app/settings/SettingContext.h"    // R2.1: what a settings registry row reaches
 #include "core/settings/SettingsRegistry.h" // R2.1: the names --set takes, one row each
-#include "app/settings/DisplayMode.h"       // the window's mode, monitor and size (S6), display.* below
-#include "app/settings/UserSettings.h"      // image.* / controls.* (S7)
 #include "app/ui/GameSettingsMenu.h"        // the player's saved display settings at boot
-#include "vfx/ParticleTypes.h"              // particles.spawnScale
 #include <fstream>
-#include "rendering/shadows/ShadowSettings.h"
-#include "rendering/shadows/TessySettings.h" // --set=tessy.*
-#include "rendering/core/RasterSettings.h" // A6: --set=raster.bindless
 #if WITH_EDITOR
 #include "editor/EditorController.h"
 #include "editor/intent/EditorMcpServer.h" // Claude Code's screenshots, taken at the --shot point
@@ -335,10 +294,9 @@ namespace
     // Occlusion plan S0: `--set=scene.replicate:K` -- clone every enabled staticMesh of the loaded
     // level K*K-1 more times on a grid whose step is the level's static extent, so a scene where
     // the camera geometry dominates the frame exists without authoring one (wind_test x16 ~ 10k
-    // objects). Recorded here by the --set dispatcher, executed once the level is in (below),
+    // objects). Recorded by the --set row (g_sceneReplicateRequest, app/FrameRequests.h), executed once the level is in (below),
     // through the same factory + UploadBatch + AddInitializedObject path the editor's spawn uses.
     // Nothing is written to disk.
-    std::uint32_t g_sceneReplicateRequest = 0;
 
     void ReplicateLevelObjects(Scene& scene, Renderer& renderer, const std::string& levelPath, std::uint32_t k)
     {
@@ -405,1651 +363,22 @@ namespace
                  k, added, skipped, stepX, stepZ);
     }
 
+    // Every --set / --sweep / MCP set_settings name lives in the settings registry (architecture plan R2.2):
+    // app/settings/*SettingRows.cpp, a row a name, or a family whose keys are an owner's table (race.*, sg.*, ...).
     bool ApplySweepValue(Scene& scene, SceneRenderSettings& renderSettings,
                          const std::string& setting, float value)
     {
-        // The settings registry first (architecture plan R2.1): a name that moved there lives there alone.
-        if (const settings::SettingDesc* row = settings::Registry().Find(setting))
-        {
-            settings::SettingContext ctx{ scene, renderSettings };
-            return row->apply(ctx, value);
-        }
-        // Occlusion plan S0: recorded, applied after the --set loop (needs the renderer + level path).
-        if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
-        // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
-        if (setting == "frame.vsync")  { render::g_vsync_game = value != 0.0f; return true; }
-        // The material samplers' anisotropy (S3; UE r.MaxAnisotropy): 1, 2, 4, 8 or 16, the next frame's.
-        if (setting == "textures.anisotropy") { render::g_textureAnisotropy_game = render::ClampAnisotropy(static_cast<std::uint32_t>(std::max(value, 1.0f))); return true; }
-        if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
-        // The window (docs/scalability_plan.md S6): the menu's Display, live and transient -- a script switches the mode
-        // (0 windowed, 1 borderless), the windowed client size, the monitor (its place in the list, 1 = the first), the
-        // frame-rate limit in the background (0 none, -1 the build's). Taken at the frame's safe point; never saved.
-        if (setting == "display.mode" || setting == "display.width" || setting == "display.height" || setting == "display.monitor")
-        {
-            display::DisplaySettings d = display::PendingOrCurrent(display::MainWindow());
-            if (setting == "display.mode") { d.mode = value >= 0.5f ? display::WindowMode::Borderless : display::WindowMode::Windowed; }
-            else if (setting == "display.width") { d.width = std::clamp(static_cast<int>(value), 320, 16384); }
-            else if (setting == "display.height") { d.height = std::clamp(static_cast<int>(value), 200, 16384); }
-            else
-            {
-                const std::vector<display::MonitorInfo> monitors = display::Monitors();
-                const int index = static_cast<int>(value) - 1;
-                if (index < 0 || index >= static_cast<int>(monitors.size())) { return false; }
-                d.monitor = monitors[static_cast<std::size_t>(index)].device;
-            }
-            display::Request(d);
-            return true;
-        }
-        if (setting == "display.backgroundFps") { display::SetBackgroundFps(static_cast<int>(value)); return true; }
-        // The player's Image and Controls (S7), transient: brightness in EV, the field of view (0 = the level's), the
-        // look's sensitivity and its inverted vertical.
-        if (setting == "image.brightnessEv" || setting == "image.fovDeg")
-        {
-            settings::ImageSettings i = settings::CurrentImageSettings();
-            if (setting == "image.brightnessEv") { i.brightnessEv = value; }
-            else { i.fovDeg = value; }
-            settings::ApplyImageSettings(i);
-            return true;
-        }
-        if (setting == "controls.sensitivity" || setting == "controls.invertY")
-        {
-            settings::ControlsSettings c = settings::CurrentControlsSettings();
-            if (setting == "controls.sensitivity") { c.sensitivity = value; }
-            else { c.invertY = value != 0.0f; }
-            settings::ApplyControlsSettings(c);
-            return true;
-        }
-        // A film, frame by frame (g_recordDt above): seconds of the world a captured frame advances; 0 = real time.
-        if (setting == "frame.recordDt") { g_recordDt = std::clamp(value, 0.0f, 0.1f); return true; }
-        // The world's clock, times this (g_timeScale above). The copies of the water's heights follow it.
-        if (setting == "frame.timeScale")
-        {
-            g_timeScale = std::clamp(value, 0.1f, 16.0f);
-            OceanReadback::SetTimeScale(g_timeScale);
-            LOG_INFO(logging::LogCategory::App, "frame.timeScale: the world's clock runs x{:.2f}", g_timeScale);
-            return true;
-        }
-        // --no-hud for a running process: 0 hides the HUD's text (a film's frames), 1 shows it.
-        if (setting == "debug.hud") { Boot().frame.hudHidden = value == 0.0f; return true; }
-        // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
-        if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
-        // UE's r.OneFrameThreadLag: 0 = the game half waits for each frame right after handing it over.
-        if (setting == "frame.oneFrameThreadLag") { threading::g_oneFrameThreadLag = value != 0.0f; return true; }
-        // G10b, UE's r.RHIThread.Enable: the frame's submission and Present on a thread of their own (next BeginFrame).
-        if (setting == "frame.rhiThread") { threading::g_rhiThreadEnabled = value != 0.0f; return true; }
-        if (setting == "frame.gbvCreationExcludesSubmission") { gpu::SetCreationExcludesSubmission(value != 0.0f && GraphicsDevice::GbvEnabled()); return true; }
-        // The physics world (docs/physics_plan.md): game-side knobs, no render copy.
-        if (setting == "physics.enabled") { physics::GameSettings().enabled = value != 0.0f; return true; }
-        if (setting == "physics.debug") { physics::GameSettings().debug = static_cast<int>(value); return true; }
-        if (setting == "physics.debugRadius") { physics::GameSettings().debugRadius = std::max(value, 1.0f); return true; }
-        if (setting == "physics.stepHz") { physics::GameSettings().stepHz = std::clamp(value, 10.0f, 480.0f); return true; }
-        if (setting == "physics.maxSteps") { physics::GameSettings().maxSteps = std::clamp(static_cast<int>(value), 1, 32); return true; }
-        if (setting == "physics.threads") { physics::GameSettings().threads = std::clamp(static_cast<int>(value), 0, 16); return true; }
-        if (setting == "physics.async") { physics::GameSettings().async = value != 0.0f; return true; }
-        if (setting == "physics.kickInTick") { physics::GameSettings().kickInTick = value != 0.0f; return true; }
-        if (setting == "physics.stepDelayMs") { physics::GameSettings().stepDelayMs = std::max(value, 0.0f); return true; }
-        if (setting == "physics.gravity") { physics::GameSettings().gravity = value; return true; }
-        if (setting == "physics.autoShapes") { physics::GameSettings().autoShapes = value != 0.0f; return true; }
-        if (setting == "physics.forceLod") { physics::GameSettings().forceLod = static_cast<int>(std::clamp(value, -1.0f, 3.0f)); return true; }
-        if (setting == "physics.hullTolerance") { physics::GameSettings().hullTolerance = std::clamp(value, 0.0f, 0.25f); return true; }
-        if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
-        if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
-        if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
-        if (setting == "physics.mooring") { physics::GameSettings().mooring = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "physics.mooringTurn") { physics::GameSettings().mooringTurn = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "physics.mooringSettle") { physics::GameSettings().mooringSettle = std::clamp(value, 0.0f, 20.0f); return true; }
-        // The boats (docs/play_mode_plan.md): every vessel in the world, transient. An asset's own numbers are its mesh.json "vessel".
-        if (setting.rfind("vessel.", 0) == 0 && scene.Physics().TuneVessels(setting.substr(7), value)) { return true; }
-        // The race (game::Race): its numbers by one table; a script's start and the results away.
-        if (setting.rfind("race.", 0) == 0)
-        {
-            const std::string key = setting.substr(5);
-            if (const game::RaceKey* entry = game::FindRaceKey(key))
-            {
-                game::RaceSettingsRef().*(entry->member) = std::clamp(value, entry->lo, entry->hi);
-                return true;
-            }
-            if (key == "start") { if (value != 0.0f) { scene.RaceRef().RequestStart(); } return true; }
-            if (key == "close") { if (value != 0.0f) { scene.RaceRef().CloseResults(); } return true; }
-        }
-        // The race's bots (game::RaceBot): one table.
-        if (setting.rfind("bot.", 0) == 0)
-        {
-            if (const game::BotKey* entry = game::FindBotKey(setting.substr(4)))
-            {
-                game::BotSettingsRef().*(entry->member) = std::clamp(value, entry->lo, entry->hi);
-                return true;
-            }
-        }
-        // The player (docs/play_mode_plan.md): its numbers by one table, and what a script says in place of the keys.
-        if (setting.rfind("player.", 0) == 0)
-        {
-            physics::PlayerSettings& player = physics::GameSettings().player;
-            const std::string_view key = std::string_view(setting).substr(7);
-            if (const game::PlayerKey* entry = game::FindPlayerKey(key))
-            {
-                player.*(entry->member) = std::clamp(value, entry->lo, entry->hi);
-                return true;
-            }
-            // What a script says in place of the keys goes into the keys' own channel (architecture plan R12.3): a
-            // press is the next frame's press, held / axis values stay until 0. testMoveX / Z are the WORLD's axes
-            // (actions::kMoveWorldX / Z); testThrottle / testRudder / testSprint have actions of their own that only the
-            // helm and the player read (kHelmThrottle / kHelmRudder / kScriptSprint): the free camera reads W S / A D, Shift.
-            InputManager& input = Systems::GetInput();
-            if (key == "testMoveX") { input.InjectAxis(actions::kMoveWorldX, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testMoveZ") { input.InjectAxis(actions::kMoveWorldZ, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testThrottle") { input.InjectAxis(actions::kHelmThrottle, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testRudder") { input.InjectAxis(actions::kHelmRudder, std::clamp(value, -1.0f, 1.0f)); return true; }
-            if (key == "testCrouch") { input.InjectHeld(actions::kCrouch, value != 0.0f); return true; }
-            if (key == "testSprint") { input.InjectHeld(actions::kScriptSprint, value != 0.0f); return true; }
-            if (key == "testJump") { if (value != 0.0f) { input.InjectPress(actions::kJump); } return true; }
-            if (key == "testInteract") { if (value != 0.0f) { input.InjectPress(actions::kInteract); } return true; }
-            if (key == "testView") { if (value != 0.0f) { input.InjectPress(actions::kToggleView); } return true; }
-            if (key == "testAnchor") { if (value != 0.0f) { input.InjectPress(actions::kAnchor); } return true; }
-            if (key == "testAutopilot") { if (value != 0.0f) { input.InjectPress(actions::kAutopilot); } return true; }
-            // Not keys: where a script holds the boat's camera (game::ScriptCamera).
-            if (key == "testOrbit") { game::ScriptCamera().orbit = value; return true; }
-            if (key == "testOrbitPitch") { game::ScriptCamera().orbitPitch = value; return true; }
-            if (key == "testFreeCamera") { game::ScriptCamera().free = value != 0.0f; return true; }
-        }
-        // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
-        // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
-        if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
-        // ...and frozen at THIS clock (seconds), --wind-freeze=<s> for a running process: two arms frozen with
-        // wind.freeze:1 at different moments hold different poses, and the VSM pages the receivers request with them.
-        if (setting == "wind.freezeAt") { vfx::g_windFreeze_game = true; vfx::g_windFrozenTime_game = std::max(0.0f, value); return true; }
-        // Fly along the view at this many m/s (negative = backwards, 0 stops) -- motion through a running editor.
-        if (setting == "camera.fly") { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; }
-        // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running
-        // editor, the other motion a temporal history has to survive.
-        if (setting == "camera.mouseSmoothing") { g_cameraMouseSmoothingMs = std::clamp(value, 0.0f, kCameraMouseSmoothingMaxMs); return true; }
-        if (setting == "camera.spin") { Boot().frame.camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
-        // A boat's camera, at the helm and on a bot's boat (race.watch): 0 behind, 1 the cockpit, 2 cinema (V in Play).
-        if (setting == "camera.boatView")
-        {
-            const auto view = static_cast<game::VesselCamera::View>(std::clamp(static_cast<int>(std::lround(value)), 0, 2));
-            scene.VesselCameraRef().SetView(view);
-            scene.SpectatorCameraRef().SetView(view);
-            return true;
-        }
-        if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
-        // Without DLSS (the resolution group's native road): the render scale at the frame's safe point, FXAA at once.
-        if (setting == "aa.renderScale") { g_requestRenderScale = std::clamp(value, 0.25f, 1.0f); return true; }
-        if (setting == "aa.fxaa") { renderSettings.doFxaa = value != 0.0f; return true; }
-        if (setting == "particles.spawnScale") { vfx::g_spawnScale = std::clamp(value, 0.0f, 4.0f); return true; }
-        // The boats' spray, capped at runtime over the ocean's own rate and mist (the Effects group): never written into
-        // the ocean's config, which the editor saves into the level.
-        if (setting == "spray.rateMax") { vfx::g_sprayRateMax = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "spray.mistMax") { vfx::g_sprayMistMax = std::clamp(value, 0.0f, 4.0f); return true; }
-        // Auto-detect's control (docs/scalability_plan.md §8.4) and a run of it now.
-        if (setting == "scalability.gpuTimeScale") { settings::TheScalability().autodetectGpuScale = std::clamp(value, 0.1f, 64.0f); return true; }
-        if (setting == "scalability.autodetect") { if (value != 0.0f) { settings::TheScalability().RequestAutodetect(false); } return true; } // a script's: never saved
-        // The graphics levels (docs/scalability_plan.md): sg.<group>:<0..3> one group, sg.all a preset, sg.resolution the
-        // render resolution's level; -1 leaves it alone again. sg.unpin forgets what --set / MCP pinned, sg.reload reads
-        // the table again. Applied at once and TRANSIENT, as every --set: the player's choice is saved by the settings
-        // menu and the Developer Controls tab (Scalability::SaveUser), never by a script.
-        if (setting.rfind("sg.", 0) == 0)
-        {
-            settings::Scalability& s = settings::TheScalability();
-            const std::string group = setting.substr(3);
-            const int level = static_cast<int>(std::lround(value));
-            if (group == "reload")
-            {
-                s.LoadTable();
-                s.LoadUser();
-            }
-            else if (group == "unpin") { s.ClearPins(); }
-            else if (!s.Loaded()) { return false; }
-            else if (group == "all") { s.SetPreset(level); }
-            else if (group == "resolution") { s.SetResolutionLevel(level); }
-            else if (const int g = s.GroupIndex(group); g >= 0) { s.SetGroupLevel(g, level); }
-            else { return false; }
-            s.Apply(setting);
-            return true;
-        }
-        if (setting == "dlss.preset") { g_dlssPresetOverride.store(std::clamp(static_cast<int>(value), -1, 15)); return true; }
-        // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
-        // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
-        if (setting == "cloudShadow.updateFrames")
-        {
-            render::g_cloudShadowUpdateFrames_game = render::SanitizeCloudShadowUpdateFrames(static_cast<std::uint32_t>(std::max(value, 0.0f)));
-            return true;
-        }
-        if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather_game = value != 0.0f; return true; }
-        if (setting == "cloud.perSampleTransmittance") { render::g_cloudPerSampleTransmittance_game = value != 0.0f; return true; } // N3 A/B
-        if (setting == "cloud.blueNoise") { render::g_cloudBlueNoise_game = value != 0.0f; return true; } // start-offset noise A/B
-        if (setting == "cloudCompose.jitterScale") { render::g_cloudComposeJitterScale = std::clamp(value, -2.0f, 2.0f); return true; }
-        if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean_game = value != 0.0f; return true; }
-        // The view trace's resolutions (project-wide, graphics_settings.json "cloudTrace"), UE's
-        // r.VolumetricRenderTarget.Mode numbers: 1 half-res trace (ours), 0 quarter-res (UE's default).
-        if (setting == "cloud.captureTexels") { render::g_cloudCaptureTexels_game = render::SanitizeCloudCaptureTexels(value); return true; }
-        if (setting == "cloudTrace.mode") { render::g_cloudTraceMode_game = render::SanitizeCloudTraceMode(static_cast<std::uint32_t>(std::max(value, 0.0f))); return true; }
-        render::CameraExposureSettings& e = scene.CameraExposureRef();
-        render::ColorPipelineSettings& c = scene.ColorPipelineRef();
-
-        // P4: the SCENE-side brightness knobs, so a sweep can measure them against the camera-side
-        // ones. `light.exposure` is the field P4 exists to retire -- it multiplies sun AND ambient
-        // in lighting_cs, which is a camera control wearing a light's name.
-        if (setting == "light.exposure") { scene.SunLightRef().SetExposure(value); return true; }
-        if (setting == "light.ambient")  { scene.SunLightRef().SetAmbient(value);  return true; }
-        // P6B: the AO pass and its knobs, so a sweep can measure it before it is wired into
-        // lighting. `gtao.enabled` is the A/B switch the plan requires before it becomes default.
-        if (setting == "gtao.enabled")     { scene.GtaoRef().enabled = value != 0.0f; return true; }
-        if (setting == "gtao.worldRadius") { scene.GtaoRef().worldRadius = value;     return true; }
-        if (setting == "gtao.thickness")   { scene.GtaoRef().thickness = value;       return true; }
-        if (setting == "gtao.intensity")   { scene.GtaoRef().intensity = value;       return true; }
-        if (setting == "gtao.numAngles")   { scene.GtaoRef().numAngles = (uint32_t)std::max(1.0f, value); return true; }
-        if (setting == "gtao.numSteps")    { scene.GtaoRef().numSteps = (uint32_t)std::max(1.0f, value);  return true; }
-        // Items 3-5: one key per filter stage, so a sweep can isolate the denoise from the
-        // temporal from the upsample instead of measuring the whole chain at once.
-        if (setting == "gtao.denoise")     { scene.GtaoRef().denoise = value != 0.0f; return true; }
-        if (setting == "gtao.temporal")    { scene.GtaoRef().temporal = value != 0.0f; return true; }
-        if (setting == "gtao.filterRadius") { scene.GtaoRef().filterRadius = (uint32_t)std::max(0.0f, value); return true; }
-        if (setting == "gtao.filterPlaneTolerance") { scene.GtaoRef().filterPlaneTolerance = value; return true; }
-        if (setting == "gtao.temporalBlendWeight") { scene.GtaoRef().temporalBlendWeight = value; return true; }
-        if (setting == "gtao.temporalClampRange") { scene.GtaoRef().temporalClampRange = value; return true; }
-        if (setting == "gtao.useGBufferNormal") { scene.GtaoRef().useGBufferNormal = value != 0.0f; return true; }
-        if (setting == "gtao.useHzb") { scene.GtaoRef().useHzb = value != 0.0f; return true; }
-        if (setting == "gtao.hzbMipBias") { scene.GtaoRef().hzbMipBias = (uint32_t)std::max(0.0f, value); return true; }
-        // P16.4. `skyRadius` at or below `worldRadius` switches the second horizon walk off, which
-        // is the exact-no-op baseline for the A/B.
-        if (setting == "gtao.skyRadius") { scene.GtaoRef().skyRadius = value; return true; }
-        if (setting == "gtao.skyMipBias") { scene.GtaoRef().skyMipBias = (uint32_t)std::max(0.0f, value); return true; }
-        // Mid-range intensity; 0 = the sky walk's compute path is off entirely (exact no-op).
-        if (setting == "gtao.skyIntensity") { scene.GtaoRef().skyIntensity = std::max(0.0f, value); return true; }
-        // The directional-clipmap knobs the Developer window already carries, exposed to the
-        // harness. Shadow bias is judged by A/B and the GUI cannot be driven headlessly, so
-        // without these a clipmap artifact can only be argued about, not measured. They are
-        // process globals, not scene state -- deliberately, so they survive a level switch the
-        // way the dev-window sliders do.
-        // Texture streaming (plan §6). forceMips is the A2 test knob: every streamable texture wants
-        // clamp(N) mips, so `--sweep=streaming.forceMips:12,4,12,4` drives swaps both ways.
-        if (setting == "streaming.enabled")       { streaming::g_enabled_game = value != 0.0f; return true; }
-        if (setting == "streaming.tempMemoryMB")  { streaming::g_tempMemoryMB_game = std::max(1, static_cast<int>(value)); return true; }
-        if (setting == "streaming.maxPerFrame")   { streaming::g_maxPerFrame_game = std::max(0, static_cast<int>(value)); return true; }
-        if (setting == "streaming.forceMips")     { streaming::g_forceMips_game = static_cast<int>(value); return true; }
-        if (setting == "streaming.maxIoInFlight") { streaming::g_maxIoInFlight_game = std::max(1, static_cast<int>(value)); return true; }
-        if (setting == "streaming.poolSizeMB")    { streaming::g_poolSizeMB_game = std::max(-1, static_cast<int>(value)); return true; }
-        if (setting == "streaming.mipBias")       { streaming::g_mipBias_game = std::clamp(static_cast<int>(value), 0, 8); return true; }
-        if (setting == "streaming.boost")         { streaming::g_boost_game = std::clamp(value, 0.1f, 8.0f); return true; }
-        if (setting == "streaming.hiddenScale")   { streaming::g_hiddenScale_game = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "streaming.framesForFullUpdate") { streaming::g_framesForFullUpdate_game = std::max(1, static_cast<int>(value)); return true; }
-        if (setting == "streaming.minMipForSplit") { streaming::g_minMipForSplit_game = static_cast<int>(value); return true; }
-        if (setting == "streaming.perTextureBias") { streaming::g_perTextureBias_game = value != 0.0f; return true; }
-        if (setting == "streaming.fullyLoadUsed") { streaming::g_fullyLoadUsed_game = value != 0.0f; return true; }
-        if (setting == "streaming.dropMips")      { streaming::g_dropMips_game = std::clamp(static_cast<int>(value), 0, 2); return true; }
-        if (setting == "streaming.selftest")      { streaming::g_selftest_game = value != 0.0f; return true; }
-        if (setting == "streaming.dumpRows")      { streaming::g_dumpRows_game = value != 0.0f; return true; }
-        if (setting == "streaming.mipFade")       { streaming::g_mipFade_game = value != 0.0f; return true; }
-        if (setting == "streaming.mipFadeIn")     { streaming::g_mipFadeIn_game = std::clamp(value, 0.01f, 10.0f); return true; }
-        if (setting == "streaming.mipFadeOut")    { streaming::g_mipFadeOut_game = std::clamp(value, 0.01f, 10.0f); return true; }
-        if (setting == "vsm.clipmapDepthBias")  { vsm::g_clipmapDepthBias_game = value;  return true; }
-        // Per-level depth-bias shaping (bias(L) = max(base * decay^L, floorTexels), see
-        // VsmClipmapShadow) -- headless mirrors of the two dev-window sliders beside the base bias.
-        if (setting == "vsm.clipmapDepthBiasDecay") { vsm::g_clipmapDepthBiasDecay_game = std::clamp(value, 0.01f, 1.0f); return true; }
-        if (setting == "vsm.clipmapDepthBiasFloor") { vsm::g_clipmapDepthBiasFloorTexels_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias_game = value; return true; }
-        if (setting == "vsm.clipmapFirstLevel") { vsm::g_clipmapFirstLevel_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
-        if (setting == "vsm.resolutionLodBiasDirectional") { vsm::g_resolutionLodBiasDirectional_game = std::clamp(value, -4.0f, 4.0f); return true; }
-        if (setting == "vsm.clipmapPan") { vsm::g_clipmapPan_game = value != 0.0f; return true; }
-        if (setting == "vsm.cullBackfacingPixels") { vsm::g_cullBackfacingPixels_game = value != 0.0f; return true; }
-        if (setting == "vsm.pageDilation") { vsm::g_pageDilation_game = std::clamp(value, 0.0f, 0.5f); return true; }
-        if (setting == "vsm.markCoarsePages") { vsm::g_markCoarsePages_game = std::clamp(static_cast<int>(value), 0, 3); return true; }
-        if (setting == "vsm.coarseCacheDynamic") { vsm::g_coarseCacheDynamic_game = value != 0.0f; return true; }
-        if (setting == "vsm.coarsePagePixelsStatic") { vsm::g_coarsePagePixelsStatic_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.coarsePagePixelsDynamic") { vsm::g_coarsePagePixelsDynamic_game = std::max(0.0f, value); return true; }
-        // r.Shadow.Virtual.Clipmap.ZRangeScale: reach up-sun as a multiple of the level radius.
-        // 10 reproduces the old `extent * 5`; UE ship 1000.
-        if (setting == "vsm.clipmapZRangeScale") { vsm::g_clipmapZRangeScale_game = std::max(1.0f, value); return true; }
-        // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap SampleCmp path -- the A/B arm.
-        if (setting == "vsm.smrtRayCount") { vsm::g_smrtRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
-        if (setting == "vsm.smrtSamplesPerRay") { vsm::g_smrtSamplesPerRay_game = (std::uint32_t)std::clamp(value, 1.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
-        if (setting == "vsm.localSmrtRayCount") { vsm::g_localSmrtRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
-        if (setting == "vsm.localSmrtSamplesPerRay") { vsm::g_localSmrtSamplesPerRay_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
-        if (setting == "vsm.localSmrtTexelDitherScale") { vsm::g_localSmrtTexelDitherScale_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "vsm.localSmrtExtrapolateMaxSlope") { vsm::g_localSmrtExtrapolateMaxSlope_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.localSmrtMaxSlopeBias") { vsm::g_localSmrtMaxSlopeBias_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.localSmrtMaxRayAngle") { vsm::g_localSmrtMaxRayAngle_game = std::clamp(value, 0.001f, 1.5f); return true; }
-        if (setting == "vsm.smrtRayLengthScale") { vsm::g_smrtRayLengthScale_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.smrtExtrapolateMaxSlope") { vsm::g_smrtExtrapolateMaxSlope_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.smrtSourceAngleDeg") { vsm::g_smrtSourceAngleDeg_game = std::clamp(value, 0.0f, 45.0f); return true; }
-        if (setting == "vsm.smrtTexelDitherScale") { vsm::g_smrtTexelDitherScale_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "vsm.smrtTemporalDither") { vsm::g_smrtTemporalDither_game = value != 0.0f; return true; }
-        if (setting == "vsm.smrtAdaptiveRayCount") { vsm::g_smrtAdaptiveRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, 16.0f); return true; }
-        if (setting == "vsm.smrtScreenRayLength") { vsm::g_smrtScreenRayLength_game = std::clamp(value, 0.0f, 0.5f); return true; }
-        if (setting == "vsm.smrtScreenRaySamples") { vsm::g_smrtScreenRaySamples_game = (std::uint32_t)std::clamp(value, 1.0f, 16.0f); return true; }
-        // Contact shadows (S12) -- shadow-mode independent, so they are not under vsm.*
-        if (setting == "contact.enabled") { render::contact::g_enabled_game = value != 0.0f; return true; }
-        if (setting == "contact.length") { render::contact::g_length_game = std::max(0.0f, value); return true; }
-        if (setting == "contact.lengthInWorldSpace") { render::contact::g_lengthInWorldSpace_game = value != 0.0f; return true; }
-        if (setting == "contact.normalOffset") { render::contact::g_normalOffsetFrac_game = std::clamp(value, 0.0f, 2.0f); return true; }
-        if (setting == "contact.grazingFade") { render::contact::g_grazingFadeNdotL_game = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "contact.minDistance") { render::contact::g_minDistanceM_game = std::max(0.0f, value); return true; }
-        if (setting == "contact.maxDistance") { render::contact::g_maxDistanceM_game = std::max(0.0f, value); return true; }
-        if (setting == "contact.fadeBand") { render::contact::g_fadeBandM_game = std::max(0.1f, value); return true; }
-        if (setting == "contact.thickness") { render::contact::g_maxThicknessFrac_game = std::max(0.0f, value); return true; }
-        if (setting == "contact.temporal") { render::contact::g_temporalDither_game = value != 0.0f; return true; }
-        if (setting == "contact.localMode") { render::contact::g_localMode_game = (std::uint32_t)std::clamp(value, 0.0f, 3.0f); return true; }
-        if (setting == "contact.intensity") { render::contact::g_intensity_game = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "contact.steps") { render::contact::g_steps_game = (std::uint32_t)std::clamp(value, 1.0f, 32.0f); return true; }
-        // The dev-window "Shadow LOD bias" slider, headless. A change triggers the same GPU-idle
-        // caster rebuild the slider does (Scene::ReconcileShadowLodBias polls it) — which is the
-        // point: the round-trip perf leak is only reproducible in ONE process
-        // (docs/bug_shadow_lod_bias_perf.md §6).
-        if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias_game = (int)value; return true; }
-        // Caster-vs-receiver LOD floor (LodSelect.h). Off = the old per-view-only caster LOD.
-        if (setting == "vsm.pageCaching")  { vsm::g_pageCaching_game = value != 0.0f; return true; }
-        // Tessy N3 (docs/tessy_plan.md): the VSM page render draws the casters with clusters cluster by cluster; the
-        // cull's sway pad (0 only to see what it prevents). Live: the next frame's builder reads them.
-        if (setting == "tessy.enabled") { tessy::g_enabled_game = value != 0.0f; return true; } // the master switch
-        if (setting == "tessy.debug") { tessy::g_debugView_game = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; } // the cluster view
-        if (setting == "tessy.vsm") { tessy::g_vsm_game = value != 0.0f; return true; }
-        if (setting == "tessy.windPad") { tessy::g_vsmWindPad_game = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
-        if (setting == "tessy.validate") { tessy::g_vsmValidate_game = value != 0.0f; return true; }
-        if (setting == "tessy.raster") { tessy::g_vsmMeshShader_game = value != 0.0f; return true; } // N6: 1 mesh shader, 0 VS
-        if (setting == "tessy.atlas") { tessy::g_atlas_game = value != 0.0f; return true; } // N4: the lamps' atlas views
-        if (setting == "tessy.gbuffer") { tessy::g_gbuffer_game = value != 0.0f; return true; } // N5: the camera's G-buffer
-        if (setting == "tessy.sdsm") { tessy::g_sdsm_game = value != 0.0f; return true; } // the SDSM sun partitions
-        if (setting == "tessy.gbufferHzb") { tessy::g_gbufferHzb_game = value != 0.0f; return true; } // N5: its clusters' HZB test
-        if (setting == "tessy.ordered") { tessy::g_ordered_game = value != 0.0f; return true; } // the camera's records in draw order
-        if (setting == "tessy.camSplit") { tessy::g_camSplit_game = static_cast<unsigned>(std::clamp(value, 1.0f, 32.0f)); return true; }
-        if (setting == "tessy.lod") { tessy::g_lod_game = value != 0.0f; return true; } // N7: the cluster DAG's cut
-        if (setting == "tessy.lodShadowTexels") { tessy::g_lodShadowTexels_game = std::max(value, 0.01f); return true; }
-        if (setting == "tessy.lodPixelError") { tessy::g_lodPixelError_game = std::clamp(value, 0.25f, 64.0f); return true; } // the DAG's
-        if (setting == "tessy.lodBand") { tessy::g_lodBand_game = value != 0.0f; return true; } // N7e: the camera DAG's level band
-        if (setting == "tessy.sunCut") { tessy::g_sunCameraCut_game = value != 0.0f; return true; } // SDSM: the camera's DAG cut
-        if (setting == "tessy.vsmCameraCut") { tessy::g_vsmCameraCut_game = value != 0.0f; return true; } // VSM clipmap pages: the same
-        if (setting == "tessy.clusterCull") { tessy::g_clusterCull_game = value != 0.0f; return true; } // clusters holding no sample
-        if (setting == "tessy.msCull") { tessy::g_vsmMsCull_game = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
-        if (setting == "vsm.windRange") { vsm::g_windRange_game = std::max(0.0f, value); return true; }
-        if (setting == "vsm.windPageMarks") { vsm::g_windPageMarks_game = value != 0.0f; return true; } // the wind's pages: marked only
-        if (setting == "vsm.windSliceTexels") { vsm::g_windSliceTexels_game = std::max(0.0f, value); return true; } // the wind's levels in slices
-        if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod_game = value != 0.0f; return true; }
-        if (setting == "vsm.hzbCull")      { vsm::g_hzbCull_game = value != 0.0f; return true; } // occlusion plan S5b.2
-        if (setting == "vsm.shadowLodBiasNearTier") { render::g_shadowLodBiasNearTier_game = value != 0.0f; return true; }
-        if (setting == "vsm.shadowLodTierStride")
-        {
-            render::g_shadowLodTierStride_game = std::clamp((int)value, 1, 8);
-            return true;
-        }
-        // Chunked-terrain LOD selection curve (per-chunk camera tiers; the caster matches the drawn
-        // LOD by construction, so these trade triangles for pop-in distance only — no rebuild).
-        if (setting == "lod.chunkDist0")  { render::g_chunkLodDist0_game = std::max(1.0f, value); return true; }
-        if (setting == "lod.chunkFactor") { render::g_chunkLodDistFactor_game = std::max(1.01f, value); return true; }
-        // Regular-mesh LOD selection (distance/radius tier boundaries; the dev "LOD" tab's sliders)
-        // + the master enable and the per-mesh force, so a LOD capture needs no GUI.
-        if (setting == "lod.bound0")  { render::g_lodBound0_game = std::max(0.5f, value); return true; }
-        if (setting == "lod.bound1")  { render::g_lodBound1_game = std::max(0.5f, value); return true; }
-        if (setting == "lod.bound2")  { render::g_lodBound2_game = std::max(0.5f, value); return true; }
-        // UE's lod.TemporalLag: the seconds a LOD change dissolves over (temporal dither); 0 = hard switches.
-        if (setting == "lod.temporalLag") { render::g_lodTemporalLag_game = std::clamp(value, 0.0f, 2.0f); return true; }
-        // UE's static-mesh LOD (LodSelect.h): 1 = per-mesh screen sizes (default), 0 = the bounds above;
-        // its PixelError (the automatic screen sizes) and r.StaticMeshLODDistanceScale.
-        if (setting == "lod.ue") { render::g_lodUeScreenSize_game = value != 0.0f; return true; }
-        if (setting == "lod.pixelError") { render::g_lodPixelError_game = std::clamp(value, 0.25f, 64.0f); return true; }
-        if (setting == "lod.distanceScale") { render::g_lodDistanceScale_game = std::clamp(value, 0.1f, 8.0f); return true; }
-        // S8 A/B lever: 1 = soft ramp + Gather tent (default), 0 = the legacy 3x3 SampleCmp box.
-        if (setting == "csm.filterMode") { scene.CascadeConfig().filterMode = (uint32_t)std::clamp((int)value, 0, 2); return true; }
-        // The three filter knobs beside the kernel selector, so a softness A/B is a command line.
-        // Artist units here, exactly as the sliders show them: the *7+1 mapping to shader units
-        // happens once, on the CPU, where UE do it too.
-        if (setting == "csm.sharpen") { scene.CascadeConfig().shadowFilterSharpen = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "csm.receiverBias") { scene.CascadeConfig().csmReceiverBias = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "csm.overBlurCorrect") { scene.CascadeConfig().pcfOverBlurCorrection = value != 0.0f; return true; }
-        // S6: UE's three legacy-CSM bias cvars.
-        if (setting == "csm.slopeScale") { scene.CascadeConfig().slopeScale = std::max(0.0f, value); return true; }
-        if (setting == "csm.maxSlope") { scene.CascadeConfig().maxSlope = std::max(0.0f, value); return true; }
-        if (setting == "csm.depthBias")  { scene.CascadeConfig().depthBiasInTexels  = std::max(0.0f, value); return true; }
-        if (setting == "csm.normalBias") { scene.CascadeConfig().normalBiasInTexels = std::max(0.0f, value); return true; }
-        // S10. UE clamp CascadeTransitionFraction to 0.3; the same cap applies to both.
-        // Shadow distance, headless. S10's terminator lives at this plane, and on a small level
-        // it is otherwise off-screen -- pulling it in is how the fade gets tested at all.
-        if (setting == "csm.maxDistance")
-        {
-            CascadeShadowConfig& c = scene.CascadeConfig();
-            const float f = std::max(1.0f, value);
-            const float scale = f / std::max(1e-3f, c.maxDistance);
-            c.maxDistance = f;
-            // Scale the authored splits with it, or BuildSplitScheme clamps them all to the new
-            // far and every cascade collapses onto the same plane.
-            for (float& d : c.sliceDistances) { d *= scale; }
-            return true;
-        }
-        if (setting == "csm.blendFraction") { scene.CascadeConfig().blendFraction = std::clamp(value, 0.0f, 0.3f); return true; }
-        if (setting == "csm.distanceFade")  { scene.CascadeConfig().distanceFadeFraction = std::clamp(value, 0.0f, 0.3f); return true; }
-        // S11 [r.Shadow.CSMScissorOptim]: scissor each cascade's depth pass to the camera's view cone.
-        if (setting == "csm.scissorOptim") { scene.CascadeConfig().scissorOptim = value != 0.0f; return true; }
-        if (setting == "csm.scissorPad")   { scene.CascadeConfig().scissorPadTexels = std::clamp(value, 0.0f, 64.0f); return true; }
-        // S14 [UE ShadowBoundsAccurate]: cull cascade casters against the slice extruded toward the sun.
-        if (setting == "csm.accurateCull") { scene.CascadeConfig().accurateCasterCull = value != 0.0f; return true; }
-        if (setting == "csm.hzbCull") { scene.CascadeConfig().hzbCull = value != 0.0f; return true; } // occlusion plan S5b
-        // The atlas edge, shared by Legacy and SDSM. A process global (it outlives a level switch
-        // and is a RESOURCE size, not per-scene tuning); applied at GPU idle by
-        // Scene::ReconcileShadowMode, so setting it here is safe at any time.
-        if (setting == "csm.atlasRes")
-        {
-            render::g_csmAtlasRes_game = static_cast<unsigned>(std::clamp(value,
-                static_cast<float>(render::kCsmAtlasResMin), static_cast<float>(render::kCsmAtlasResMax)));
-            return true;
-        }
-        // S15 (SDSM). Process globals, so no `scene` -- they must survive a level switch and be
-        // settable before any Scene exists, exactly like the mode switch itself.
-        if (setting == "sdsm.partitions") { render::sdsm::g_partitions_game = (std::uint32_t)std::clamp(value, 1.0f, (float)render::sdsm::kMaxPartitions); return true; }
-        if (setting == "sdsm.borderTexels") { render::sdsm::g_borderTexels_game = std::clamp(value, 0.0f, 32.0f); return true; }
-        if (setting == "sdsm.dilation") { render::sdsm::g_dilation_game = std::clamp(value, 0.0f, 0.45f); return true; }
-        if (setting == "sdsm.minScaleOverSphere") { render::sdsm::g_minScaleOverSphere_game = std::clamp(value, 0.001f, 1.0f); return true; }
-        if (setting == "sdsm.zMargin") { render::sdsm::g_zMargin_game = std::clamp(value, 0.0f, 1000.0f); return true; }
-        if (setting == "sdsm.stabilityFrames") { render::sdsm::g_stabilityFrames_game = std::clamp(value, 0.0f, 240.0f); return true; }
-        if (setting == "sdsm.cacheFrames") { render::sdsm::g_cacheFrames_game = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
-        if (setting == "sdsm.cacheDilation") { render::sdsm::g_cacheDilation_game = std::clamp(value, 0.0f, 0.5f); return true; }
-        if (setting == "sdsm.texelSnap") { render::sdsm::g_texelSnap_game = value != 0.0f; return true; }
-        if (setting == "sdsm.sizeHysteresis") { render::sdsm::g_sizeHysteresis_game = std::clamp(value, 0.0f, 0.5f); return true; }
-        if (setting == "sdsm.evsm") { render::sdsm::g_evsm_game = value != 0.0f; return true; }
-        if (setting == "sdsm.evsmPos") { render::sdsm::g_evsmPos_game = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }
-        if (setting == "sdsm.evsmNeg") { render::sdsm::g_evsmNeg_game = std::clamp(value, 1.0f, render::sdsm::kEvsmMaxExponent); return true; }
-        if (setting == "sdsm.blur") { render::sdsm::g_evsmBlur_game = std::clamp(value, 0.0f, 0.25f); return true; }
-        if (setting == "sdsm.blurMaxTexels") { render::sdsm::g_evsmBlurMaxTexels_game = std::clamp(value, 1.0f, 64.0f); return true; }
-        // Occlusion plan S1: per-chunk / per-GI-instance frustum mask below the object cull. 0 = rollback.
-        if (setting == "vis.chunkMask") { render::g_visChunkMask_game = value != 0.0f; return true; }
-        // Occlusion plan S3a: hardware occlusion queries with history. method 0 off / 1 queries /
-        // 2 hzb (S3b); latency in frames (1 = UE desktop, a fence wait per frame); the UEngine
-        // config values the plan documents as unverified.
-        if (setting == "vis.method") { vis::g_occlusion_game.method = std::clamp((int)value, 0, 2); return true; }
-        if (setting == "vis.queryLatency") { vis::g_occlusion_game.queryLatency = std::clamp((int)value, 1, (int)vis::kOcclusionBufferedFrames); return true; }
-        if (setting == "vis.probablyVisibleTime") { vis::g_occlusion_game.probablyVisibleTime = std::max(0.0f, value); return true; }
-        if (setting == "vis.maxPixelsFraction") { vis::g_occlusion_game.maxPixelsFraction = std::clamp(value, 0.001f, 1.0f); return true; }
-        if (setting == "vis.cutAngle") { vis::g_occlusion_game.cutAngleDeg = std::max(0.0f, value); return true; }
-        if (setting == "vis.cutDistance") { vis::g_occlusion_game.cutDistance = std::max(0.0f, value); return true; }
-        if (setting == "vis.neverTestDistance") { vis::g_occlusion_game.neverTestDistance = std::max(0.0f, value); return true; }
-        if (setting == "vis.indirectQueries") { vis::g_occlusion_game.indirectQueries = value != 0.0f; return true; } // occlusion plan S6
-        // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
-        // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
-        // if a capture can select the path.
-        // The sun's shadow machinery, 0 Legacy CSM / 1 VSM / 2 SDSM -- the developer window's combo (Ctrl+V)
-        // writes the same global; Scene::ReconcileShadowMode applies it at its GPU-idle point.
-        if (setting == "shadow.mode")
-        {
-            render::g_shadowMode_game = static_cast<render::ShadowMode>(std::clamp(static_cast<int>(value), 0, 2));
-            return true;
-        }
-        if (setting == "shadow.indirect") { render::g_indirectShadowsEnabled_game = value != 0.0f; return true; }
-        // Local-light shadow plan S1: 1 = UE's spot / point biases, 0 = the old ones (the A/B).
-        if (setting == "shadow.localBiasUe") { render::g_localShadowBiasUe_game = value != 0.0f; return true; }
-        // Plan S2: 1 = UE's spot / point filters, 0 = the old 3x3 boxes.
-        if (setting == "shadow.localFilterUe") { render::g_localShadowFilterUe_game = value != 0.0f; return true; }
-        // Plan S3: 1 = UE's shadow fade by on-screen resolution, 0 = every shadowed light at full strength.
-        if (setting == "shadow.localFadeUe") { render::g_localShadowFadeUe_game = value != 0.0f; return true; }
-        // Plan S4: 1 = UE's LINEAR spot depth (SV_Depth) and its 1 mm near, 0 = the perspective depth and 0.1 m.
-        if (setting == "shadow.spotLinearDepth") { render::g_spotShadowLinearDepth_game = value != 0.0f; return true; }
-        // ...the point cube faces' linear depth, and UE's 1 cm near for them (0 = the old max(0.2, 2 % of the radius)).
-        if (setting == "shadow.pointLinearDepth") { render::g_pointShadowLinearDepth_game = value != 0.0f; return true; }
-        if (setting == "shadow.pointNearUe") { render::g_pointShadowNearUe_game = value != 0.0f; return true; }
-        // Peter-panning hunt: a multiplier on the atlas-mode local lights' UE shadowBias.
-        // The peter-panning fix: the TEXEL bias (VSM's local model on the atlases) and its two sizes in shadow texels.
-        if (setting == "shadow.localBiasTexel") { render::g_localShadowBiasTexel_game = value != 0.0f; return true; }
-        if (setting == "shadow.localNormalTexels") { render::g_localShadowNormalTexels_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "shadow.localPushTexels") { render::g_localShadowPushTexels_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "shadow.localCompact") { render::g_localShadowCompact_game = value != 0.0f; return true; } // S6a
-        if (setting == "shadow.localCache") { render::g_localShadowCache_game = value != 0.0f; return true; } // S7
-        if (setting == "shadow.localCacheWind") { render::g_localShadowCacheWind_game = value != 0.0f; return true; } // S7
-        // The lamps' shadows sway only within this many metres of the camera (< 0 = everywhere).
-        if (setting == "shadow.localWindRange") { render::g_localShadowWindRange_game = std::min(value, 100000.0f); return true; }
-        if (setting == "shadow.localDirectRead") { render::g_localShadowDirectRead_game = value != 0.0f; return true; } // S7
-        // Plan S9e: UE's caster culling for the local views -- the light's bounds, the light + camera hull, the radius
-        // threshold (a share of the distance to the camera, 0 = off).
-        if (setting == "shadow.localBoundsCull") { render::g_localShadowBoundsCull_game = value != 0.0f; return true; }
-        if (setting == "shadow.localHullCull") { render::g_localShadowHullCull_game = value != 0.0f; return true; }
-        if (setting == "shadow.localRadiusThreshold")
-        {
-            render::g_localShadowRadiusThreshold_game = std::clamp(value, 0.0f, 1.0f);
-            return true;
-        }
-        if (setting == "shadow.cullValidate") { render::g_shadowCullRevalidate_game = value != 0.0f; return true; }
-        // Plan S10b: the VSM local lights' receiver push (the Developer window's VSM section has the same three).
-        if (setting == "vsm.localTexelBias") { vsm::g_localTexelBias_game = value != 0.0f; return true; }
-        if (setting == "vsm.localLateralTexels") { vsm::g_localLateralTexels_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "vsm.localDepthPushTexels") { vsm::g_localDepthPushTexels_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        // Plan S10e: UE's dynamic VSM resolution (0 = off).
-        if (setting == "vsm.dynamicResMaxLodBias") { vsm::g_dynamicResMaxLodBias_game = std::clamp(value, 0.0f, 4.0f); return true; }
-        if (setting == "vsm.dynamicResMaxPoolLoad") { vsm::g_dynamicResMaxPoolLoad_game = std::clamp(value, 0.0f, 1.0f); return true; }
-        // Plan S10e: UE's local-light mip by the pixel footprint (0 = by camera distance) and its bias.
-        if (setting == "vsm.localMipFromPixel") { vsm::g_localMipFromPixel_game = value != 0.0f; return true; }
-        if (setting == "vsm.requestLightCull") { vsm::g_requestLightCull_game = value != 0.0f; return true; }
-        if (setting == "vsm.waterCasterMask") { vsm::g_waterCasterMask_game = static_cast<int>(value); return true; }
-        if (setting == "vsm.lightPageRemap") { vsm::g_lightPageRemap_game = value != 0.0f; return true; } // S10c
-        if (setting == "vsm.maxLightAge") // S10c: UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest
-        {
-            vsm::g_maxLightAgeFrames_game = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1000.0f));
-            return true;
-        }
-        if (setting == "vsm.lruFrames") // the pool's page age (graphics settings vsm.lruFrames, same range)
-        {
-            vsm::g_lruThreshold_game = static_cast<std::uint32_t>(std::clamp(value, 1.0f, static_cast<float>(vsm::kMaxLruFrames)));
-            return true;
-        }
-        // Plan S10d: UE r.Shadow.Virtual.DistantLightMode (0 = off, 1 = on) and MaxDistantUpdatePerFrame (< 0 = all).
-        if (setting == "vsm.distantLightMode") { vsm::g_distantLightMode_game = value != 0.0f ? 1 : 0; return true; }
-        if (setting == "vsm.maxDistantUpdatePerFrame")
-        {
-            vsm::g_maxDistantUpdatesPerFrame_game = static_cast<int>(std::clamp(value, -1.0f, 1000.0f));
-            return true;
-        }
-        if (setting == "vsm.redrawUnrequestedFrames") // a page redrawn for nobody this long goes (0 = off)
-        {
-            vsm::g_redrawUnrequestedFrames_game = static_cast<std::uint32_t>(std::clamp(value, 0.0f, static_cast<float>(vsm::kMaxLruFrames)));
-            return true;
-        }
-        if (setting == "vsm.resolutionLodBiasLocal") { vsm::g_resolutionLodBiasLocal_game = std::clamp(value, -4.0f, 4.0f); return true; }
-        // Plan S10e: UE r.Shadow.Virtual.ResolutionLodBiasLocalMoving / r.Shadow.Scene.LightActiveFrameCount.
-        if (setting == "vsm.resolutionLodBiasLocalMoving") { vsm::g_resolutionLodBiasLocalMoving_game = std::clamp(value, -4.0f, 4.0f); return true; }
-        if (setting == "vsm.lightActiveFrameCount")
-        {
-            vsm::g_lightActiveFrameCount_game = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 1000.0f));
-            return true;
-        }
-        if (setting == "shadow.localViewsPerList") // S6b
-        {
-            render::g_localShadowViewsPerList_game = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));
-            return true;
-        }
-        if (setting == "shadow.localCacheMaxPages")
-        {
-            render::g_localShadowCacheMaxPages_game = static_cast<unsigned>(std::clamp(value, 1.0f,
-                static_cast<float>(render::kLocalShadowCacheMaxPagesLimit)));
-            return true;
-        }
-        // Plan S4: UE r.Shadow.MaxResolution for the spot / point atlases (Scene::ReconcileShadowMode reallocates).
-        if (setting == "shadow.localMaxRes")
-        {
-            render::g_localShadowMaxRes_game = static_cast<unsigned>(std::clamp(value,
-                static_cast<float>(render::kLocalShadowMaxResMin), static_cast<float>(render::kLocalShadowMaxResMax)));
-            return true;
-        }
-        // Plan S9: the most atlas pages each local-shadow pool may grow to (ReconcileShadowMode).
-        if (setting == "shadow.localMaxPages")
-        {
-            render::g_localShadowMaxPages_game = static_cast<unsigned>(std::clamp(value, 1.0f,
-                static_cast<float>(render::kLocalShadowMaxPagesLimit)));
-            return true;
-        }
-        // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
-        // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
-        // a headless gate can read its PASS/MISMATCH verdict from the session log.
-        if (setting == "shadow.giIndirect") { render::g_giIndirectShadowsEnabled_game = value != 0.0f; return true; }
-        if (setting == "gbuffer.indirect") { render::g_indirectGBufferEnabled_game = value != 0.0f; return true; } // occlusion plan S4
-        if (setting == "raster.bindless") { render::g_rasterBindless_game = value != 0.0f; return true; }          // texture streaming A6
-        if (setting == "gbuffer.hzb") { render::g_gbufferHzbCullEnabled_game = value != 0.0f; return true; }       // occlusion plan S5
-        // GPU triangle statistics for the Frame tab: 0 off, 1 always, 2 while the tab is open.
-        if (setting == "stats.pipeline") { render::g_pipelineStatsMode_game = std::clamp(static_cast<int>(value), 0, 2); return true; }
-        // Volumetric fog cell size (8 / 16 / 32 render pixels); the renderer picks the change up at the next frame.
-        if (setting == "fog.gridPixels") { render::g_fogGridPixels_game = static_cast<unsigned>(std::clamp(value, 4.0f, 64.0f)); return true; } // the renderer rounds to a power of two
-        if (setting == "fog.gridZ") { render::g_fogGridZ_game = static_cast<unsigned>(std::clamp(value, 16.0f, 128.0f)); return true; }
-        if (setting == "lod.enabled") { render::g_lodEnabled_game = value != 0.0f; return true; }
-        if (setting == "lod.forced")  { render::g_forcedLod_game = std::clamp((int)value, -1, 3); return true; }
-        // LOD selection debug view (dev "LOD" tab). 0 off, 1 tier colours, 2 apparent-triangle-size
-        // colours. Exposed here so a debug capture is a command line, not a click path.
-        if (setting == "lod.debug")         { render::g_lodDebugMode_game = static_cast<render::LodDebugMode>(std::clamp((int)value, 0, 2)); return true; }
-        if (setting == "lod.debugBoxes")    { render::g_lodDebugBoxes_game = value != 0.0f; return true; }
-        if (setting == "lod.debugLabels")   { render::g_lodDebugLabels_game = value != 0.0f; return true; }
-        if (setting == "lod.debugCriteria") { render::g_lodDebugCriteria_game = value != 0.0f; return true; }
-        if (setting == "lod.debugRegular")  { render::g_lodDebugRegularMeshes_game = value != 0.0f; return true; }
-        if (setting == "lod.debugRange")    { render::g_lodDebugRange_game = std::max(10.0f, value); return true; }
-        if (setting == "lod.debugMaxBoxes") { render::g_lodDebugMaxBoxes_game = std::max(0, (int)value); return true; }
-        // 0 = whole level, 1 = editor selection only. A headless run has no selection, so 1 there
-        // reports an empty view on purpose rather than silently meaning 0.
-        if (setting == "lod.debugFilter")   { render::g_lodDebugFilter_game = static_cast<render::LodDebugFilter>(std::clamp((int)value, 0, 1)); return true; }
-        // Mirror of the VSM page-stats log toggle, so a headless run can capture the resident/request
-        // counts (logs/vsm_pages.log) that the dev-window "VSM" tab shows live.
-        if (setting == "vsm.logPageStats")  { vsm::g_logPageStats_game = value != 0.0f; return true; }
-        if (setting == "gtao.strength") { scene.GtaoRef().strength = value; return true; }
-        if (setting == "gtao.upsampleTolerance") { scene.GtaoRef().upsampleTolerance = value; return true; }
-        // Where surface reflections come from: 0 None, 1 SkyOnly, 2 SSR, 3 RT. The DEFAULT IS RT,
-        // and on RT-capable hardware that means the screen-space path never runs -- so without this
-        // key there is no headless way to exercise, measure or gate SSR at all. (Found the hard way
-        // in P6C step 6: a "HiZ" capture that had quietly been tracing the TLAS.)
-        // Reflection trace resolution as a fraction of the RENDER resolution, the one DLSS takes
-        // (graphics_settings reflections.resolution; the RT and SSR traces run at it), for a 4K sweep.
-        if (setting == "reflections.resolution")
-        {
-            const float scale = std::clamp(value, 0.25f, 1.0f);
-            Systems::GetRenderer().SetReflectionTextureScale(Math::float2(scale, scale));
-            return true;
-        }
-        if (setting == "render.reflectionSource")
-        {
-            const uint32_t r = (uint32_t)std::max(0.0f, value);
-            renderSettings.reflectionSource = r < (uint32_t)ReflectionSource::Count
-                ? (ReflectionSource)r : ReflectionSource::RT;
-            return true;
-        }
-        // S16's roughness-driven reflection blur (Reflections "Glossy blur", graphics_settings `glossyBlur`):
-        // reflection-resolution pixels added to the blur at roughness 1.
-        if (setting == "reflections.glossyBlur") { renderSettings.reflectionGlossyScale = std::clamp(value, 0.0f, 24.0f); return true; }
-        // The RT reflection's GGX-lobe glossy filter; 0 = the separable blur above, the A/B.
-        if (setting == "reflections.lobe") { renderSettings.reflectionLobeBlur = value != 0.0f; return true; }
-        if (setting == "reflections.hitReprojection") { renderSettings.reflectionHitReprojection = value != 0.0f; return true; }
-        if (setting == "reflections.geometricNormal") { renderSettings.reflectionGeometricNormal = value != 0.0f; return true; }
-        // P6C/P13: which screen-space search the reflection ray uses. 0 = log march (fixed growing
-        // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
-        // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.
-        // Only has an effect when render.reflectionSource is 2 (SSR).
-        // Despite the prefix this now gates the temporal resolve for BOTH reflection sources —
-        // the RT reflection at half res boils under DLSS jitter just like the SSR buffer did.
-        if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
-        if (setting == "ssr.waterTemporal") { renderSettings.waterReflectionTemporal = value != 0.0f; return true; }
-        if (setting == "ssr.waterTemporalUnderDlss") { renderSettings.waterReflectionTemporalUnderDlss = value != 0.0f; return true; }
-        if (setting == "ssr.waterTemporalBlend") { renderSettings.waterReflectionTemporalBlend = value; return true; }
-        if (setting == "ssr.waterTemporalInertia") { renderSettings.waterReflectionTemporalStillInertia = value; return true; }
-        // EXPERIMENT (2026-10-12): the water traced from its own normal and read at the pixel (UE's way).
-        if (setting == "ssr.waterSurfaceNormal") { renderSettings.waterReflectionSurfaceNormal = value != 0.0f; return true; }
-        // FFT cascades in the water's reflection normal (4 = all, 2 = the swell only).
-        if (setting == "ssr.waterNormalCascades")
-        {
-            renderSettings.waterReflectionNormalCascades =
-                static_cast<uint32_t>(std::clamp(static_cast<int>(value + 0.5f), 1, 4));
-            return true;
-        }
-        if (setting == "reflections.oceanResolution")
-        {
-            const float scale = std::clamp(value, 0.25f, 1.0f);
-            Systems::GetRenderer().SetOceanReflectionTextureScale(Math::float2(scale, scale));
-            return true;
-        }
-        // The whole water-reflection variant in ONE value, so a single --sweep compares them:
-        // 0 = shipped (flat mirror + UV break-up, 0.5 of render, resolve off), 1 = UE (surface normal,
-        // full render res, resolve on with inertia 0), 2 = UE without the resolve, 3 = UE at 0.5 res.
-        if (setting == "ssr.waterExperiment")
-        {
-            const int variant = static_cast<int>(value + 0.5f);
-            renderSettings.waterReflectionSurfaceNormal = variant != 0;
-            renderSettings.waterReflectionTemporal = variant == 1 || variant == 3;
-            renderSettings.waterReflectionTemporalBlend = 0.125f;
-            renderSettings.waterReflectionTemporalStillInertia = 0.0f;
-            const float scale = (variant == 1 || variant == 2) ? 1.0f : 0.5f;
-            Systems::GetRenderer().SetOceanReflectionTextureScale(Math::float2(scale, scale));
-            return true;
-        }
-        // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
-        if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
-        // RT foliage alpha mode: 0 off (solid cards), 1 first-hit holes, 2 full candidates.
-        // rt.alphaTest stays as the legacy on/off alias.
-        if (setting == "rt.alphaMode")
-        {
-            renderSettings.rtAlphaMode = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f));
-            return true;
-        }
-        if (setting == "rt.alphaTest") { renderSettings.rtAlphaMode = value != 0.0f ? 2u : 0u; return true; }
-        // Interior lighting plan S: the RT sky visibility (SceneRenderSettings::skyVis*).
-        if (setting == "skyVis.enabled") { renderSettings.skyVisEnabled = value != 0.0f; return true; }
-        if (setting == "skyVis.rays") { renderSettings.skyVisRays = static_cast<uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
-        if (setting == "skyVis.maxDistance") { renderSettings.skyVisMaxDistance = std::clamp(value, 0.5f, 500.0f); return true; }
-        if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.995f); return true; }
-        if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "skyVis.specular") { renderSettings.skyVisSpecular = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "skyVis.filter") { renderSettings.skyVisFilter = value != 0.0f; return true; }
-        if (setting == "skyVis.filterFirst") { renderSettings.skyVisFilterFirst = value != 0.0f; return true; }
-        if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
-        if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
-        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 3.0f)); return true; }
-        if (setting == "skyVis.sampling") { renderSettings.skyVisSampling = value >= 0.5f ? 1u : 0u; return true; }
-        if (setting == "skyVis.filterRadius") { renderSettings.skyVisFilterRadius = static_cast<uint32_t>(std::clamp(value, 1.0f, 4.0f)); return true; }
-        // Plan S's fallback without RT (SkyOcclusionMap): 0 = the open sky without the trace, the A/B.
-        if (setting == "skyVis.fallback") { renderSettings.skyVisFallback = value != 0.0f; return true; }
-        if (setting == "skyVis.fallbackOpacity") { renderSettings.skyVisFallbackOpacity = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "skyVis.fallbackStart") { renderSettings.skyVisFallbackStart = std::clamp(value, 0.0f, 4.0f); return true; }
-        if (setting == "skyVis.fallbackResolution") { renderSettings.skyVisFallbackResolution = SkyOcclusionMap::ClampResolution(static_cast<uint32_t>(std::clamp(value, 1.0f, 4096.0f))); return true; }
-        if (setting == "skyVis.fallbackTexel") { renderSettings.skyVisFallbackTexel = SkyOcclusionMap::ClampTexel(value); return true; }
-        if (setting == "skyVis.fallbackFade") { renderSettings.skyVisFallbackFade = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "skyVis.seedNearFirst") { renderSettings.skyVisSeedNearFirst = value != 0.0f; return true; }
-        if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }        if (setting == "skyVis.fogRays") { renderSettings.skyVisFogRays = static_cast<uint32_t>(std::clamp(value, 0.0f, 8.0f)); return true; }
-        // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
-        if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }
-        if (setting == "fog.depthThreshold") { renderSettings.fogDepthThreshold = std::clamp(value, 0.0f, 128.0f); return true; }
-        if (setting == "fog.sunRtFallback") { renderSettings.fogSunRtFallback = value != 0.0f; return true; }
-        // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
-        if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
-        if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
-        if (setting == "gi.divisor") { renderSettings.giUpdateDivisor = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
-        if (setting == "gi.hysteresis") { renderSettings.giHysteresis = std::clamp(value, 0.0f, 0.99f); return true; }
-        if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
-        if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
-        if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
-        if (setting == "gi.rays") { renderSettings.giRays = static_cast<uint32_t>(std::clamp(value, 16.0f, 64.0f)); return true; }
-        if (setting == "gi.fixedRayPeriod") { renderSettings.giFixedRayPeriod = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
-        if (setting == "gi.skyRay") { renderSettings.giSkyRay = value != 0.0f; return true; }
-        if (setting == "gi.lights") { renderSettings.giLights = value != 0.0f; return true; }
-        if (setting == "gi.bounceVisibility") { renderSettings.giBounceVisibility = value != 0.0f; return true; }
-        if (setting == "gi.skipInactive") { renderSettings.giSkipInactive = value != 0.0f; return true; }
-        if (setting == "gi.sleepPeriod") { renderSettings.giSleepPeriod = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
-        if (setting == "gi.twoSidedSheets") { renderSettings.giTwoSidedSheets = value != 0.0f; return true; }
-        if (setting == "gi.far") { renderSettings.giFarCascade = value != 0.0f; return true; }
-        if (setting == "gi.farSpacing") { renderSettings.giFarSpacing = std::clamp(value, 0.5f, 8.0f); return true; }
-        if (setting == "gi.farDivisor") { renderSettings.giFarDivisor = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
-        if (setting == "gi.debug") { renderSettings.giDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
-        // Glass refraction: the glass under the surface in metres (0 = straight through, a few mm = a hollow
-        // tumbler, >= the shape's radius = solid -- the 0.5 default).
-        if (setting == "glass.wall") { renderSettings.glassWallThickness = std::clamp(value, 0.0f, 0.5f); return true; }
-        // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
-        if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
-        if (setting == "rt.meshOpacity") { renderSettings.rtMeshOpacity = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f) + 0.5f); return true; }
-        if (setting == "rt.cutoutOpacity") { renderSettings.rtCutoutOpacityOverride = std::min(value, 1.0f); return true; }
-        if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }
-        if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
-        if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }
-        if (setting == "ssr.ueQuality")
-        {
-            const uint32_t q = static_cast<uint32_t>(std::max(0.0f, value));
-            ApplyUeSsrQualityPreset(renderSettings.ssrUe,
-                q < static_cast<uint32_t>(UeSsrQualityPreset::Count)
-                    ? static_cast<UeSsrQualityPreset>(q) : UeSsrQualityPreset::Epic);
-            return true;
-        }
-        if (setting == "ssr.ueSteps")
-        {
-            renderSettings.ssrUe.numSteps = static_cast<uint32_t>(std::max(4.0f, value));
-            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
-            return true;
-        }
-        if (setting == "ssr.ueRays")
-        {
-            renderSettings.ssrUe.numRays = static_cast<uint32_t>(std::max(1.0f, value));
-            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
-            return true;
-        }
-        if (setting == "ssr.ueGlossy")
-        {
-            renderSettings.ssrUe.glossyRays = value != 0.0f;
-            renderSettings.ssrUe.preset = UeSsrQualityPreset::Custom;
-            return true;
-        }
-        if (setting == "ssr.ueUseSurfaceRoughness")
-        {
-            renderSettings.ssrUe.useSurfaceRoughness = value != 0.0f;
-            return true;
-        }
-        if (setting == "ssr.ueRoughnessOverride")
-        {
-            renderSettings.ssrUe.roughnessOverride = value;
-            return true;
-        }
-        if (setting == "ssr.ueIntensity") { renderSettings.ssrUe.intensity = value; return true; }
-        if (setting == "ssr.ueMaxRoughness") { renderSettings.ssrUe.maxRoughness = value; return true; }
-        // Time-of-day plan T3: with a Time of Day these put the sun there by solving its time and path
-        // (Scene::SetSunToward), so they keep meaning what they say on a converted level.
-        if (setting == "sun.elevation" || setting == "sun.azimuth")
-        {
-            const auto d = scene.GetSunToward();
-            float elevation = std::asin(std::clamp(d.y, -1.0f, 1.0f));
-            float azimuth = std::atan2(d.x, d.z);
-            constexpr float rad = 3.14159265358979323846f / 180.0f;
-            if (setting == "sun.elevation") elevation = std::clamp(value, -90.0f, 90.0f) * rad;
-            else azimuth = value * rad;
-            scene.SetSunToward(Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
-            return true;
-        }
-        // Plan part C: the clouds, every level-authored knob plus the session debug view. The
-        // names are the JSON keys of the `volumetricCloud` object (VolumetricCloudSettingsJson).
-        if (setting.rfind("cloud.", 0) == 0)
-        {
-            auto& c = scene.VolumetricCloudRef();
-            const std::string key = setting.substr(6);
-            if (key == "enabled") { c.enabled = value != 0.0f; return true; }
-            if (key == "debugView") { c.debugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
-            if (key == "seed") { c.seed = static_cast<std::uint32_t>(std::max(value, 0.0f)); return true; }
-            if (key == "temporal") { c.temporal = value != 0.0f; return true; }
-            if (key == "shadowMap") { c.shadowMap = value != 0.0f; return true; }
-            if (key == "msOctaves") { c.msOctaves = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
-            if (key == "viewSampleCountMax") { c.viewSampleCountMax = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 768.0f)); return true; }
-            if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 768.0f)); return true; }
-            if (key == "shadowSampleCount") { c.shadowSampleCount = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 80.0f)); return true; }
-            if (key == "shadowMapSampleCount") { c.shadowMapSampleCount = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 128.0f)); return true; }
-            struct FloatKnob { const char* name; float* field; float lo, hi; };
-            const FloatKnob knobs[] = {
-                { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
-                { "coverage", &c.coverage, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
-                { "extinctionScale", &c.extinctionScale, 0.0f, 20.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
-                { "formationChangeSpeed", &c.formationChangeSpeed, 0.0f, 100.0f },
-                { "macroVariation", &c.macroVariation, 0.0f, 1.0f }, { "macroTileKm", &c.macroTileKm, 1.0f, 1000.0f },
-                { "overcastFrom", &c.overcastFrom, 0.0f, 0.99f }, { "overcastEvenness", &c.overcastEvenness, 0.0f, 1.0f },
-                { "formationRoughness", &c.formationRoughness, 0.3f, 0.9f },
-                { "floorVariationClear", &c.floorVariationClear, 0.0f, 2.0f }, { "floorVariationCloudy", &c.floorVariationCloudy, 0.0f, 2.0f },
-                { "erosionStrength", &c.erosionStrength, 0.0f, 4.0f }, { "erosionPower", &c.erosionPower, 0.25f, 8.0f },
-                { "erosionTileKm", &c.erosionTileKm, 0.1f, 20.0f },
-                { "highFrequencyStrength", &c.highFrequencyStrength, 0.0f, 2.0f }, { "highFrequencyDistanceKm", &c.highFrequencyDistanceKm, 0.1f, 20.0f },
-                { "profileHeight", &c.profileHeight, 0.2f, 2.0f }, { "profileDome", &c.profileDome, 0.0f, 1.0f },
-                { "profileTopSoftness", &c.profileTopSoftness, 0.01f, 1.0f }, { "profileBaseSoftness", &c.profileBaseSoftness, 0.0f, 1.0f },
-                { "profileSmallDensity", &c.profileSmallDensity, 0.0f, 1.0f }, { "profileBodyDensity", &c.profileBodyDensity, 0.0f, 1.0f },
-                { "profileBaseErosion", &c.profileBaseErosion, 0.0f, 1.0f }, { "profileErosionRise", &c.profileErosionRise, 0.05f, 1.0f },
-                { "profileHeavyErosionCut", &c.profileHeavyErosionCut, 0.0f, 1.0f }, { "profileHeavyThinning", &c.profileHeavyThinning, 0.0f, 1.0f },
-                { "weatherTileKm", &c.weatherTileKm, 1.0f, 1000.0f },
-                { "windKmH", &c.windKmH, 0.0f, 500.0f }, { "phaseG", &c.phaseG, -0.99f, 0.99f },
-                { "phaseG2", &c.phaseG2, -0.99f, 0.99f }, { "phaseBlend", &c.phaseBlend, 0.0f, 1.0f },
-                { "msContribution", &c.msContribution, 0.0f, 1.0f }, { "msOcclusion", &c.msOcclusion, 0.0f, 1.0f },
-                { "msEccentricity", &c.msEccentricity, 0.0f, 1.0f }, { "skyLightBottomOcclusion", &c.skyLightBottomOcclusion, 0.0f, 1.0f },
-                { "skyLightIntensity", &c.skyLightIntensity, 0.0f, 10.0f }, { "diffuseLight", &c.diffuseLight, 0.0f, 10.0f },
-                { "reflectionHorizonFadeDeg", &c.reflectionHorizonFadeDeg, 0.0f, 45.0f },
-                { "distanceToSampleCountMaxKm", &c.distanceToSampleCountMaxKm, 0.1f, 1000.0f },
-                { "shadowTracingDistanceKm", &c.shadowTracingDistanceKm, 0.1f, 100.0f },
-                { "stopTracingTransmittance", &c.stopTracingTransmittance, 0.0f, 0.5f },
-                { "tracingStartMaxDistanceKm", &c.tracingStartMaxDistanceKm, 1.0f, 10000.0f },
-                { "tracingMaxDistanceKm", &c.tracingMaxDistanceKm, 1.0f, 1000.0f },
-                { "historyWeight", &c.historyWeight, 0.0f, 0.99f }, { "shadowExtentKm", &c.shadowExtentKm, 1.0f, 500.0f },
-                { "shadowStrength", &c.shadowStrength, 0.0f, 1.0f }, { "oceanBodyShadow", &c.oceanBodyShadow, 0.0f, 1.0f }, { "shadowSnapKm", &c.shadowSnapKm, 0.01f, 100.0f },
-                { "shadowHorizonFadeDeg", &c.shadowHorizonFadeDeg, 0.0f, 45.0f },
-                { "shadowDepthBiasKm", &c.shadowDepthBiasKm, -5.0f, 5.0f },
-            };
-            for (const FloatKnob& k : knobs)
-            {
-                if (key == k.name) { *k.field = std::clamp(value, k.lo, k.hi); return true; }
-            }
-            return false;
-        }
-        // Time-of-day plan T2: the level's clock. The names are the JSON keys of `timeOfDay`
-        // (TimeOfDaySettingsJson) where there is one; `speed` is the session's rate multiplier
-        // (--time-speed). `--time=HH:MM` / `--date=` / `--time-speed=` / `--time-freeze` land here too.
-        if (setting.rfind("tod.", 0) == 0)
-        {
-            TimeOfDay& tod = scene.TimeOfDayRef();
-            TimeOfDaySettings& t = tod.SettingsRef();
-            const std::string key = setting.substr(4);
-            if (!tod.Present())
-            {
-                LOG_WARNING_ONCE(logging::LogCategory::App,
-                                 "--set tod.*: this level has no timeOfDay section -- the clock does nothing here");
-            }
-            if (key == "time") { t.timeHours = value - 24.0f * std::floor(value / 24.0f); return true; }
-            if (key == "animate") { t.animate = value != 0.0f; return true; }
-            if (key == "speed") { tod.SetSpeed(std::max(value, 0.0f)); return true; }
-            if (key == "realPositions") { t.realPositions = value != 0.0f; return true; }
-            if (key == "year") { t.year = std::clamp(static_cast<int>(value), 1, 9999); return true; }
-            if (key == "month") { t.month = std::clamp(static_cast<int>(value), 1, 12); return true; }
-            if (key == "day") { t.day = std::clamp(static_cast<int>(value), 1, 31); return true; }
-            if (key == "moonEnabled") { t.moonEnabled = value != 0.0f; return true; }
-            if (key == "moonPhaseAuto") { t.moonPhaseAuto = value != 0.0f; return true; }
-            if (key == "moonPhase") { t.moonPhase = value - std::floor(value); return true; }
-            if (key == "nightSky") { t.nightSkyEnabled = value != 0.0f; return true; } // N2
-            // Ultra Dynamic Sky's fog colour by the sun's height (timeOfDay.fog.udsColor).
-            if (key == "fogUdsColor") { t.fogUdsColor = value != 0.0f; return true; }
-            // ...and its sky material over the atmosphere (timeOfDay.twilight.udsSkyMaterial).
-            if (key == "skyUdsMaterial") { t.skyUdsMaterial = value != 0.0f; return true; }
-            // ...and its moon: Night Brightness in full from the sunset (timeOfDay.moon.udsMoon).
-            if (key == "udsMoon") { t.udsMoon = value != 0.0f; return true; }
-            struct FloatKnob { const char* name; float* field; float lo, hi; };
-            const FloatKnob knobs[] = {
-                { "dayLengthMin", &t.dayLengthMin, 0.01f, 10000.0f }, { "nightLengthMin", &t.nightLengthMin, 0.01f, 10000.0f },
-                { "timeScale", &t.timeScale, 0.0f, 1.0e6f },
-                { "dawn", &t.dawnHours, 0.0f, 24.0f }, { "dusk", &t.duskHours, 0.0f, 24.0f },
-                { "pathYawDeg", &t.pathYawDeg, -360.0f, 360.0f }, { "pathTiltDeg", &t.pathTiltDeg, -89.0f, 89.0f },
-                { "heightOffset", &t.heightOffset, -1.0f, 1.0f }, { "extendTwilight", &t.extendTwilight, 0.0f, 1.0f },
-                { "latitude", &t.latitudeDeg, -90.0f, 90.0f }, { "longitude", &t.longitudeDeg, -180.0f, 180.0f },
-                { "utcOffset", &t.utcOffsetHours, -14.0f, 14.0f }, { "northYawDeg", &t.northYawDeg, -360.0f, 360.0f },
-                { "moonPathYawDeg", &t.moonPathYawDeg, -360.0f, 360.0f }, { "moonPathTiltDeg", &t.moonPathTiltDeg, -89.0f, 89.0f },
-                { "moonOrbitOffsetDeg", &t.moonOrbitOffsetDeg, -360.0f, 360.0f },
-                { "moonIlluminanceLux", &t.moonIlluminanceLux, 0.0f, 1000.0f },
-                { "moonNewBrightness", &t.moonNewBrightness, 0.0f, 1.0f },
-                { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
-                { "moonSoftAngleDeg", &t.moonSoftAngleDeg, 0.0f, 20.0f },
-                { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
-                { "moonDiscAdaptation", &t.moonDiscAdaptation, 0.0f, 1.0f },
-                { "moonLightShaftBloomScale", &t.moonLightShaftBloomScale, 0.0f, 10.0f },
-                { "moonLightShaftBloomThreshold", &t.moonLightShaftBloomThreshold, 0.0f, 50.0f },
-                { "moonLightShaftBloomMaxBrightness", &t.moonLightShaftBloomMaxBrightness, 0.0f, 1000.0f },
-                { "moonGlintPhaseFalloff", &t.moonGlintPhaseFalloff, 0.0f, 1.0f },
-                { "moonGlow", &t.moonGlow, 0.0f, 10.0f }, { "moonGlowRadiusDeg", &t.moonGlowRadiusDeg, 0.1f, 90.0f },
-                // N4: the disc's colour and the moon shafts' tint, by component (timeOfDay.moon.discColor / lightShaftTint).
-                { "moonDiscColorR", &t.moonDiscColor[0], 0.0f, 10.0f }, { "moonDiscColorG", &t.moonDiscColor[1], 0.0f, 10.0f },
-                { "moonDiscColorB", &t.moonDiscColor[2], 0.0f, 10.0f },
-                { "moonLightShaftTintR", &t.moonLightShaftTint[0], 0.0f, 10.0f },
-                { "moonLightShaftTintG", &t.moonLightShaftTint[1], 0.0f, 10.0f },
-                { "moonLightShaftTintB", &t.moonLightShaftTint[2], 0.0f, 10.0f },
-                { "nightBrightness", &t.nightBrightness, 0.0f, 100000.0f },
-                { "daySkyBrightness", &t.daySkyBrightness, 0.0f, 10.0f },
-                { "nightExposureEv", &t.nightExposureEv, -10.0f, 10.0f },
-                { "nightCameraEv100", &t.nightCameraEv100, -20.0f, 30.0f },
-                { "nightCameraFollow", &t.nightCameraFollow, 0.0f, 1.0f },
-                { "nightCameraOpenFrom", &t.nightCameraOpenFrom, 0.0f, 1.0f },
-                { "nightCameraOpenFull", &t.nightCameraOpenFull, 0.0f, 1.0f },
-                { "nightCameraIndoorLift", &t.nightCameraIndoorLift, 0.0f, 30.0f },
-                // Plan L: the night lamps' switch (timeOfDay.lamps.*).
-                { "lampSunElevationDeg", &t.lampSunElevationDeg, -90.0f, 90.0f },
-                { "lampRandomDelaySec", &t.lampRandomDelaySec, 0.0f, 600.0f },
-                { "lampTurnOnSec", &t.lampTurnOnSec, 0.0f, 600.0f },
-                { "lampTurnOnFlicker", &t.lampTurnOnFlicker, 0.0f, 1.0f },
-                { "lampTurnOnExponent", &t.lampTurnOnExponent, 0.01f, 10.0f },
-                { "lampDayBrightness", &t.lampDayBrightness, 0.0f, 100000.0f }, // always-on lamps by day (UDS's 5-lux sun)
-                // The height fog's density by the sun's height (timeOfDay.fog.*), multipliers on heightFog.density.
-                { "fogDayDensity", &t.fogDayDensity, 0.0f, 100.0f }, { "fogDuskDensity", &t.fogDuskDensity, 0.0f, 100.0f },
-                { "fogNightDensity", &t.fogNightDensity, 0.0f, 100.0f },
-                { "fogDayFullDeg", &t.fogDayFullDeg, -90.0f, 90.0f }, { "fogDuskDeg", &t.fogDuskDeg, -90.0f, 90.0f },
-                { "fogNightFullDeg", &t.fogNightFullDeg, -90.0f, 90.0f },
-                { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
-                // N2: the night sky's layers (timeOfDay.nightSky.*).
-                { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },
-                { "airglowColorR", &t.airglowColor[0], 0.0f, 10.0f }, { "airglowColorG", &t.airglowColor[1], 0.0f, 10.0f },
-                { "airglowColorB", &t.airglowColor[2], 0.0f, 10.0f },
-                { "milkyWay", &t.milkyWayBrightness, 0.0f, 1000.0f }, { "twinkle", &t.starTwinkle, 0.0f, 1.0f },
-                { "siderealAtMidnight", &t.siderealAtMidnightHours, -48.0f, 48.0f },
-                // The twilight as Ultra Dynamic Sky draws it (timeOfDay.twilight.*).
-                { "sunSkyStartDeg", &t.sunSkyStartDeg, -90.0f, 90.0f }, { "sunSkyFullDeg", &t.sunSkyFullDeg, -90.0f, 90.0f },
-                { "rayleighNightTintR", &t.rayleighNightTint[0], 0.0f, 10.0f },
-                { "rayleighNightTintG", &t.rayleighNightTint[1], 0.0f, 10.0f },
-                { "rayleighNightTintB", &t.rayleighNightTint[2], 0.0f, 10.0f },
-                { "rayleighDayStartDeg", &t.rayleighDayStartDeg, -90.0f, 90.0f },
-                { "rayleighDayFullDeg", &t.rayleighDayFullDeg, -90.0f, 90.0f },
-                { "ozoneNightTintR", &t.ozoneNightTint[0], 0.0f, 20.0f }, { "ozoneNightTintG", &t.ozoneNightTint[1], 0.0f, 20.0f },
-                { "ozoneNightTintB", &t.ozoneNightTint[2], 0.0f, 20.0f },
-                { "ozoneSunriseTintR", &t.ozoneSunriseTint[0], 0.0f, 20.0f },
-                { "ozoneSunriseTintG", &t.ozoneSunriseTint[1], 0.0f, 20.0f },
-                { "ozoneSunriseTintB", &t.ozoneSunriseTint[2], 0.0f, 20.0f },
-                { "ozoneBlendDeg", &t.ozoneBlendDeg, 0.001f, 90.0f },
-                { "mieNightScale", &t.mieNightScale, 0.0f, 10.0f },
-                { "lightHandOverDeg", &t.lightHandOverDeg, 0.0f, 20.0f },
-            };
-            for (const FloatKnob& k : knobs)
-            {
-                if (key == k.name) { *k.field = std::clamp(value, k.lo, k.hi); return true; }
-            }
-            return false;
-        }
-        if (setting == "sky.environmentLighting") { scene.SkyAtmosphereRef().environmentLighting = value != 0.0f; return true; }
-        if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
-        if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }
-        if (setting == "sky.aerialDebugView") { scene.SkyAtmosphereRef().aerialDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
-        if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
-        // P1's A/B arm: 0 = the capture and the distant light rebuild on every change of the sky (exact keys).
-        if (setting == "sky.keyTolerance") { render::g_skyKeyTolerance_game = value != 0.0f; return true; }
-        // The sun's half-apex angle in radians (the disc and the specular floor), the level sun's property.
-        if (setting == "sun.angularSize") { scene.SunLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
-        // UE's LightSourceSoftAngle of the sun, degrees (apex): softens the specular glint's edge.
-        if (setting == "sun.softAngle") { scene.SunLightRef().SetLightSourceSoftAngleDegrees(std::clamp(value, 0.0f, 20.0f)); return true; }
-        if (setting == "sky.skyLuminanceFactor") { scene.SkyAtmosphereRef().skyLuminanceFactor = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "sky.aerialStartDepth") { scene.SkyAtmosphereRef().aerialStartDepthMetres = std::clamp(value, 0.0f, 100000.0f); return true; }
-        if (setting == "sky.aerialViewDistanceScale") { scene.SkyAtmosphereRef().aerialViewDistanceScale = std::clamp(value, 0.01f, 100.0f); return true; }
-        // B1 transfer LUT controls.
-        if (setting == "sky.lutValidate") { scene.SkyAtmosphereRef().lutValidate = value != 0.0f; return true; }
-        if (setting == "sky.lutEnabled") { scene.SkyAtmosphereRef().lutEnabled = value != 0.0f; return true; }
-        if (setting == "sky.lutDebugView") { scene.SkyAtmosphereRef().lutDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
-        // The x Earth scales keep the level's per-channel colours (SkyAtmosphereSettings rayleighTint / mieTint / ozoneTint).
-        if (setting == "sky.rayleighScale" || setting == "sky.mieScale" || setting == "sky.ozoneScale")
-        {
-            auto& s = scene.SkyAtmosphereRef();
-            const SkyAtmosphereParameters earth{};
-            float rayleigh = SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint);
-            float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
-            float ozone = SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
-            const float v = std::clamp(value, 0.0f, 10.0f);
-            (setting == "sky.rayleighScale" ? rayleigh : setting == "sky.mieScale" ? mie : ozone) = v;
-            SetSkyMedium(s, rayleigh, mie, ozone);
-            return true;
-        }
-        // UE's MieAbsorptionScale over Earth's (0.000444); < 0 = follows sky.mieScale.
-        if (setting == "sky.mieAbsorptionScale")
-        {
-            auto& s = scene.SkyAtmosphereRef();
-            const SkyAtmosphereParameters earth{};
-            const float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
-            s.mieAbsorptionScale = value < 0.0f ? -1.0f : std::min(value, 10.0f);
-            SetSkyMedium(s, SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint), mie,
-                         SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint));
-            return true;
-        }
-        // UE's SkyAtmosphere HeightFogContribution: the sky's light in the height fog (its ambient colour, the lobe's ground term).
-        if (setting == "sky.heightFogContribution") { scene.SkyAtmosphereRef().heightFogContribution = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "sky.mieAnisotropy")
-        {
-            // UE MieAnisotropy: 0 scatters uniformly, near 1 scatters forward and haloes the sun.
-            scene.SkyAtmosphereRef().parameters.mieScattering[3] = std::clamp(value, 0.0f, 0.999f);
-            return true;
-        }
-        if (setting == "sky.multiScatteringFactor") { scene.SkyAtmosphereRef().parameters.groundAlbedo[3] = std::clamp(value, 0.0f, 10.0f); return true; }
-        if (setting == "sky.groundAlbedo")
-        {
-            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.groundAlbedo[i] = std::clamp(value, 0.0f, 1.0f);
-            return true;
-        }
-        // P7 exponential height fog -- NOT aerial perspective, which is `sky.aerialPerspective`
-        // and belongs to the sky atmosphere. `fog.enabled` is the gate; the rest are the model's own
-        // parameters, so a sweep can find defaults without a rebuild.
-        if (setting == "fog.enabled")
-        {
-            scene.HeightFogRef().enabled = value != 0.0f;
-            return true;
-        }
-        // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), headless.
-        if (setting == "lightShafts.enabled") { scene.SunLightRef().SetLightShaftsEnabled(value != 0.0f); return true; }
-        if (setting == "lightShafts.bloomScale") { scene.SunLightRef().SetLightShaftBloomScale(value); return true; }
-        if (setting == "lightShafts.bloomThreshold") { scene.SunLightRef().SetLightShaftBloomThreshold(value); return true; }
-        if (setting == "lightShafts.bloomMaxBrightness") { scene.SunLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
-        if (setting == "lightShafts.smoothing") { scene.SunLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
-        if (setting == "lightShafts.length") { scene.SunLightRef().SetLightShaftLength(std::clamp(value, 0.0f, 2.0f)); return true; }
-        if (setting == "lightShafts.occlusionDepthRange") { scene.SunLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
-        if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
-        if (setting == "fog.debugView")
-        {
-            g_fogDebugView_game = static_cast<uint32_t>(std::max(0.0f, value));
-            return true;
-        }
-        if (setting == "fog.heightFalloff")
-        {
-            scene.HeightFogRef().heightFalloff = value;
-            return true;
-        }
-        if (setting == "fog.referenceHeight")
-        {
-            scene.HeightFogRef().referenceHeight = value;
-            return true;
-        }
-        if (setting == "fog.startDistance")
-        {
-            scene.HeightFogRef().startDistance = value;
-            return true;
-        }
-        if (setting == "fog.maxOpacity") { scene.HeightFogRef().maxOpacity = value; return true; }
-        if (setting == "fog.sunScatter")
-        {
-            scene.HeightFogRef().sunScatterStrength = value;
-            return true;
-        }
-        // UE's DirectionalInscatteringLuminance colour (the tint of fog.sunScatter), per channel.
-        if (setting == "fog.sunScatterR") { scene.HeightFogRef().sunScatterColor.x = std::max(value, 0.0f); return true; }
-        if (setting == "fog.sunScatterG") { scene.HeightFogRef().sunScatterColor.y = std::max(value, 0.0f); return true; }
-        if (setting == "fog.sunScatterB") { scene.HeightFogRef().sunScatterColor.z = std::max(value, 0.0f); return true; }
-        if (setting == "fog.sunScatterExp")
-        {
-            scene.HeightFogRef().sunScatterExponent = value;
-            return true;
-        }
-        if (setting == "fog.sunScatterStart")
-        {
-            scene.HeightFogRef().sunScatterStartDistance = value;
-            return true;
-        }
-        if (setting == "fog.skyBlur") { scene.HeightFogRef().skyBlur = value; return true; }
-        // UE's fog colour (procedural sky): SkyAtmosphereAmbientContributionColorScale and FogInscatteringLuminance as
-        // grays; fog.skyAlongView:1 = the colour before 2026-10-31 (the sky along the view), transient, the A/B.
-        if (setting == "fog.skyAmbient") { scene.HeightFogRef().skyAmbientContribution = float3(std::max(value, 0.0f)); return true; }
-        if (setting == "fog.inscatterLuminance") { scene.HeightFogRef().inscatteringLuminance = float3(std::max(value, 0.0f)); return true; }
-        if (setting == "fog.skyAlongView") { g_fogSkyAlongView_game = value != 0.0f; return true; }
-        // fog.inSkyCapture:0 = the height fog out of the sky's capture (the water's sky reflection, the sky fill), the A/B.
-        if (setting == "fog.inSkyCapture") { g_fogInSkyCapture_game = value != 0.0f; return true; }
-        if (setting == "fog.nonDirectionalDistance") { scene.HeightFogRef().nonDirectionalDistance = value; return true; }
-        if (setting == "fog.fullyDirectionalDistance") { scene.HeightFogRef().fullyDirectionalDistance = value; return true; }
-        // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
-        if (setting == "fog.volumetric") { scene.HeightFogRef().volumetric = value != 0.0f; return true; }
-        if (setting == "fog.volumetricDistance") { scene.HeightFogRef().volumetricDistance = std::max(1.0f, value); return true; }
-        if (setting == "fog.volumetricStart") { scene.HeightFogRef().volumetricStartDistance = std::max(0.0f, value); return true; }
-        if (setting == "fog.volumetricFadeIn") { scene.HeightFogRef().volumetricNearFadeInDistance = std::max(0.0f, value); return true; }
-        if (setting == "fog.albedo") { scene.HeightFogRef().albedo = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "fog.extinctionScale") { scene.HeightFogRef().extinctionScale = std::max(0.0f, value); return true; }
-        if (setting == "fog.phaseG") { scene.HeightFogRef().phaseG = std::clamp(value, -0.99f, 0.99f); return true; }
-        if (setting == "fog.sunVolScatter") { scene.HeightFogRef().sunScatter = std::max(0.0f, value); return true; }
-        if (setting == "fog.skyVolScatter") { scene.HeightFogRef().skyScatter = std::max(0.0f, value); return true; }
-        if (setting == "fog.historyWeight") { scene.HeightFogRef().historyWeight = std::clamp(value, 0.0f, 0.99f); return true; }
-        if (setting == "fog.temporal") { scene.HeightFogRef().temporal = value != 0.0f; return true; }
-        if (setting == "fog.jitter") { scene.HeightFogRef().jitter = value != 0.0f; return true; }
-        if (setting == "fog.samplesPerCell") { scene.HeightFogRef().samplesPerCell = std::clamp(static_cast<int>(value), 1, 4); return true; }
-        if (setting == "fog.conservativeDepth") { scene.HeightFogRef().conservativeDepth = value != 0.0f; return true; }
-        if (setting == "fog.localLights") { scene.HeightFogRef().localLights = value != 0.0f; return true; }
-        if (setting == "fog.localLightScatter") { scene.HeightFogRef().localLightScatter = std::max(value, 0.0f); return true; }
-        if (setting == "fog.localSoftFading") { scene.HeightFogRef().localSoftFading = std::max(value, 0.0f); return true; }
-        if (setting == "fog.localDistanceBias") { scene.HeightFogRef().localDistanceBias = std::max(value, 0.0f); return true; }
-        if (setting == "ssr.technique")
-        {
-            const uint32_t t = (uint32_t)std::max(0.0f, value);
-            renderSettings.ssrTechnique = t < (uint32_t)SsrTechnique::Count
-                ? (SsrTechnique)t : SsrTechnique::LogMarch;
-            return true;
-        }
-        // The fullscreen debug blit, so a half-res intermediate can be captured headlessly instead
-        // of only judged by eye in the GUI. `debug.tex` = 0 shadow atlas, 1 GTAO raw, 2 denoised,
-        // 3 temporal, 4 upsampled, 5 HZB furthest, 6 scene depth, 7 HZB closest, 8 reflection hit
-        // mask, 9 GB1 normal (colour), 10 shading model (GBAux.b x5: water white), 11 GBAux alpha
-        // (the water's reflection weight), 12 the water trace's hit mask, 13 GB0 alpha (~roughness);
-        // `debug.texMode` turns the blit on.
-        // The profiler overlay (F9) without a key: a headless --shot of it, or MCP set_settings.
-        if (setting == "debug.profilerOverlay") { renderSettings.showProfiler = value != 0.0f; return true; }
-        if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
-        if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
-        if (setting == "debug.texMip")     { renderSettings.debugTexMip = (int)value; return true; }
-        // The pixel probe (SceneRenderSettings::debugProbe*), read through get_readouts.
-        if (setting == "debug.probeU")      { renderSettings.debugProbeU = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "debug.probeV")      { renderSettings.debugProbeV = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "debug.probeRadius") { renderSettings.debugProbeRadiusPx = std::clamp(value, 0.0f, 128.0f); return true; }
-        if (setting == "debug.probeSource") { renderSettings.debugProbeSource = value >= 1.5f ? 2u : (value >= 0.5f ? 1u : 0u); return true; }
-        if (setting == "debug.sunProbeAfterDlss") { renderSettings.sunProbeAfterDlss = value != 0.0f; return true; }
-        if (setting == "light.terminatorOffset") { renderSettings.terminatorOffset = std::clamp(value, 0.0f, 4.0f); return true; }
-        if (setting == "light.geometricTerminator")
-        {
-            renderSettings.sunGeometricTerminator = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 2.0f) + 0.5f);
-            return true;
-        }
-        if (setting == "light.foliageBackSky") { renderSettings.foliageBackSky = value != 0.0f; return true; }
-        if (setting == "light.foliageTransmissionUe") { renderSettings.foliageTransmissionUe = value != 0.0f; return true; }
-        if (setting == "light.roughDiffuse") { renderSettings.roughDiffuse = value != 0.0f; return true; }
-        if (setting == "light.bumpShadowing") { renderSettings.bumpShadowing = value != 0.0f; return true; }
-        // (1 + metal * this) on the analytic sun specular (graphics_settings reflections.sunMetalSpec).
-        if (setting == "light.sunMetalSpec") { renderSettings.sunMetalSpecInfluence = std::clamp(value, 0.0f, 16.0f); return true; }
-        if (setting == "light.sunTemperatureK")
-        {
-            scene.SunLightRef().SetUseSunTemperature(value > 0.0f);
-            if (value > 0.0f) { scene.SunLightRef().SetSunTemperatureK(value); }
-            return true;
-        }
-        // P16.12: one scalar drives all three channels, which is what a sweep needs; the level
-        // and the inspector carry the full colour. 0 switches the bounce off.
-        if (setting == "light.groundAlbedo")
-        {
-            scene.SunLightRef().SetGroundAlbedo(Math::float3(value, value, value));
-            return true;
-        }
-        if (setting == "light.skyFillIntensity")
-        {
-            scene.SunLightRef().SetSkyFillIntensity(value);
-            return true;
-        }
-        if (setting == "light.skyIntensity")
-        {
-            if (Skybox* sky = scene.GetSkybox()) { sky->SetExposure(value); }
-            return true;
-        }
-        // P16.3b: the sky's horizontal illuminance in lux. 0 = un-authored, the legacy behaviour.
-        // Shore contact foam, as a CAPTURE switch rather than a level edit: it is the thing that
-        // litters a lighting comparison with moving white speckle, and turning it off in the level
-        // would mean editing content that was tuned on purpose. 0 = off.
-        // The whole ocean surface, as a CAPTURE switch (same rationale as contactFoam below):
-        // shadow/terrain artifacts live on dune slopes the water covers, and the user's repro
-        // screenshots are taken with the ocean hidden. 0 = hidden.
-        if (setting == "ocean.visible") { scene.SetOceanVisible(value != 0.0f); return true; }
-        // The sun's shadow from geometry on the water (OceanSunShadow): 0 = off (the A/B); its VSM SMRT rays, 0 = one tap.
-        if (setting == "ocean.sunShadow") { ocean::g_sunShadow_game = value != 0.0f; return true; }
-        if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
-        if (setting == "ocean.sunShadowBody") { ocean::g_sunShadowBody_game = std::clamp(value, 0.0f, 1.0f); return true; }
-        // The water kept out of the marked hulls (ocean/WaterMask.h): 0 = drawn inside them, the A/B.
-        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = std::clamp(static_cast<int>(value), 0, 3); return true; }
-        // The boats' spray (vfx/VesselSpray): the ocean preset's knobs (OceanRenderConfig::spray*, the Ocean window and the
-        // Inspector's "Boat spray") -- on/off, how much (a share of what the presets can keep alive), the shares of the
-        // hull's speed a drop leaves with, the drops' albedo and forward lobe, the white water along the hulls' sides.
-        // A lit particle's air: the fog's colour as before 2026-11-09 (the A/B), 0 = the sky's distant light.
-        if (setting == "particles.airFromFog") { vfx::g_litAirFromFog_game = value != 0.0f; return true; }
-        if (setting == "particles.collideHulls") { vfx::g_collideHulls_game = value != 0.0f; return true; }
-        if (setting == "particles.clipHulls") { vfx::g_clipHulls_game = value != 0.0f; return true; } // a sprite's pixels over a hull
-        if (setting == "particles.softWater") { g_particleSoftWater_game = value != 0.0f; return true; } // soft fade against the water too
-        if (setting == "spray.sidePush") { vfx::g_spraySidePush_game = value != 0.0f; return true; }
-        if (setting.rfind("spray.", 0) == 0)
-        {
-            OceanRenderable* ocean = scene.FindOceanRenderable();
-            OceanSimulation* sim = ocean ? ocean->GetSimulation() : nullptr;
-            if (!sim) { return true; }
-            OceanRenderConfig cfg = sim->GetRenderConfig();
-            if (setting == "spray.enabled") { cfg.sprayEnabled = value != 0.0f; }
-            else if (setting == "spray.rate") { cfg.sprayRate = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.mist") { cfg.sprayMist = std::clamp(value, 0.0f, 4.0f); }
-            else if (setting == "spray.out") { cfg.sprayOut = std::clamp(value, 0.0f, 2.0f); }
-            else if (setting == "spray.up") { cfg.sprayUp = std::clamp(value, 0.0f, 2.0f); }
-            else if (setting == "spray.forward") { cfg.sprayForward = std::clamp(value, -1.0f, 1.0f); }
-            else if (setting == "spray.slam") { cfg.spraySlam = std::clamp(value, 0.0f, 4.0f); }
-            else if (setting == "spray.colorR") { cfg.sprayColor.x = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.colorG") { cfg.sprayColor.y = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.colorB") { cfg.sprayColor.z = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.forwardScatter") { cfg.sprayForwardScatter = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.opacity") { cfg.sprayOpacity = std::clamp(value, 0.0f, 3.0f); }
-            else if (setting == "spray.softFade") { cfg.spraySoftFade = std::clamp(value, 0.0f, 2.0f); }
-            else if (setting == "spray.foamLight") { cfg.sprayFoamLight = std::clamp(value, 0.0f, 1.0f); }
-            else { return false; }
-            sim->SetRenderConfig(cfg);
-            return true;
-        }
-        // The water reflection's normal filter in mips (SceneRenderSettings::waterReflectionNormalFilter); 0 = the shading normal.
-        if (setting == "ocean.reflectionNormalFilter") { renderSettings.waterReflectionNormalFilter = std::clamp(value, 0.0f, 4.0f); return true; }
-        // The water reflection's prefilter (water_composite_cs): sigma across the columns in render px, 0 = off.
-        if (setting == "ocean.reflectionPrefilter") { renderSettings.waterReflectionPrefilter = std::clamp(value, 0.0f, 3.0f); return true; }
-        // Sky-reflection horizon pull (OceanSkyReflectDir; 1 = off). Here so the streak A/B is a
-        // command line rather than a level edit — same one-binary discipline as the VSM levers.
-        if (setting == "ocean.skyHorizonPull")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    cfg.reflectionSkyHorizonPull = Math::Clamp(value, 0.05f, 1.0f);
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        // How far the water's reflection normal is pulled toward +Y (OceanRenderConfig::
-        // reflectionNormalStrength; 1 = a flat mirror) -- the sky sample's AND, since the ocean G-buffer
-        // plan's S3, the screen-space trace's, so this is the A/B for that look.
-        if (setting == "ocean.reflectionNormalStrength")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    cfg.reflectionNormalStrength = Math::Clamp(value, 0.0f, 1.0f);
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        // The sun's glint on the water (OceanSunSpecular): its brightness multiplier and the unresolved
-        // roughness scale (the Bruneton slope variance it takes its GGX alpha from), and how much of that variance the
-        // glint takes (sunGlintSmear: 0 = the glitter path alone, 1 = the broad GGX patch).
-        if (setting == "ocean.specularStrength" || setting == "ocean.roughnessScale" || setting == "ocean.sunGlintSmear")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    if (setting == "ocean.specularStrength") { cfg.specularStrength = std::clamp(value, 0.0f, 100.0f); }
-                    else if (setting == "ocean.sunGlintSmear") { cfg.sunGlintSmear = Math::Saturate(value); }
-                    else { cfg.roughnessScale = Math::Saturate(value); }
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        // A boat's wake (ocean/OceanWake): the preset's knobs, and the debug view (the height, opaque).
-        if (setting == "ocean.wakeDebug")
-        {
-            ocean::g_wakeDebugView_game = std::clamp(static_cast<int>(std::lround(value)), 0, 2);
-            return true;
-        }
-        if (setting == "ocean.wakeShore")
-        {
-            ocean::g_wakeShore_game = value != 0.0f ? 1 : 0;
-            return true;
-        }
-        if (setting == "ocean.wakeHz")
-        {
-            ocean::g_wakeStepHz_game = std::max(value, 0.0f);
-            return true;
-        }
-        if (setting == "ocean.wakeBowBreaks")
-        {
-            ocean::g_wakeBowBreaks_game = value != 0.0f;
-            return true;
-        }
-        if (setting == "ocean.wakeExtrapolate")
-        {
-            ocean::g_wakeExtrapolate_game = value != 0.0f;
-            return true;
-        }
-        if (setting.rfind("ocean.wake", 0) == 0)
-        {
-            OceanRenderable* ocean = scene.FindOceanRenderable();
-            OceanSimulation* sim = ocean ? ocean->GetSimulation() : nullptr;
-            if (!sim) { return true; }
-            OceanRenderConfig cfg = sim->GetRenderConfig();
-            // The foam and the bow wave's arms: ocean/OceanWakeKnobs.h is their one list.
-            bool tabled = false;
-            for (const ocean::WakeKnob& knob : ocean::WakeKnobs())
-            {
-                if (setting.compare(6, std::string::npos, knob.key) == 0) // past "ocean."
-                {
-                    cfg.*knob.field = std::clamp(value, knob.min, knob.max);
-                    tabled = true;
-                    break;
-                }
-            }
-            if (tabled) {}
-            else if (setting == "ocean.wakeEnabled") { cfg.wakeEnabled = value != 0.0f; }
-            else if (setting == "ocean.wakeStrength") { cfg.wakeStrength = std::clamp(value, 0.0f, 4.0f); }
-            else if (setting == "ocean.wakeDisplacement") { cfg.wakeDisplacement = std::clamp(value, 0.0f, 2.0f); }
-            else if (setting == "ocean.wakeNormal") { cfg.wakeNormal = std::clamp(value, 0.0f, 3.0f); }
-            else if (setting == "ocean.wakeDamping") { cfg.wakeDamping = std::clamp(value, 0.0f, 20.0f); }
-            else if (setting == "ocean.wakeBreaking") { cfg.wakeBreaking = std::clamp(value, 0.0f, 20.0f); }
-            else if (setting == "ocean.wakeTexel") { cfg.wakeTexel = std::clamp(value, 0.25f, 2.0f); }
-            else { return false; }
-            sim->SetRenderConfig(cfg);
-            return true;
-        }
-        // The surf sim's wave height on the surface (OceanRenderConfig::surfSimDisplacement, 0 = the sim runs, the water does
-        // not rise by it): the A/B of what the shore's breakers do to what floats -- OceanReadback adds the same height.
-        if (setting == "ocean.surfDisplacement")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    cfg.surfSimDisplacement = std::clamp(value, 0.0f, 2.0f);
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        // The water body's floor under a low sun (OceanRenderConfig::lowSunBodyLight), for a headless
-        // sweep at a sunset elevation.
-        if (setting == "ocean.lowSunBodyLight")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    cfg.lowSunBodyLight = Math::Saturate(value);
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        // The water's colours by component, to tune them live against a reference instead of a level edit and a
-        // relaunch: `ocean.deepScatterG`, `ocean.diffuseB`, `ocean.sssR`, `ocean.absorption<key 0-3><R|G|B>` (the
-        // gradient key's position .w stays). OceanRenderConfig's deepScatterColor / diffuseColor / sssColor /
-        // absorptionColors -- what the Ocean controls' colour pickers edit.
-        if (setting.size() > 7 && setting.rfind("ocean.", 0) == 0)
-        {
-            const char last = setting.back();
-            const int ch = last == 'R' ? 0 : last == 'G' ? 1 : last == 'B' ? 2 : -1;
-            const std::string stem = setting.substr(6, setting.size() - 7);
-            const bool absorption = stem.size() == 11 && stem.rfind("absorption", 0) == 0 && stem[10] >= '0' && stem[10] <= '3';
-            if (ch >= 0 && (stem == "deepScatter" || stem == "diffuse" || stem == "sss" || absorption))
-            {
-                if (OceanRenderable* ocean = scene.FindOceanRenderable())
-                {
-                    if (OceanSimulation* sim = ocean->GetSimulation())
-                    {
-                        OceanRenderConfig cfg = sim->GetRenderConfig();
-                        Math::float4* color = stem == "deepScatter" ? &cfg.deepScatterColor
-                                            : stem == "diffuse"     ? &cfg.diffuseColor
-                                            : stem == "sss"         ? &cfg.sssColor
-                                            : (static_cast<size_t>(stem[10] - '0') < cfg.absorptionColors.size()
-                                                   ? &cfg.absorptionColors[static_cast<size_t>(stem[10] - '0')] : nullptr);
-                        if (color)
-                        {
-                            (ch == 0 ? color->x : ch == 1 ? color->y : color->z) = std::max(value, 0.0f);
-                            sim->SetRenderConfig(cfg);
-                        }
-                    }
-                }
-                return true;
-            }
-        }
-        // The sea state live (the level's ocean.windForce, 0..1 across the preset's keys -- what the Inspector's "Wind
-        // Force" slider sets), to pick it on a view; `--ocean-wind=<v>` is the boot-time override.
-        if (setting == "ocean.windForce")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    sim->SetSceneVariables(&Systems::GetRenderer(), sim->GetLocalWindDirectionDegrees(),
-                                           sim->GetSwellDirectionDegrees(), Math::Saturate(value));
-                }
-            }
-            return true;
-        }
-        // The ocean preset's readbackCascades (0 None, 1 One, 2 Two), applied through the same
-        // SetSettings the Ocean controls combo calls. Its point is the LIVE switch: a sweep
-        // `ocean.readbackCascades:1,0,1` adopts a surface, drops it, adopts again -- the case a
-        // cold start in None never reaches (docs/bug_review_2026-10-01.md, BUG-05).
-        if (setting == "ocean.readbackCascades")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    using Mode = OceanSimulationSettings::ReadbackCascadesMode;
-                    const int cascades = std::clamp(static_cast<int>(value), 0, 2);
-                    OceanSimulationSettings settings = sim->GetSettings();
-                    settings.SetReadbackMode(cascades == 2 ? Mode::Two : cascades == 1 ? Mode::One : Mode::None);
-                    sim->SetSettings(&Systems::GetRenderer(), settings);
-                }
-            }
-            return true;
-        }
-        if (setting == "ocean.contactFoam")
-        {
-            if (OceanRenderable* ocean = scene.FindOceanRenderable())
-            {
-                if (OceanSimulation* sim = ocean->GetSimulation())
-                {
-                    OceanRenderConfig cfg = sim->GetRenderConfig();
-                    cfg.shoreContactFoamOpacity = value;
-                    cfg.shoreLegacyContactFoamStrength *= (value > 0.0f) ? 1.0f : 0.0f;
-                    sim->SetRenderConfig(cfg);
-                }
-            }
-            return true;
-        }
-        if (setting == "light.skyIlluminanceLux")
-        {
-            if (Skybox* sky = scene.GetSkybox()) { sky->SetIlluminanceLux(value); }
-            return true;
-        }
-        // P16.2: the sun's illuminance in lux. `light.sunIntensity` is kept as an ALIAS, not a
-        // second control -- it is the same number under its pre-P16.2 name, and every measurement
-        // recipe written down in the plan spells it that way.
-        if (setting == "light.sunIlluminanceLux" || setting == "light.sunIntensity")
-        {
-            scene.SunLightRef().SetSunIlluminanceLux(value);
-            return true;
-        }
-        // REMOVED (P16.2): `light.legacySplit`, the P4 equivalence probe. It claimed that putting
-        // the factor back on the retired whole-scene multiplier reproduces the migrated image
-        // exactly, and MEASURED on wind_test it does not -- 27.6 meanabs against a 0.81 noise floor,
-        // the frame 27/255 brighter. The knob was not broken by P16.2; it was invalidated by F8 and
-        // F9 and nobody re-ran it. `lighting_cs` still ends in `color * exposure + skySpecular`, so
-        // that multiplier now scales the SKY IRRADIANCE FILL (which the sun's intensity does not
-        // touch) and skips the sky specular (added after it) -- two terms that did not exist when
-        // the equivalence was true. A probe asserting an invariant that no longer holds is worse
-        // than no probe, so it is gone rather than caveated.
-        //
-        // The P16.2 migration has its own equivalence check and it needs no code: run the level
-        // once as authored and once with `--set=light.sunIlluminanceLux:<the level's own value>`.
-        // Identical frames mean the new key and the legacy fold arrive at the same light.
-        //
-        // With this gone, `DirectionalLight::exposure_` can no longer be set to anything but 1.0,
-        // so the trailing multiply in the shaders is provably an identity. Retiring that plumbing
-        // is a separate change; it touches the ocean, glass and RT reflection constant buffers.
-        if (setting == "exposure.lowPercentile")   { e.lowPercentile = value;  return true; }
-        if (setting == "exposure.highPercentile")  { e.highPercentile = value; return true; }
-        if (setting == "exposure.compensationEv")  { e.compensationEv = value; return true; }
-        // P16.13: manual mode has its own trim; the auto key above no longer reaches it.
-        if (setting == "exposure.manualCompensationEv") { e.manualCompensationEv = value; return true; }
-        // P16.6: the camera. `exposure.manualEv100` is kept because every measurement recipe in
-        // the plan spells it that way -- it back-solves the aperture, so it still means exactly what
-        // it always meant.
-        if (setting == "exposure.aperture")   { e.apertureFStop = value;   return true; }
-        if (setting == "exposure.shutter")    { e.shutterSpeedSec = value; return true; }
-        if (setting == "exposure.iso")        { e.isoSensitivity = value;  return true; }
-        if (setting == "exposure.manualEv100")
-        {
-            e.apertureFStop = render::ApertureFromEv100(value, e.shutterSpeedSec, e.isoSensitivity);
-            return true;
-        }
-        if (setting == "exposure.minEv100")        { e.minEv100 = value;       return true; }
-        if (setting == "exposure.maxEv100")        { e.maxEv100 = value;       return true; }
-        if (setting == "exposure.speedUp")         { e.speedUp = value;        return true; }
-        if (setting == "exposure.meterMaskStrength")    { e.meterMaskStrength = value;    return true; }
-        if (setting == "exposure.meterMaskInnerRadius") { e.meterMaskInnerRadius = value; return true; }
-        if (setting == "exposure.meterMaskOuterRadius") { e.meterMaskOuterRadius = value; return true; }
-        if (setting == "exposure.meterMaskSkyBias")     { e.meterMaskSkyBias = value;     return true; }
-        if (setting == "exposure.speedDown")       { e.speedDown = value;      return true; }
-        if (setting == "exposure.adaptationStartDistance") { e.adaptationStartDistance = value; return true; }
-        if (setting == "exposure.blackBucketInfluence")    { e.blackBucketInfluence = value;    return true; }
-        if (setting == "render.preExposure") { render::g_preExposureEnabled_game = value != 0.0f; return true; }
-        if (setting == "exposure.enabled")         { e.enabled = value != 0.0f;      return true; }
-        if (setting == "exposure.autoExposure")    { e.autoExposure = value != 0.0f; return true; }
-        // 0 legacy, 1 AgX, 2 the film curve (render::ToneCurve). Any non-zero value used to mean AgX, so the film
-        // curve every level ships with could not be set back after an A/B.
-        if (setting == "color.toneCurve")
-        {
-            c.toneCurve = value >= 1.5f ? render::ToneCurve::Filmic
-                        : value >= 0.5f ? render::ToneCurve::AgX : render::ToneCurve::LegacyAces;
-            return true;
-        }
-        if (setting == "color.ueGamut")        { c.ueGamut = value != 0.0f; return true; }
-        if (setting == "color.expandGamut")    { c.expandGamut = std::clamp(value, 0.0f, 4.0f); return true; }
-        if (setting == "color.blueCorrection") { c.blueCorrection = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "color.vignette")       { c.vignetteIntensity = std::clamp(value, 0.0f, 1.0f); return true; }
-        if (setting == "color.agxSlope")      { c.agxSlope = value;      return true; }
-        if (setting == "color.agxPower")      { c.agxPower = value;      return true; }
-        if (setting == "color.agxSaturation") { c.agxSaturation = value; return true; }
-        if (setting == "color.gradeSaturation") { c.gradeSaturation = value; return true; }
-        if (setting == "color.gradeContrast")   { c.gradeContrast = value;   return true; }
-        if (setting == "color.gradeGamma")      { c.gradeGamma = value;      return true; }
-        if (setting == "color.gradeGain")       { c.gradeGain = value;       return true; }
-        if (setting == "color.gradeOffset")     { c.gradeOffset = value;     return true; }
-        // P3B moved onto the camera. The `color.*` spellings are kept as aliases so older notes,
-        // scripts and the plan's recorded sweeps keep resolving.
-        if (setting == "exposure.localHighlightContrast" || setting == "color.localHighlightContrast")
-        { e.localHighlightContrast = value; return true; }
-        if (setting == "exposure.localShadowContrast" || setting == "color.localShadowContrast")
-        { e.localShadowContrast = value; return true; }
-        if (setting == "exposure.localDetailStrength" || setting == "color.localDetailStrength")
-        { e.localDetailStrength = value; return true; }
-        if (setting == "exposure.nightVision") { e.nightVision = std::clamp(value, 0.0f, 1.0f); return true; } // E2
-        if (setting == "exposure.nightDesaturation") { e.nightDesaturation = std::clamp(value, 0.0f, 1.0f); return true; }
-        // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night), 2 = UDS's,
-        // 3 = UDS's with a steady night, 4 = UE's (no curve: one constant +0.5, the owner's UE PPV).
-        if (setting == "exposure.curve")
-        {
-            if (value >= 3.5f) { render::SetUeExposureCurve(e); }
-            else if (value >= 2.5f) { render::SetUdsSteadyNightExposureCurve(e); }
-            else if (value >= 1.5f) { render::SetUdsExposureCurve(e); }
-            else if (value != 0.0f) { render::SetEyeExposureCurve(e); }
-            else { e.exposureCurvePoints = 0u; }
-            return true;
-        }
-        // ...and point by point, so a running editor's set_settings can shape one live:
-        // `exposure.curvePoints` (0..12), `exposure.curveEv<i>` / `exposure.curveComp<i>` (i 0..11). The points must
-        // stay in ascending EV, as the level's own are -- the caller's job, here as in the Inspector's rows.
-        if (setting == "exposure.curvePoints")
-        {
-            e.exposureCurvePoints = static_cast<std::uint32_t>(std::clamp(
-                value, 0.0f, static_cast<float>(render::CameraExposureSettings::kExposureCurveMaxPoints)));
-            return true;
-        }
-        for (const auto& [prefix, field] : { std::pair{ std::string_view("exposure.curveEv"), e.exposureCurveEv },
-                                             std::pair{ std::string_view("exposure.curveComp"), e.exposureCurveComp } })
-        {
-            const std::size_t digits = setting.size() - std::min(setting.size(), prefix.size());
-            if ((digits == 1u || digits == 2u) && setting.compare(0, prefix.size(), prefix) == 0 &&
-                std::all_of(setting.begin() + prefix.size(), setting.end(), [](char c) { return c >= '0' && c <= '9'; }))
-            {
-                const int i = std::stoi(setting.substr(prefix.size()));
-                if (i >= static_cast<int>(render::CameraExposureSettings::kExposureCurveMaxPoints)) { return false; }
-                field[i] = std::clamp(value, -20.0f, 30.0f);
-                return true;
-            }
-        }
-        // P3B bilateral base: 1 = the pre-grid blur-only base (the A/B arm), UE's default 0.6.
-        if (setting == "exposure.localBlurredBlend")
-        { e.localBlurredBlend = value; return true; }
-        // UE's LocalExposureBlurredLuminanceKernelSizePercent (default 50).
-        if (setting == "exposure.localBlurredKernelPercent")
-        { e.localBlurredKernelPercent = std::clamp(value, 0.0f, 100.0f); return true; }
-        // Composite: both local contrast scales at once. The two are independent branches of the
-        // same function (base above / below middle grey), so sweeping them together is the only way
-        // to measure the base EXPANSION the plan's P3B target needs -- one knob alone can move only
-        // one end of the histogram, and the reference wants both ends moved in the same shot.
-        if (setting == "exposure.localContrast" || setting == "color.localContrast")
-        {
-            e.localHighlightContrast = value;
-            e.localShadowContrast = value;
-            return true;
-        }
-        return false;
+        settings::SettingContext ctx{ scene, renderSettings };
+        return settings::Registry().Apply(ctx, setting, value);
     }
 
-    // The reading half of the name table, for the knobs the scalability table may name (settings::ScalabilityKnobs):
-    // what a ceiling starts from, what the gate reads back, what the Developer Controls tab shows. A knob written at the
-    // frame's safe point (dlss.mode, aa.renderScale) reads as asked until then.
+    // The reading half: what a ceiling starts from (the scalability table), what the gate reads back, what the
+    // Developer Controls tab shows, what --settings-dump prints. A knob written at the frame's safe point (dlss.mode,
+    // aa.renderScale) reads as asked until then. Its rows only read: the const is the chain's promise, kept by the rows.
     bool ReadSweepValue(Scene& scene, const SceneRenderSettings& rs, const std::string& name, float& out)
     {
-        // The settings registry first (R2.1). Its rows only read: the const is the chain's promise, kept by the rows.
-        if (const settings::SettingDesc* row = settings::Registry().Find(name))
-        {
-            settings::SettingContext ctx{ scene, const_cast<SceneRenderSettings&>(rs) };
-            return row->read && row->read(ctx, out);
-        }
-        const auto b = [&](bool v) { out = v ? 1.0f : 0.0f; return true; };
-        const auto f = [&](float v) { out = v; return true; };
-        const auto u = [&](std::uint64_t v) { out = static_cast<float>(v); return true; };
-        Renderer& renderer = Systems::GetRenderer();
-        if (name == "lod.pixelError") { return f(render::g_lodPixelError_game); }
-        if (name == "tessy.lodPixelError") { return f(tessy::g_lodPixelError_game); }
-        if (name == "lod.chunkFactor") { return f(render::g_chunkLodDistFactor_game); }
-        if (name == "shadow.mode") { return u(static_cast<std::uint32_t>(render::g_shadowMode_game)); }
-        if (name == "csm.atlasRes") { return u(render::g_csmAtlasRes_game); }
-        if (name == "csm.filterMode") { return u(scene.CascadeConfig().filterMode); }
-        if (name == "sdsm.partitions") { return u(render::sdsm::g_partitions_game); }
-        if (name == "sdsm.cacheFrames") { return u(render::sdsm::g_cacheFrames_game); }
-        if (name == "vsm.resolutionLodBiasDirectional") { return f(vsm::g_resolutionLodBiasDirectional_game); }
-        if (name == "vsm.smrtRayCount") { return u(vsm::g_smrtRayCount_game); }
-        if (name == "vsm.smrtSamplesPerRay") { return u(vsm::g_smrtSamplesPerRay_game); }
-        if (name == "vsm.localSmrtRayCount") { return u(vsm::g_localSmrtRayCount_game); }
-        if (name == "shadow.localMaxRes") { return u(render::g_localShadowMaxRes_game); }
-        if (name == "contact.enabled") { return b(render::contact::g_enabled_game); }
-        if (name == "contact.steps") { return u(render::contact::g_steps_game); }
-        if (name == "ocean.sunShadowRays") { return f(static_cast<float>(ocean::g_sunShadowRays_game)); }
-        if (name == "vsm.windRange") { return f(vsm::g_windRange_game); }
-        if (name == "shadow.localWindRange") { return f(render::g_localShadowWindRange_game); }
-        if (name == "gi.enabled") { return b(rs.giEnabled); }
-        if (name == "gi.far") { return b(rs.giFarCascade); }
-        if (name == "gi.rays") { return u(rs.giRays); }
-        if (name == "gi.divisor") { return u(rs.giUpdateDivisor); }
-        if (name == "gi.farDivisor") { return u(rs.giFarDivisor); }
-        if (name == "gi.rayDistance") { return f(rs.giRayDistance); }
-        if (name == "skyVis.enabled") { return b(rs.skyVisEnabled); }
-        if (name == "skyVis.rays") { return u(rs.skyVisRays); }
-        if (name == "skyVis.filterRadius") { return u(rs.skyVisFilterRadius); }
-        if (name == "render.reflectionSource") { return u(static_cast<std::uint32_t>(rs.reflectionSource)); }
-        if (name == "ssr.ueQuality") { return u(static_cast<std::uint32_t>(rs.ssrUe.preset)); }
-        if (name == "reflections.resolution") { return f(renderer.GetReflectionTextureScale().x); }
-        if (name == "rt.alphaMode") { return u(rs.rtAlphaMode); }
-        if (name == "reflections.oceanResolution") { return f(renderer.GetOceanReflectionTextureScale().x); }
-        if (name == "ssr.waterNormalCascades") { return u(rs.waterReflectionNormalCascades); }
-        if (name == "ocean.wakeHz") { return f(ocean::g_wakeStepHz_game); }
-        if (name == "fog.gridPixels") { return u(render::g_fogGridPixels_game); }
-        if (name == "fog.gridZ") { return u(render::g_fogGridZ_game); }
-        if (name == "fog.volumetric") { return b(scene.HeightFogRef().volumetric); }
-        if (name == "fog.samplesPerCell") { return f(static_cast<float>(scene.HeightFogRef().samplesPerCell)); }
-        if (name == "skyVis.fogRays") { return u(rs.skyVisFogRays); }
-        if (name == "cloud.viewSampleCountMax") { return u(scene.VolumetricCloudRef().viewSampleCountMax); }
-        if (name == "cloud.shadowMapSampleCount") { return u(scene.VolumetricCloudRef().shadowMapSampleCount); }
-        if (name == "cloud.msOctaves") { return u(scene.VolumetricCloudRef().msOctaves); }
-        if (name == "cloud.captureTexels") { return f(render::g_cloudCaptureTexels_game); }
-        if (name == "lightShafts.enabled") { return b(scene.SunLightRef().GetLightShaftsEnabled()); }
-        if (name == "gtao.enabled") { return b(scene.GtaoRef().enabled); }
-        if (name == "gtao.numSteps") { return u(scene.GtaoRef().numSteps); }
-        if (name == "gtao.numAngles") { return u(scene.GtaoRef().numAngles); }
-        if (name == "streaming.poolSizeMB") { return f(static_cast<float>(streaming::g_poolSizeMB_game)); }
-        if (name == "streaming.mipBias") { return f(static_cast<float>(streaming::g_mipBias_game)); }
-        if (name == "textures.anisotropy") { return u(render::g_textureAnisotropy_game); }
-        if (name == "spray.rateMax") { return f(vfx::g_sprayRateMax); }
-        if (name == "spray.mistMax") { return f(vfx::g_sprayMistMax); }
-        if (name == "cloud.viewSampleCountMin") { return u(scene.VolumetricCloudRef().viewSampleCountMin); }
-        if (name == "particles.spawnScale") { return f(vfx::g_spawnScale); }
-        if (name == "particles.softWater") { return b(g_particleSoftWater_game); }
-        if (name == "dlss.mode") { return u(static_cast<std::uint32_t>(g_requestDlssMode >= 0 ? g_requestDlssMode : static_cast<int>(renderer.GetDlssMode()))); }
-        if (name == "aa.renderScale") { return f(g_requestRenderScale >= 0.0f ? g_requestRenderScale : renderer.GetRenderResolutionScale()); }
-        if (name == "aa.fxaa") { return b(rs.doFxaa); }
-        // The window and the player's settings (S6, S7): what they are now.
-        if (name.rfind("display.", 0) == 0)
-        {
-            const display::DisplaySettings d = display::Current(display::MainWindow());
-            if (name == "display.mode") { return u(d.mode == display::WindowMode::Borderless ? 1u : 0u); }
-            if (name == "display.width") { return u(static_cast<std::uint32_t>(d.width)); }
-            if (name == "display.height") { return u(static_cast<std::uint32_t>(d.height)); }
-            if (name == "display.backgroundFps") { return f(static_cast<float>(display::BackgroundFps())); }
-            if (name == "display.monitor")
-            {
-                const std::vector<display::MonitorInfo> monitors = display::Monitors();
-                return u(static_cast<std::uint32_t>(display::FindMonitor(monitors, d.monitor) + 1));
-            }
-            return false;
-        }
-        if (name == "image.brightnessEv") { return f(settings::CurrentImageSettings().brightnessEv); }
-        if (name == "image.fovDeg") { return f(settings::CurrentImageSettings().fovDeg); }
-        if (name == "controls.sensitivity") { return f(settings::CurrentControlsSettings().sensitivity); }
-        if (name == "controls.invertY") { return b(settings::CurrentControlsSettings().invertY); }
-        return false;
+        settings::SettingContext ctx{ scene, const_cast<SceneRenderSettings&>(rs) };
+        return settings::Registry().Read(ctx, name, out);
     }
 
     // The adapter as the auto-detect remembers it: its name and the user-mode driver's version (only the name is compared:
@@ -2676,13 +1005,83 @@ namespace
             : scene_(scene), settings_(settings), renderer_(renderer) {}
         bool Apply(const std::string& name, float value) override
         {
+            // The value before the first change of a name, for reset_settings (architecture plan R2.n): a project-wide
+            // switch the document does not hold no longer stays as last set. An action (race.start) has none to keep.
+            const settings::SettingDesc* row = settings::Registry().Find(name);
+            const bool action = row && (row->flags & settings::SettingAction);
+            const auto noted = [&](const std::string& n) {
+                const auto is = [&](const Noted& b) { return b.name == n; };
+                return std::any_of(before_.begin(), before_.end(), is) || std::any_of(unreadable_.begin(), unreadable_.end(), is);
+            };
+            const bool wasPinned = settings::TheScalability().Pins().count(name) != 0; // a boot --set pin stays
+            float was = 0.0f;
+            const bool readable = !action && !noted(name) && ReadSweepValue(scene_, settings_, name, was);
             const bool known = ApplySweepValue(scene_, settings_, name, value);
             if (known)
             {
                 LOG_INFO(logging::LogCategory::Editor, "MCP set_settings {} = {}", name, value);
                 settings::TheScalability().Pin(name); // what MCP set, the graphics levels leave alone (§3.3)
+                if (readable) { before_.push_back({ name, was, wasPinned }); }
+                else if (!action && !noted(name)) { unreadable_.push_back({ name, 0.0f, wasPinned }); }
             }
             return known;
+        }
+        bool Read(const std::string& name, float& out) override { return ReadSweepValue(scene_, settings_, name, out); }
+        std::vector<std::string> Names(const std::string& prefix) override
+        {
+            std::vector<std::string> out;
+            const settings::SettingsRegistry& registry = settings::Registry();
+            for (const settings::SettingDesc& d : registry.All())
+            {
+                if (std::string_view(d.name).substr(0, prefix.size()) == prefix) { out.emplace_back(d.name); }
+            }
+            for (const settings::SettingFamily& f : registry.Families())
+            {
+                std::vector<std::string> keys;
+                f.keys(keys);
+                for (const std::string& k : keys)
+                {
+                    std::string full = std::string(f.prefix) + k;
+                    if (full.compare(0, prefix.size(), prefix) == 0) { out.push_back(std::move(full)); }
+                }
+            }
+            return out;
+        }
+        std::string Restore() override
+        {
+            // Newest first, so a name set twice ends at its first value; the pins go with it (§3.3: the levels take it).
+            // The count is of names, each once, whose old value was taken back (a refusal is named instead).
+            std::vector<std::string> putBack;
+            std::vector<std::string> refused;
+            for (auto it = before_.rbegin(); it != before_.rend(); ++it)
+            {
+                const bool ok = ApplySweepValue(scene_, settings_, it->name, it->value);
+                if (!it->wasPinned) { settings::TheScalability().Unpin(it->name); }
+                std::vector<std::string>& list = ok ? putBack : refused;
+                if (std::find(list.begin(), list.end(), it->name) == list.end()) { list.push_back(it->name); }
+            }
+            for (const Noted& n : unreadable_)
+            {
+                if (!n.wasPinned) { settings::TheScalability().Unpin(n.name); }
+            }
+            std::string text = "Put back " + std::to_string(putBack.size()) + " name(s) set_settings changed.";
+            if (!refused.empty())
+            {
+                text += " Refused their old value:";
+                for (const std::string& n : refused) { text += " " + n; }
+                text += ".";
+            }
+            if (!unreadable_.empty())
+            {
+                // No reader, or nothing to read it from when it was set (the ocean's colours on a level without one).
+                text += " Not readable when set, they stay as set:";
+                for (const Noted& n : unreadable_) { text += " " + n.name; }
+                text += ".";
+            }
+            LOG_INFO(logging::LogCategory::Editor, "MCP reset_settings: {}", text);
+            before_.clear();
+            unreadable_.clear();
+            return text;
         }
         void ResetExposure() override { renderer_.Exposure().RequestReset(); }
         std::string Profile(const std::string& filter, bool resetMax) override
@@ -2970,9 +1369,19 @@ namespace
             return out;
         }
     private:
+        // What set_settings changed since the last reset_settings: the value before its first change (or none: no reader)
+        // and whether the graphics levels' pin on it was there already (a boot --set's stays).
+        struct Noted
+        {
+            std::string name;
+            float value = 0.0f;
+            bool wasPinned = false;
+        };
         Scene& scene_;
         SceneRenderSettings& settings_;
         Renderer& renderer_;
+        std::vector<Noted> before_;
+        std::vector<Noted> unreadable_;
     };
 }
 #endif

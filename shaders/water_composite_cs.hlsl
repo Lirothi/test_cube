@@ -34,7 +34,7 @@
 
 #pragma pack_matrix(row_major) // invViewProj arrives from a row-major C++ mat4 (mul(v, M))
 #include "utils.hlsli"
-#include "shared/shader_types.h" // architecture plan R5.1: the C++ / HLSL shared layout (its probe, for now)
+#include "shared/shader_types.h" // architecture plan R5: the C++ / HLSL shared layouts
 
 Texture2D GBAux : register(t0);
 Texture2D GB1 : register(t1);
@@ -44,17 +44,10 @@ Texture2D WaterReflection : register(t4);
 RWTexture2D<float4> SceneColor : register(u0);
 SamplerState gSmpLinear : register(s0);
 
+#include "shared/water_composite.h" // WaterCompositeCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer WaterCompositeCB : register(b0)
 {
-    float4x4 invViewProj;      // clip -> world (the jittered projection the depth was drawn with)
-    float3   camPos;
-    float    roughnessDistance; // the ocean preset's roughnessDistance (the water's specularParams.z)
-    float2   invRenderSize;
-    float    preExposure;
-    uint     uvBreakup;         // 1 = the flat mirror read at the UV offset; 0 = the trace already took
-                                //     the wave normal (UE's way), read at the pixel itself
-    // The prefilter (below): x, y = its Gaussian sigma across / along the screen's columns (render px), 0 = off; zw unused.
-    float4   prefilter;
+    WATER_COMPOSITE_FIELDS
 };
 
 // The planar reflection's UV offset, VERBATIM from the water shader it lived in until S4: how far the

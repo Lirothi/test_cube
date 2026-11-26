@@ -56,11 +56,11 @@
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
 #include "app/scene/SceneRenderInternal.h"
+#include "shaders/shared/reflection_pyramid.h" // ReflectionPyramidConstants's fields, once (R5.3)
+#include "shaders/shared/reflection_glossy.h" // ReflectionGlossyConstants's fields, once (R5.3)
+#include "shaders/shared/sky_visibility.h" // SkyVisConstants's fields, once (R5.3)
+#include "shaders/shared/rt_reflect.h" // RtReflectConstants's fields, once (R5.3)
 
-// Architecture plan R5.1: shaders/shared/shader_types.h is read by C++ and by water_composite_cs.hlsl alike; its probe
-// has WaterCompositeCB's layout, so both compilers agree on it before a real constant buffer moves there (R5.3).
-static_assert(sizeof(shader_shared::SharedLayoutProbe) == sizeof(scene_internal::WaterCompositeConstants),
-              "shaders/shared/shader_types.h: the probe must have WaterCompositeCB's layout (112 bytes)");
 using namespace scene_internal;
 
 // ---- the SSR constant fills + Pass_ScreenSpaceReflections ----
@@ -188,35 +188,11 @@ void SceneRenderer::Pass_ScreenSpaceReflections(Renderer* renderer, RenderGraphP
 namespace {
 struct RtReflectConstants
 {
-    Math::mat4 view;
-    Math::mat4 proj;
-    Math::mat4 invView;
-    Math::mat4 invProj;
-    Math::float3 sunDirWS;  float ambientIntensity = 0.0f;
-    Math::float3 lightRgb;  float exposure = 1.0f;
-    float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
-    uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
-    uint32_t reflectionUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
-    uint32_t skyIrradianceIndex = 0; float skyIrradianceScale = 1.0f; // P16.9
-    float lightInvPreExposure = 1.0f; // the light target is pre-exposed: 1 / g_preExposure
-    float sunAngularRadius = 0.0f;    // the sun's disc radius (rad): UE's sphere light in the re-shade
-    // P16.12: mirrors lighting_cs. Off-screen hits are re-shaded in the RT pass, so the bounce has
-    // to reach both or a reflection is about a stop darker than the surface it reflects.
-    Math::float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f };
-    float sunSoftRadius = 0.0f;       // UE's SoftSourceRadius of the sun, as lighting_cs (EvalBRDF)
-    uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
-    // alphaMissKeep/frameSeed: stochastic coverage inflation for the RT foliage alpha test —
-    // see RtAlphaCandidatePasses in rt_geometry.hlsli.
-    uint32_t screenDepthIndex = 0; float alphaMissKeep = 0.0f; uint32_t frameSeed = 0;
-    uint32_t alphaMode = 2; // 0 off (solid cards), 1 first-hit holes, 2 full candidates
-    // Gather-then-shade payload slots: UAV heap indices for the trace dispatch, SRV heap indices
-    // for the resolve dispatch; the monolithic glass dispatch leaves them 0. payloadSkyIndex: an
-    // off-screen hit's sky lighting, apart; skyVisIndex (0 = none this frame): the RT sky visibility
-    // the resolve and the glass dispatch occlude it by, at skyVisStrength (skyVis.diffuse).
-    uint32_t payloadRadianceIndex = 0; uint32_t payloadUvIndex = 0; uint32_t payloadSkyIndex = 0; uint32_t skyVisIndex = 0;
-    // rayGeometricNormal: the mirror ray kept above the reflector's geometric plane (RtSetupReflectionRay); the trace and
-    // the glass dispatch set it, the resolve casts no ray.
-    float skyVisStrength = 1.0f; uint32_t rayGeometricNormal = 0; uint32_t rtPad6 = 0; uint32_t rtPad7 = 0;
+    // shaders/shared/rt_reflect.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float3 = shader_shared::float3;
+    using float4x4 = shader_shared::float4x4;
+    using uint = shader_shared::uint;
+    RT_REFLECT_FIELDS
 };
 
 // The reflections' scene slots past the trace's 0-12 (BindlessTable kScenePerFrame): the sky payload the trace
@@ -367,7 +343,7 @@ void ProbeRtConstantsOnGpu(Renderer* renderer, ID3D12GraphicsCommandList* cl, UI
         // --upload-ring-check=selftest, end to end: a word the shader never reads (the last pad) changed behind the
         // copy's back. The GPU's copy must differ from what was written, and the seal must see the filled block move.
         auto* pad = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(cb.cpu) +
-                                                     offsetof(RtReflectConstants, rtPad7));
+                                                     offsetof(RtReflectConstants, _rtPad7));
         *pad ^= 0xFFFFFFFFu;
         LOG_INFO(logging::LogCategory::RenderRhi,
                  "rt constants self-test: frame 3's RTResolve pad changed after the copy was recorded; the GPU's copy "
@@ -516,16 +492,10 @@ namespace {
 // history -> the accumulation and the target).
 struct SkyVisConstants
 {
-    Math::mat4 invView;
-    Math::mat4 invProj;
-    Math::mat4 prevInvViewProj; // last frame's clip -> world (the history's reprojection test)
-    uint32_t tlasIndex = 0;     uint32_t gb1Index = 0;      uint32_t depthIndex = 0;    uint32_t velocityIndex = 0;
-    uint32_t accumUavIndex = 0; uint32_t historyIndex = 0;  uint32_t countUavIndex = 0; uint32_t countHistoryIndex = 0;
-    uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
-    float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t seedEnabled = 1;
-    float filterDepthTolerance = 0.05f; float filterNormalPower = 8.0f; uint32_t samplingMode = 1; uint32_t meshOpacity = 1;
-    uint32_t rawUavIndex = 0;   uint32_t rawIndex = 0;      uint32_t targetUavIndex = 0; uint32_t filterRadius = 4;
-    uint32_t filterEnabled = 1; uint32_t debugView = 0;     uint32_t accumIndex = 0;    uint32_t filterFirst = 1;
+    // shaders/shared/sky_visibility.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float4x4 = shader_shared::float4x4;
+    using uint = shader_shared::uint;
+    SKY_VISIBILITY_FIELDS
 };
 static_assert(sizeof(SkyVisConstants) == 3 * 64 + 7 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
@@ -1097,24 +1067,23 @@ namespace
 // Mirrors `cbuffer ReflectionPyramidCB` in reflection_pyramid_cs.hlsl.
 struct ReflectionPyramidConstants
 {
-    uint32_t dstSize[2] = { 1, 1 };
-    uint32_t srcSize[2] = { 1, 1 };
-    uint32_t fromInput = 0;
-    uint32_t pad[3] = { 0, 0, 0 };
+    // shaders/shared/reflection_pyramid.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using uint = shader_shared::uint;
+    using uint2 = shader_shared::uint2;
+    using uint3 = shader_shared::uint3;
+    REFLECTION_PYRAMID_FIELDS
 };
 static_assert(sizeof(ReflectionPyramidConstants) == 2 * 16, "ReflectionPyramidConstants mirrors reflection_pyramid_cs.hlsl");
 
 // Mirrors `cbuffer ReflectionGlossyCB` in reflection_glossy_cs.hlsl.
 struct ReflectionGlossyConstants
 {
-    Math::mat4 invView;
-    Math::mat4 invProj;
-    uint32_t outSize[2] = { 1, 1 };
-    float invOutSize[2] = { 1.0f, 1.0f };
-    float pixelsPerRadian = 1.0f;
-    float planeTolerance = 0.02f;
-    float normalPower = 8.0f;
-    uint32_t mipCount = 1;
+    // shaders/shared/reflection_glossy.h (architecture plan R5.3): the fields, once for HLSL and C++.
+    using float2 = shader_shared::float2;
+    using float4x4 = shader_shared::float4x4;
+    using uint = shader_shared::uint;
+    using uint2 = shader_shared::uint2;
+    REFLECTION_GLOSSY_FIELDS
 };
 static_assert(sizeof(ReflectionGlossyConstants) == 2 * 64 + 2 * 16, "ReflectionGlossyConstants mirrors reflection_glossy_cs.hlsl");
 
@@ -1161,10 +1130,10 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
             for (UINT mip = 0; mip < D.reflectionPyramidMips; ++mip)
             {
                 ReflectionPyramidConstants pc{};
-                pc.dstSize[0] = std::max(1u, ssrWidth >> mip);
-                pc.dstSize[1] = std::max(1u, ssrHeight >> mip);
-                pc.srcSize[0] = srcW;
-                pc.srcSize[1] = srcH;
+                pc.dstSize.x = std::max(1u, ssrWidth >> mip);
+                pc.dstSize.y = std::max(1u, ssrHeight >> mip);
+                pc.srcSize.x = srcW;
+                pc.srcSize.y = srcH;
                 pc.fromInput = mip == 0 ? 1u : 0u;
                 const UINT srcMip = mip == 0 ? 0u : mip - 1u; // mip 0's u0/u2 are inert placeholders
                 RecordComputeDispatch(renderer, t.cl, pyramidMaterial.get(), AlignedCbSize(sizeof(pc)),
@@ -1172,11 +1141,11 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
                     { input, D.depthSRV, D.gbSRV[1] },
                     { D.reflectionPyramidMipUAV[srcMip], D.reflectionPyramidMipUAV[mip],
                       D.reflectionGeomPyramidMipUAV[srcMip], D.reflectionGeomPyramidMipUAV[mip] },
-                    pointTable, pc.dstSize[0], pc.dstSize[1],
+                    pointTable, pc.dstSize.x, pc.dstSize.y,
                     D.reflectionPyramid.Get()); // UAV barrier: the next level reads this one
                 renderer->UAVBarrier(t.cl, D.reflectionGeomPyramid.Get()); // ...and the geometry's, likewise
-                srcW = pc.dstSize[0];
-                srcH = pc.dstSize[1];
+                srcW = pc.dstSize.x;
+                srcH = pc.dstSize.y;
             }
 
             // The gather over each pixel's GGX lobe, from the pyramid into the reflection compose reads.
@@ -1185,10 +1154,10 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
             ReflectionGlossyConstants gc{};
             gc.invView = camera.GetInvViewMatrix();
             gc.invProj = camera.GetInvProjMatrix();
-            gc.outSize[0] = ssrWidth;
-            gc.outSize[1] = ssrHeight;
-            gc.invOutSize[0] = 1.0f / static_cast<float>(std::max(1u, ssrWidth));
-            gc.invOutSize[1] = 1.0f / static_cast<float>(std::max(1u, ssrHeight));
+            gc.outSize.x = ssrWidth;
+            gc.outSize.y = ssrHeight;
+            gc.invOutSize.x = 1.0f / static_cast<float>(std::max(1u, ssrWidth));
+            gc.invOutSize.y = 1.0f / static_cast<float>(std::max(1u, ssrHeight));
             gc.pixelsPerRadian = 0.5f * static_cast<float>(ssrHeight) * std::abs(camera.GetProjMatrixNoJitter().m._22);
             gc.planeTolerance = kGlossyPlaneTolerance;
             gc.normalPower = kGlossyNormalPower;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 // The settings registry (architecture plan R2.1): one row per setting name -- what --set / --sweep / MCP set_settings
@@ -35,6 +36,13 @@ enum SettingFlags : std::uint32_t
     SettingTransient = 1u << 2,   // a run's A/B: never saved
     SettingScalable = 1u << 3,    // the scalability table manages it (data/config/scalability.json)
     SettingAction = 1u << 4,      // a command, not a value (race.start): no reader, never dumped
+    // What a change of a Scalable setting costs (settings::ScalabilityKnob::cls, docs/scalability_plan.md): one of them.
+    SettingCostNextFrame = 1u << 5,  // L: the next frame takes it
+    SettingCostTargets = 1u << 6,    // R: the render targets are recreated
+    SettingCostIdleGpu = 1u << 7,    // I: a reconcile at an idle GPU in Scene
+    SettingCostCache = 1u << 8,      // C: a cache flushed
+    SettingCostPipelines = 1u << 9,  // P: pipelines rebuilt
+    SettingCostBoot = 1u << 10,      // B: only at boot
 };
 
 struct SettingDesc
@@ -52,9 +60,33 @@ struct SettingDesc
     const char* hint = "";
 };
 
+// A family of names: <prefix><key> for the keys of an owner's table (game::RaceKeys, ocean::WakeKnobs, the scalability
+// groups, ...). The table stays the one record per knob; the family is the registry's way to it. A row answers its name
+// first; a family answers a name no row has when its `has` takes the tail (two families may share a prefix: the ocean's
+// colours and its wake knobs).
+struct SettingFamily
+{
+    const char* prefix = nullptr;  // "race."
+    const char* table = nullptr;   // where the keys live, for a reader and tools/settings_names.py: "game::RaceKeys"
+    SettingType type = SettingType::Float;
+    std::uint32_t flags = SettingNone;
+    bool (*has)(std::string_view key) = nullptr;
+    // Applies <prefix><key> as the chain's prefix block did, its clamp included. False = refused.
+    bool (*apply)(SettingContext& ctx, std::string_view key, float value) = nullptr;
+    // Reads <prefix><key>; null = no reader. False = cannot be read in this state.
+    bool (*read)(SettingContext& ctx, std::string_view key, float& out) = nullptr;
+    // Every key it answers now (the dump, the dev UI); may follow what is loaded (the scalability groups).
+    void (*keys)(std::vector<std::string>& out) = nullptr;
+};
+
 class SettingsRegistry
 {
 public:
+    bool AddFamily(const SettingFamily& family);
+    // The family that answers a name (its prefix starts the name and its `has` takes the tail), or null; `key` gets the
+    // tail.
+    const SettingFamily* FindFamily(std::string_view name, std::string_view& key) const;
+    const std::vector<SettingFamily>& Families() const { return families_; }
     // A second row with a name already there (or a row without an apply) is refused; the first stays. Rows arrive at
     // static initialisation, before the log: ReportRefused logs the refusals once the log is up (main).
     bool Add(const SettingDesc& desc);
@@ -63,11 +95,13 @@ public:
     // branch did). Unknown names are false (the caller then asks the chain).
     bool Apply(SettingContext& ctx, std::string_view name, float value) const;
     bool Read(SettingContext& ctx, std::string_view name, float& out) const;
+    bool Knows(std::string_view name) const; // a row or a family answers it
     const std::vector<SettingDesc>& All() const { return rows_; }
     int ReportRefused() const; // the number of refused rows, each an Error line
 
 private:
     std::vector<SettingDesc> rows_;
+    std::vector<SettingFamily> families_;
     std::vector<std::string> refused_;
 };
 
@@ -78,6 +112,18 @@ SettingsRegistry& Registry();
 // kBloomSettings[] = { ... }`. tools/settings_names.py finds the rows by `TC_SETTING("name"`, so write each row as
 // TC_SETTING("name", ...) -- see the macro.
 int RegisterTable(const SettingDesc* rows, std::size_t count);
+int RegisterFamilies(const SettingFamily* families, std::size_t count);
+
+// A row's reader: the stored value as --settings-dump prints it -- a bool 0 / 1, an enum its number, a whole number as
+// a float, a string (a texture's path) 1 when set.
+template <class T>
+float AsFloat(const T& v)
+{
+    if constexpr (std::is_same_v<T, bool>) { return v ? 1.0f : 0.0f; }
+    else if constexpr (std::is_enum_v<T>) { return static_cast<float>(static_cast<std::underlying_type_t<T>>(v)); }
+    else if constexpr (std::is_arithmetic_v<T>) { return static_cast<float>(v); }
+    else { return v.empty() ? 0.0f : 1.0f; }
+}
 }
 
 // One row: TC_SETTING("bloom.intensity", Float, SettingLevelOwned, apply, read) -- a designated SettingDesc.
@@ -88,3 +134,9 @@ int RegisterTable(const SettingDesc* rows, std::size_t count);
 #define TC_SETTINGS(TABLE) \
     static const int TC_SETTINGS_PASTE(tcSettingsRegistered_, __LINE__) = \
         ::settings::RegisterTable((TABLE), sizeof(TABLE) / sizeof((TABLE)[0]))
+// One family: TC_SETTING_FAMILY("race.", "game::RaceKeys", Float, SettingTransient, has, apply, read, keys).
+#define TC_SETTING_FAMILY(PREFIX, TABLE, TYPE, FLAGS, HAS, APPLY, READ, KEYS) \
+    ::settings::SettingFamily{ PREFIX, TABLE, ::settings::SettingType::TYPE, (FLAGS), (HAS), (APPLY), (READ), (KEYS) }
+#define TC_SETTING_FAMILIES(TABLE) \
+    static const int TC_SETTINGS_PASTE(tcSettingFamiliesRegistered_, __LINE__) = \
+        ::settings::RegisterFamilies((TABLE), sizeof(TABLE) / sizeof((TABLE)[0]))

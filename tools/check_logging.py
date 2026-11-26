@@ -27,7 +27,7 @@ ALLOW = {
     "diag::LogPath": (
         "core/diagnostics/DiagPaths.h",
         "core/diagnostics/ArtifactWriter.cpp",
-        "app/main.cpp",                 # three harness outputs that own their FILE*
+        "app/BootTools.cpp",            # three harness outputs that own their FILE* (moved from main.cpp, R3.2d)
         "assets/AssetImporter.h",       # the importer's own log stream
         "editor/ui/ImportPanel.cpp",
     ),

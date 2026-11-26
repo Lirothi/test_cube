@@ -261,6 +261,12 @@
     <ClCompile Include="sources/app/BootParse.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/BootParseDev.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/BootTools.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/BootOptionsDump.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -280,6 +286,75 @@
       <Filter>sources\app\settings</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/settings/BloomSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/TimeOfDaySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/GameSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/ScalabilitySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/DisplaySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/OceanSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/SkySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/ExposureSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/GtaoSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/FogSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/VfxSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/FrameSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/DebugSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/PhysicsSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/CloudSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/RenderSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/VisibilitySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/ShadowSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/ReflectionSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/GiSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/StreamingSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/LodSettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/TessySettingRows.cpp">
+      <Filter>sources\app\settings</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/settings/VsmSettingRows.cpp">
       <Filter>sources\app\settings</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/settings/UserSettings.cpp">
@@ -1301,10 +1376,19 @@
     <ClInclude Include="sources/app/BootOptions.h">
       <Filter>sources\app</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/FrameRequests.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/BootSwitches.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/BootParse.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/BootLogSession.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/BootTools.h">
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/harness/Harness.h">
@@ -2100,6 +2184,96 @@
       <Filter>shaders\shared</Filter>
     </None>
     <None Include="shaders\shared\lighting_slots.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\camera_hzb.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\cascade_hzb.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\compose_slots.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\ddgi_constants.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\ddgi_usage.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\glass_params.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\glass_slots.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\glass_view.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\hzb_build.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\hzb_cull_selftest.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\hzb_selftest_box.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\hzb_selftest_result.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\ocean_slots.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\ocean_wake.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\ocean_water_mask.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\reflection_glossy.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\reflection_pyramid.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\rt_reflect.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\shadow_cull.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\sky_lut_debug.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\sky_occlusion.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\sky_visibility.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\tessy_cluster.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\tessy_cluster_lod.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\vis_test.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\vsm_propagate.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\vsm_scatter.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\vsm_water_mask.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\water_composite.h">
+      <Filter>shaders\shared</Filter>
+    </None>
+    <None Include="shaders\shared\water_mask_lid.h">
       <Filter>shaders\shared</Filter>
     </None>
     <None Include="shaders\wind.hlsli">

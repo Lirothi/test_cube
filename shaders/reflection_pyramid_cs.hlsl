@@ -24,12 +24,11 @@ RWTexture2D<float4> SrcGeom : register(u2);
 RWTexture2D<float4> DstGeom : register(u3);
 SamplerState gSmpPoint : register(s0);
 
+#include "shared/shader_types.h"
+#include "shared/reflection_pyramid.h" // ReflectionPyramidCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer ReflectionPyramidCB : register(b0)
 {
-    uint2 dstSize;   // destination mip dimensions, texels
-    uint2 srcSize;   // source mip dimensions (the reflection's for mip 0)
-    uint fromInput;  // 1 = mip 0: copy the reflection, sample the G-buffer
-    uint3 _pyramidPad;
+    REFLECTION_PYRAMID_FIELDS
 }
 
 [numthreads(8, 8, 1)]

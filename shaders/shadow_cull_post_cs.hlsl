@@ -29,15 +29,11 @@ cbuffer CullParams : register(b0)
 };
 
 static const uint kHzbCascades = 4u;
+#include "shared/shader_types.h"
+#include "shared/cascade_hzb.h" // CascadeHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CascadeHzbCB : register(b1)
 {
-    row_major float4x4 gHzbPrevViewProj[4];
-    row_major float4x4 gHzbViewProj[4];
-    uint4 gHzbPrevValid;
-    int4  gHzbViewRect;
-    uint2 gHzbSize;
-    uint  gHzbOn;
-    uint  gHzbPad;
+    CASCADE_HZB_FIELDS
 };
 
 struct CasterBounds

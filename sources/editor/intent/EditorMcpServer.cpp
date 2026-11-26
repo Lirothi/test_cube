@@ -593,7 +593,8 @@ namespace editormcp
                 { "description",
                   "Change the running scene's settings the way `--set` does, through the SAME name "
                   "table (bloom.*, exposure.*, color.*, cloud.*, fog.*, sky.*, tod.*, light.*, "
-                  "cloudTrace.*, frame.* ... -- App.cpp ApplySweepValue). For A/B'ing a look without "
+                  "cloudTrace.*, frame.* ... -- the settings registry, app/settings/*SettingRows.cpp; "
+                  "get_settings reads them). For A/B'ing a look without "
                   "relaunching: set, screenshot {clean, path, settleFrames}, reset_settings, next. "
                   "TRANSIENT: it does not touch the document (no undo entry, nothing to save) and "
                   "an Inspector edit of the same object re-applies the document over it. The "
@@ -609,14 +610,26 @@ namespace editormcp
             {
                 { "name", "reset_settings" },
                 { "description",
-                  "Put the scene's settings back to what the open DOCUMENT says (the level as "
-                  "edited, unsaved edits included): time of day, camera exposure, colour, GTAO, "
-                  "height fog, bloom, sky atmosphere, clouds and the ocean's look -- every object "
-                  "set_settings can reach in the level, and fog.debugView / fog.skyAlongView back to 0. "
-                  "Project-wide switches (cloudTrace.*, "
-                  "cloudShadow.*, frame.*, the cloud A/B globals) are NOT in the document and stay "
-                  "as last set." },
+                  "Undo set_settings: every name it changed since the last reset goes back to the "
+                  "value it had before (project-wide switches too -- cloudTrace.*, frame.*, vsm.* ...; "
+                  "a name without a reader stays as set and the answer names it), the graphics levels "
+                  "take those names back, and then the scene's settings are re-applied from what the "
+                  "open DOCUMENT says (the level as edited, unsaved edits included): time of day, "
+                  "camera exposure, colour, GTAO, height fog, bloom, sky atmosphere, clouds and the "
+                  "ocean's look, and fog.debugView / fog.skyAlongView back to 0." },
                 { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "get_settings" },
+                { "description",
+                  "Read the running scene's settings by their --set names: \"a.b;c.d\", or a prefix "
+                  "ending in '.' or '*' (\"vsm.\", \"cloud.view*\") for every name under it. Answers "
+                  "{\"values\": {name: value}, \"unreadable\": [...], \"unknown\": [...]} -- unreadable = "
+                  "a name the table knows but cannot read back (an action, each boat's own vessel.*)." },
+                { "inputSchema", ObjectSchema({
+                    { "names", { { "type", "string" },
+                        { "description", "\"name;name;prefix.\" -- names or prefixes, ';'-separated" } } } },
+                    json::array({ "names" })) },
             },
             {
                 { "name", "get_readouts" },
@@ -1452,11 +1465,53 @@ namespace editormcp
             return result;
         }
 
-        if (name == "set_settings" || name == "get_readouts" || name == "get_profile" || name == "get_memory")
+        if (name == "set_settings" || name == "get_settings" || name == "get_readouts" || name == "get_profile" ||
+            name == "get_memory")
         {
             if (!g_runtimeHost)
             {
                 return Error("There is no running app here to set or read (this host has none).");
+            }
+            if (name == "get_settings")
+            {
+                const std::string spec = arguments.value("names", std::string());
+                json values = json::object();
+                json unreadable = json::array();
+                json unknown = json::array();
+                const auto readOne = [&](const std::string& n) {
+                    float v = 0.0f;
+                    if (g_runtimeHost->Read(n, v)) { values[n] = v; return; }
+                    // Names() matches a PREFIX: "bloom.int" is under bloom.intensity, not a name of its own.
+                    const std::vector<std::string> under = g_runtimeHost->Names(n);
+                    if (std::find(under.begin(), under.end(), n) != under.end()) { unreadable.push_back(n); }
+                    else { unknown.push_back(n); }
+                };
+                std::size_t at = 0;
+                while (at <= spec.size())
+                {
+                    std::size_t end = spec.find(';', at);
+                    if (end == std::string::npos) { end = spec.size(); }
+                    std::string item = spec.substr(at, end - at);
+                    at = end + 1;
+                    item.erase(0, item.find_first_not_of(" \t"));
+                    item.erase(item.find_last_not_of(" \t") + 1);
+                    if (item.empty()) { continue; }
+                    if (item.back() == '.' || item.back() == '*')
+                    {
+                        if (item.back() == '*') { item.pop_back(); }
+                        const std::vector<std::string> names = g_runtimeHost->Names(item);
+                        if (names.empty()) { unknown.push_back(item + "*"); }
+                        for (const std::string& n : names) { readOne(n); }
+                    }
+                    else
+                    {
+                        readOne(item);
+                    }
+                }
+                ToolResult result;
+                result.text = json{ { "values", values }, { "unreadable", unreadable }, { "unknown", unknown } }.dump();
+                result.isError = values.empty() && unreadable.empty();
+                return result;
             }
             if (name == "get_memory")
             {
@@ -1546,6 +1601,9 @@ namespace editormcp
 
         if (name == "reset_settings")
         {
+            // First what set_settings changed, back to its value before (architecture plan R2.n: the project-wide
+            // names a document does not hold no longer stay as last set).
+            const std::string restored = g_runtimeHost ? g_runtimeHost->Restore() : std::string();
             // Every environment object a setting reaches, re-applied from the document through
             // EnvironmentRuntime -- the road an Inspector edit takes. Lights, the camera's lens, the
             // skybox image and the wind are left alone: nothing in set_settings reaches them, and
@@ -1572,11 +1630,12 @@ namespace editormcp
                 g_runtimeHost->ResetExposure();
             }
             outRecord.title = "reset_settings";
-            outRecord.verdict = "settings back to the document (" + std::to_string(count) + " objects)";
+            outRecord.verdict = (restored.empty() ? std::string() : restored + " ") + "settings back to the document (" +
+                                std::to_string(count) + " objects)";
             outRecord.show = true;
             ToolResult result;
-            result.text = "Re-applied " + std::to_string(count) + " environment objects from the open "
-                "document; the exposure re-meters from scratch.";
+            result.text = (restored.empty() ? std::string() : restored + " ") + "Re-applied " + std::to_string(count) +
+                " environment objects from the open document; the exposure re-meters from scratch.";
             return result;
         }
 

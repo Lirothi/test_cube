@@ -2,14 +2,13 @@
 """Architecture plan R2.0 (a): every setting name the program takes by --set / --sweep / MCP set_settings, and which of
 them it can read back -- the set a move into the settings registry (R2.1+) must keep whole.
 
-The names live in three places today, and all three are read here:
-  * sources/app/App.cpp ApplySweepValue -- the write chain: `setting == "a.b"`, and inside a prefix block
-    (`if (setting.rfind("cloud.", 0) == 0)`) the `key == "x"` / `group == "x"` comparisons of its tail;
-  * the key tables a prefix walks: race. (RaceKeys), bot. (BotKeys), player. (PlayerKeys), vessel. (VesselKeys),
-    ocean.wake* (ocean/OceanWakeKnobs.h), sg.<group> (data/config/scalability.json), the ocean colours
-    (ocean.<deepScatter|diffuse|sss|absorption0-3><R|G|B>) and exposure.curveEv<i> / curveComp<i>;
-  * ReadSweepValue -- the read chain (`name == "a.b"`, and the display.* block): the names --settings-dump can print;
-  * the settings registry (sources/core/settings), once it holds names: `TC_SETTING("a.b", ...)` rows.
+Since R2.2 every name lives in the settings registry (sources/app/settings/*SettingRows.cpp):
+  * a row, `TC_SETTING("a.b", TYPE, FLAGS, APPLY, READ)`: readable unless its READ is nullptr;
+  * a family, `TC_SETTING_FAMILY("race.", "game::RaceKeys", TYPE, FLAGS, HAS, APPLY, READ, KEYS)`: the names are the
+    prefix and every key of the table its label names (FAMILY_KEYS below; a family with a label this script does not
+    know is an error, so a new one teaches it here).
+App.cpp's old chains (ApplySweepValue / ReadSweepValue) are still read: a `setting == "a.b"` branch or a prefix block put
+back there is a name outside the registry, and a name in both is a finding (the branch is dead).
 tools/settings_names.txt is the set: one name a line, ` r` after a name that can be read. Exit code = differences.
 
     python tools/settings_names.py            # compare the sources with tools/settings_names.txt
@@ -104,24 +103,14 @@ def write_chain():
         if pending_prefix is not None and text.rstrip().endswith(")") is False and "{" not in text:
             # `if (setting.rfind("vessel.", 0) == 0 && ...) { return true; }` style one-liners open no block
             pass
-    # the tables the prefixes walk
-    names |= {"race." + k for k in table_keys("app/game/Race.cpp", "RaceKeys")}
-    names |= {"bot." + k for k in table_keys("app/game/RaceBot.cpp", "BotKeys")}
-    names |= {"player." + k for k in table_keys("app/game/PlayerStart.cpp", "PlayerKeys")}
-    names |= {"vessel." + k for k in table_keys("physics/CollisionJson.h", "VesselKeys")}
-    names |= {"ocean." + k for k in table_keys("ocean/OceanWakeKnobs.h", "WakeKnobs")}
-    scal = json.loads((REPO / "data" / "config" / "scalability.json").read_text(encoding="utf-8"))
-    groups = scal.get("groups", {})
-    group_names = groups.keys() if isinstance(groups, dict) else [g.get("key") for g in groups]
-    names |= {"sg." + g for g in group_names if g}
-    for stem in ("deepScatter", "diffuse", "sss", "absorption0", "absorption1", "absorption2", "absorption3"):
-        for ch in "RGB":
-            names.add(f"ocean.{stem}{ch}")
-    m = re.search(r"kExposureCurveMaxPoints\s*=\s*(\d+)", read("rendering/core/PhotographicSettings.h"))
-    points = int(m.group(1)) if m else 0
-    for i in range(points):
-        names.add(f"exposure.curveEv{i}")
-        names.add(f"exposure.curveComp{i}")
+    # the tables a prefix block still in the chain walks
+    for prefix, label in (("race.", "game::RaceKeys"), ("bot.", "game::BotKeys"), ("player.", "game::PlayerKeys"),
+                          ("vessel.", "physics::VesselKeys"), ("ocean.wake", "ocean::WakeKnobs"), ("sg.", "scalability groups"),
+                          ("ocean.", "ocean colours")):
+        if any(re.search(r'setting\.rfind\("' + re.escape(prefix) + r'",\s*0\)', line) for line in body):
+            names |= {("ocean." if label == "ocean::WakeKnobs" else prefix) + k for k in FAMILY_KEYS[label]()}
+    if any("exposure.curveEv" in line for line in body):
+        names |= {p + k for p in ("exposure.curveEv", "exposure.curveComp") for k in FAMILY_KEYS["exposure curve points"]()}
     return names
 
 
@@ -135,6 +124,31 @@ def read_chain():
 
 
 REGISTERED_TWICE = []
+
+
+def scalability_groups():
+    scal = json.loads((REPO / "data" / "config" / "scalability.json").read_text(encoding="utf-8"))
+    groups = scal.get("groups", {})
+    return [g for g in (groups.keys() if isinstance(groups, dict) else [g.get("key") for g in groups]) if g]
+
+
+def curve_points():
+    m = re.search(r"kExposureCurveMaxPoints\s*=\s*(\d+)", read("rendering/core/PhotographicSettings.h"))
+    return [str(i) for i in range(int(m.group(1)) if m else 0)]
+
+
+# A family's label -> its keys, read from where the program reads them.
+FAMILY_KEYS = {
+    "game::RaceKeys": lambda: table_keys("app/game/Race.cpp", "RaceKeys"),
+    "game::BotKeys": lambda: table_keys("app/game/RaceBot.cpp", "BotKeys"),
+    "game::PlayerKeys": lambda: table_keys("app/game/PlayerStart.cpp", "PlayerKeys"),
+    "physics::VesselKeys": lambda: table_keys("physics/CollisionJson.h", "VesselKeys"),
+    "ocean::WakeKnobs": lambda: table_keys("ocean/OceanWakeKnobs.h", "WakeKnobs"),
+    "scalability groups": scalability_groups,
+    "ocean colours": lambda: [s + c for s in ("deepScatter", "diffuse", "sss", "absorption0", "absorption1", "absorption2",
+                                              "absorption3") for c in "RGB"],
+    "exposure curve points": curve_points,
+}
 
 
 def registry():
@@ -158,6 +172,22 @@ def registry():
             # TC_SETTING(NAME, TYPE, FLAGS, APPLY, READ): a row reads back unless its READ is nullptr.
             if len(args) == 5 and args[4] not in ("nullptr", "NULL", "0"):
                 readable.add(name)
+        for m in re.finditer(r'\bTC_SETTING_FAMILY\(', text):
+            args = macro_args(text, m.end())
+            if not args or len(args) != 8 or not re.fullmatch(r'"[^"]+"', args[0]) or not re.fullmatch(r'"[^"]+"', args[1]):
+                continue
+            prefix, label = args[0][1:-1], args[1][1:-1]
+            if label not in FAMILY_KEYS:
+                raise SystemExit(f"settings_names: family {prefix} ({label}) in {path.relative_to(SRC).as_posix()} -- "
+                                 "teach FAMILY_KEYS where its keys live")
+            for key in FAMILY_KEYS[label]():
+                name = prefix + key
+                if name in names:
+                    REGISTERED_TWICE.append(f"{name} ({path.relative_to(SRC).as_posix()}, family {label})")
+                names.add(name)
+                # TC_SETTING_FAMILY(PREFIX, TABLE, TYPE, FLAGS, HAS, APPLY, READ, KEYS)
+                if args[6] not in ("nullptr", "NULL", "0"):
+                    readable.add(name)
     return names, readable
 
 

@@ -3497,6 +3497,43 @@ R1.6 −5, R1.7 −1). `core` не включает ничего выше себ
   - Не в этих группах (разбор у своих мест): ключи-кнобы рендера (`--vsm-*`, `--ocean-*`, `--csm-*`, барьеры, DLSS MV,
     `--wind-freeze`), ранние режимы и самотесты, инструменты (`--import`, `--reimport-*`, `--lod-report`, …). Их
     перенос — со своим гейтом: дамп `Boot()` их не видит.
+
+  **Сделано R3.2c-R3.2d — остаток `WinMain` (2026-11-26, «давай доделывай все»).** `WinMain` — 1448 -> 177 строк
+  (цель раздела 5 — ~150: остались пролог упакованной сборки, установка обработчика падений с его объяснением, `App`
+  и код выхода).
+  - R3.2c, отладочные ключи: 65 блоков «ключ — выставить глобал / взвести самотест» стали функциями разбора на строках
+    таблицы (`app/BootParseDev.cpp`, объявления — `BootParse.h`), дословно, с их комментариями; помощники GBV
+    (`ApplyGbv*Arg`) и лямбда путей облаков (`WidePathArg`) переехали с ними. `boot::ParseSwitches` идёт в порядке
+    таблицы, поэтому пары, где побеждает поздний ключ, выстроены строками: `--vsm-page-multidraw` перед
+    `--vsm-singledraw`, `--vsm-page-[no]compact` перед `--vsm-compactargs` (строка переставлена),
+    `--ocean-surf-sim-shore` перед `--ocean-runup-shore` (переставлена), `--scene-stress` перед `--gbv`.
+  - R3.2d, инструменты: блоки, которые работают вместо игры и выходят, — упорядоченными функциями `app/BootTools.cpp`
+    (`RunEarlyTools` — `--help`, `--crash-selftest`; `PreparePackagedContent` / `ReadPackagedBootLevel` упакованной
+    сборки; `RunContentTools` — vfs, шейдеры, кук; `RunHarnessTools` — самотесты, стресс, бенчмарки, `--import`;
+    `RunAssetTools` — `--uv-density`, `--seam-ratio`, `--tessy-upgrade`, `--water-mask-lid`, `--lod-report`,
+    `--reimport`), вызванными там, где блоки стояли: что к этому моменту существует (лог, обработчик падений, контент,
+    DPI) — как было. Сессия лога — `app/BootLogSession.h`. У `main.cpp` ушли 40 include, у `BootParseDev.cpp` — то,
+    что ему не нужно.
+  - Перенос делал скрипт, и он же сверил: каждая непустая строка прежнего `WinMain` стоит ровно в одном из
+    `main.cpp` / `BootTools.cpp` / `BootParseDev.cpp` / `BootLogSession.h` (1400 строк; не нашлись восемь ожидаемых —
+    обёртки опустевших групп `if (lpCmdLine)`, лямбда, её четыре вызова, объявление списка ключей Shipping).
+  - Гейт: `--boot-dump` пишет теперь и 57 глобалов отладочных ключей (`dev.<имя>=`, BootOptionsDump.cpp). Шесть
+    командных строк (все отладочные ключи разом; их противоположности; стресс с GBV; GBV; пары, где побеждает поздний;
+    пустая) — дампы до и после побайтно равны, и на итоговой сборке тоже. Инструменты эталона и текущей сборки — тот
+    же код выхода и та же строка вердикта: `--gpu-check`, `--vfs-selftest` (141), `--scalability-selftest`,
+    `--tod-selftest`, `--thread-check-selftest` (Release: компилировано без проверок — код 1, как у эталона),
+    `--hzb-cull-selftest` (21), `--physics-gate=smoke`, `--lod-report`, `--shader-model=6.6 --vfs-selftest`,
+    `--crash-selftest=<неизвестный>` (код 2); `--help` — код 0, таблица в логе (у эталона его ещё нет). Шесть
+    конфигураций без предупреждений; `check_switches.py` (теперь читает и `BootParseDev.cpp`; самотест PASS), прочие
+    `check_*.py` — 0; `intent_regression` — PASS.
+  - Контроль: строка `--ocean-runup-shore` возвращена перед `--ocean-surf-sim-shore` — дамп «пары» разошёлся ровно
+    строкой `dev.ocean::g_shoreRunup_game=1 -> 0`. В функции `--dr-check` имя ключа испорчено — `check_switches`:
+    «nothing reads it» и «names parse::DrCheck, which does not read --dr-check», код 3.
+  - Найдено и поправлено по дороге: разрешение `check_logging.py` на `diag::LogPath` и допуск слоёв для
+    `editor/assets/MaterialFileGen.h` (`--seam-ratio`) переехали с `main.cpp` на `BootTools.cpp` вместе с кодом —
+    допуск остался 53.
+  - Не покрыто дампом: ключи, которые зовут сеттеры без геттера (`GraphicsDevice::ForceLegacyBarriers`,
+    `EnableDredForStress`, `barriers::SetCensusEnabled`, взвод самотестов) — их перенос проверен сверкой текста.
 - **R3.3. Харнесс — объект** `OnBoot / OnFrame / Verdict` в `app/harness/`. По одному на шаг, в порядке:
   shot / sweep / profdump / trace → mem-readout → scalability-check → rt-audit → scene-stress → intent / chat.
   Готово для каждого: прежний ключ, прежняя строка вердикта в сессионном логе, прежний код выхода.
@@ -3700,6 +3737,116 @@ R1.6 −5, R1.7 −1). `core` не включает ничего выше себ
   - Не покрыто: C++-проверка пустого слота (`assert`) не прогонялась с намеренной дырой. Остаются R5.3b-…: compose,
     glass, поверхность океана, затем остальные пассы — по одному на шаг.
 
+  **Сделано R5.3b-R5.3e — compose, GlassView, glass, поверхность океана (2026-11-26).**
+  - R5.3b compose: `shaders/shared/compose_slots.h` (21 SRV, u0, два сэмплера, b0); `compose_cs.hlsl` объявляет
+    регистры по именам, рядом с `COMPOSE_CS_RS` — `#error` при расхождении размеров таблиц; `Pass_Compose` собирает
+    `srv[COMPOSE_T_*]` (была позиционная инициализация списком) и проверяет, что ни один слот не пуст. cbuffer
+    `PerFrame` пишется по отражённым именам — зеркала нет, как у lighting.
+  - R5.3c `GlassView` (b1 стекла, частиц и океана) — первый перенесённый cbuffer с C++-зеркалом (`GlassViewCB`,
+    загрузка memcpy): поля ОДИН раз в `shaders/shared/glass_view.h` списком-макросом `GLASS_VIEW_FIELDS(levels)` —
+    не структурой, потому что HLSL читает cbuffer как глобалы (менять доступ во всех шейдерах — менять DXIL);
+    комментарии полей перенесены как `/* */` (строчный `//` внутри продолженной строки съел бы следующее поле).
+    `glass_view_cb.hlsli` разворачивает его и в `cbuffer GlassView`, и в `struct GlassViewData`; C++ `GlassViewCB` —
+    тот же список с именами типов HLSL из `shader_types.h`, и новый `static_assert(sizeof == 2368)` — размер, который
+    отдаёт рефлексия HLSL (раньше у зеркала проверки размера не было).
+  - R5.3d glass: `shaders/shared/glass_slots.h` (проходные t0..t14, слот нормалей рисования t6, материальные t15..t19,
+    сэмплеры обеих перестановок, b0 / b1); проверены обе корневые подписи (`GLASS_MATERIAL` 20 / 4 и без него 15 / 3);
+    `GlassPassSrvs.cpp` (была позиционная инициализация), `GBufferRenderable::RenderTranslucent`
+    (`kGlassPassSrvCount + 0..4`) и `Renderer.h` (`std::array<…, 15>`) — по именам.
+  - R5.3e океан: `shaders/shared/ocean_slots.h` — обе поверхности (run-up 26 SRV, surf-sim 31) и
+    `ocean_surface_common.hlsli`; t10 у них называется по-разному (маска разрыва / контактная пена) при одной текстуре
+    — слот `OCEAN_T_SHORE_FOAM_MASK`; обе корневые подписи проверены. `OceanRenderable` заполнял таблицу 31 вызовом
+    `pushSrv` по порядку — теперь `setSrv(OCEAN_T_*, …)`, повтор слота и пустой слот — `assert`.
+    `ocean_surface_runup.hlsli` лежал в репозитории в LF — нормализован в CRLF.
+  - Проверено: DXIL до / после тождествен — compose (3001 строка листинга), 14 перестановок glass / ocean / particles
+    (все, что включают `glass_view_cb.hlsli`: свои списки `check_shaders` и запись кука, на 6_6 с определениями
+    движка); `check_shaders.py` — 0; сборки без предупреждений (`static_assert` 2368 проходит). Суженный GBV
+    (Debug, wind_test): `--gbv-passes=Compose,Translucent,Transparent,Skybox --gbv-selftest=1@Skybox` на виде ванной
+    (стекло в кадре; первый кадр за 151 с) и `--gbv-passes=Transparent,Skybox` на лагуне (океан) — в логах только
+    `id=935` от инъекции, `live objects at exit: none`, `session end: clean shutdown`. Картинка (три вида 11.3,
+    эталон `be9c4487`, b1 c1 b2 c2): вторые прогоны b-c — лагуна 0.012 %, ванная 0.017 %, море 0.031 % при полу b1-b2
+    0.16 / 0.013 / 0.066 %.
+  - Контроль: каждый счётчик таблиц сдвинут на единицу — `COMPOSE_SRV_COUNT`, `GLASS_PASS_SRV_COUNT`,
+    `GLASS_MATERIAL_SRV_COUNT`, `OCEAN_RUNUP_SRV_COUNT`, `OCEAN_SURF_SIM_SRV_COUNT` — `check_shaders.py` даёт FAIL
+    именно своих перестановок (включая перестановки записи кука), код 1; после возврата — 0.
+  - Не покрыто: `assert` о пустом или повторённом слоте в C++ не прогонялся с намеренной дырой.
+  - Остаток R5.3 (опись `static_assert(sizeof)` на 11-26 — 45 зеркал шейдерных раскладок в 25 файлах): DDGI, SkyVis,
+    отражения, SkyOcclusion, облака, небо, тени, VSM, HZB, частицы, `InstanceTypes`, след лодки и другие. Скрипт описи
+    сравнивает поля C++ и HLSL: у шести имена совпадают, у части отличаются только подложки или регистр букв, у части
+    набор полей другой — каждое переносится по образцу R5.3c и проверяется тождеством DXIL.
+
+  **Сделано R5.3f — остальные зеркала раскладок (2026-11-26).**
+  - Образец R5.3c на 26 общих заголовков: поля cbuffer или структуры ОДИН раз в `shaders/shared/<имя>.h`
+    списком-макросом; HLSL-объявление и C++-структура разворачивают его, `static_assert(sizeof)` остаются.
+    Перенесены: DDGI (`DdgiConstants`, `DdgiUsageCB`), отражения (`ReflectionPyramidCB`, `ReflectionGlossyCB`,
+    `Probe` RT-отражений — `RtReflectConstants`), `SkyOcclusionCB`, `SkyVisibility`, `WaterCompositeCB` (проба R5.1
+    убрана — раскладка, которую она изображала, теперь общая), `GlassParams` (`GlassMaterialCB`), след лодки (`WakeCB`),
+    маски воды (поверхности `WaterMaskCB`, VSM `WaterMaskCB`, крышка `WaterMaskLidCB`), HZB (`HzbCB` — его хвост
+    `HZB_LIGHT` вторым списком, `CascadeHzbCB`, `CameraHzbCB`), `CullParams` куллинга теней, VSM (`ScatterCB`,
+    `VsmPropagateCB`), Tessy (`TessyCluster`, `TessyClusterLod`), самотест HZB (`SelfTestCB`, `TestBox`, `TestResult`),
+    `VisTestCB`, отладочный вид неба (`DebugCB`).
+  - Второе и следующие HLSL-написания одной раскладки — тоже макрос (токен в токен, проверено скриптом):
+    `CameraHzbCB` ещё в `shadow_cull_cs`, `tessy_atlas_cull_cs`, `tessy_camera_post_cs`; `CascadeHzbCB` в
+    `shadow_cull_post_cs`.
+  - Правила (в `shader_types.h` и шапке каждого заголовка): HLSL-объявление — истина (его развёртка токен в токен
+    прежнее тело, DXIL тот же); C++ берёт имена и типы HLSL (`int3/int4/uint3/uint4` — новые `IntVector` с индексом и
+    конструкторами, `uint2/int2` — `Math::`); начальные значения C++-зеркал — `TC_INIT(значение)`, ОДИН аргумент
+    (FXC — запасной путь `Material` в SM5 и превью редактора — вариадических макросов не знает: `TC_INIT(...)` он
+    отверг, проверено `fxc.exe`); `row_major` — `TC_ROW_MAJOR`; длина массива, которую HLSL пишет константой движка,
+    — параметр макроса (`VSM_SCATTER_FIELDS(CLIPMAP_LEVELS)`, `OCEAN_WATER_MASK_FIELDS(MAX_HULLS)`,
+    `OCEAN_WAKE_FIELDS(...)`, `SHADOW_CULL_FIELDS(WIND_RIGID_ROWS)`, `VSM_PROPAGATE_FIELDS(CLIPMAP_LEVELS)`).
+    Нулевые начальные значения опущены: каждое создание этих структур — `{}` (проверено поиском).
+  - C++ последовал за HLSL: переименования полей (`on` -> `gHzbOn`, `resolution` -> `Resolution`...) по
+    переменным-владельцам, массивы `float[4]` / `uint32_t[2]` -> векторы (индексы-литералы -> `.x..w`), два поля
+    `hzbWidth`/`hzbHeight` -> `uint2 hzbSize`, `camPos[3]` + `radiusThresholdSq` -> `float4 gLocalCam`,
+    `ClipmapLevelSquare` -> `float4`; каждое место нашёл компилятор.
+  - Все общие заголовки внесены в `test_cube.vcxproj` и `.filters` (R5.3b-e их не вносили).
+  - Проверено: DXIL до / после тождествен по всем перестановкам, включающим затронутые файлы (свои списки
+    `check_shaders` и запись кука, 6_6 с определениями движка): 146 + 18 + 8 перестановок, и после каждой партии
+    переносов, и в конце. `check_shaders.py` — 330/330; все `check_*` — 0; шесть конфигураций (Debug,
+    Release_Editor, Release, Shipping, Development, Cook) без предупреждений; `intent_regression`,
+    `inspector_regression` — PASS; `--hzb-cull-selftest` (Release) — `PASS 21 cases, gpu == cpu mirror` (его три
+    раскладки перенесены). FXC: тестовый шейдер с `shared/ddgi_constants.h` и `shared/reflection_pyramid.h` в
+    cbuffer компилируется `fxc.exe /T ps_5_0` (код 0); с прежним `TC_INIT(...)` — `error X1500: unexpected token
+    '...'`. Картинка (три вида 11.3, эталон `be9c4487`, b1 c1 b2 c2): вторые прогоны b-c — лагуна 0.012 %, ванная
+    0.020 %, море 0.029 % при полу b1-b2 0.22 / 0.046 / 0.030 %; кадры посмотрены. Суженный GBV (Debug, wind_test,
+    `--gbv-selftest=1@Skybox`): лагуна — `OceanWake, ShadowCull, CsmHzb, ShadowCullPost, HzbA, CamCullPost,
+    VsmPageRequest, VsmPageRender, SdsmCull, WaterMask, WaterReflection, Transparent, SkyOcclusionMap,
+    SkyOcclusionReduce` (17 списков, 167 с), ванная — `GiTrace, GiUpdate, SkyVis, SkyVisFallback, ReflectionSource,
+    GlassReflGbuffer, GlassReflections, Translucent, Hzb` (14 списков, 241 с): в логах только `id=935` от инъекции,
+    `live objects at exit: none`, `session end: clean shutdown`.
+  - Контроль: в `ddgi_usage.h` переставлены `nearParams` и `farBase` (размеры те же, C++ собирается) —
+    `r53_perms.py cmp` даёт DIFF ровно `ddgi_usage_cs.hlsl:CSMain`; `uint4 stamp` -> `uint3 stamp` — C++ падает на
+    `static_assert failed: 'DdgiUsageConstants mirrors ddgi_usage_cs.hlsl'`. Одна правка заголовка доходит до обеих
+    сторон, и обе проверки её видят; после возврата — 0 и сборка чистая.
+  - Не перенесено (каждое — свой шаг, R5.3g+): небо и облака одной группой — `SkyAtmosphereParameters` (это и
+    настройки неба: 73 места в 10 файлах, JSON и строки реестра), `SkyViewFrameData`, `AerialConstants` (их
+    склейка под `SKY_VIEW` / `SKY_AERIAL`), `NightSkyFrameData`, `VolumetricCloudConstants` (`float[16]` / `float[4]`,
+    72 места) и копия полей неба в `CloudCB` под `CLOUD_WITH_SKY_CB`; `PerViewCB` (пять HLSL-написаний с разными
+    хвостами по перестановкам); превью редактора (`PreviewConstants`, `PreviewLinesConstants`, `PreviewLineSegment`
+    — FXC vs_5_0, вне `check_shaders` и записи кука); `AtlasCullCB` (проверка `offsetof`, не `sizeof`). Не
+    cbuffer — вне R5.3: `VertexPNTUV` и вершина `TextManager` (входные раскладки), `Mesh::Cluster` и
+    `Mesh::ClusterLod` (запись файла `.mesh.bin`).
+
+  **Ревью R2.2b-R5.3f (2026-11-26)** — независимый агент, только код и `git diff`, без моих выводов. Подтвердил:
+  R5.3f — порядок полей и `TC_INIT` совпадают с прежними зеркалами, все места создания `{}` или полное заполнение;
+  `ScalabilityKnobs()` из реестра = прежний `kKnobs` (61 строка, класс цены); `ChoosesBindless`. Нашёл и исправлено:
+  - Вкладка Settings применяла значение на каждое изменение текста, а строка с зажимом (`sg.all` 5 -> 3, `gi.rays`
+    3 -> 16) расходилась с полем каждый кадр — `Scalability::Apply` (ожидание рендера и пересоздание целей) каждый
+    кадр, пока поле в фокусе; набор «4096» в целом поле применял 4, 40, 409. Теперь правка держится у вкладки, целое
+    и дорогой Float (биты цены Targets / IdleGpu / Cache / Pipelines / Boot) применяются один раз, когда поле
+    отпущено после правки; дешёвый Float идёт за перетаскиванием. Список имён собирается при каждом открытии вкладки
+    (ключи `sg.` меняет `sg.reload`). Сборка и вид вкладки проверены снимком (`--dev-tab=Settings`); сама правка мышью
+    вживую не прогонялась (ImGui читает настоящий курсор).
+  - `get_settings` относил к `unreadable` имя, которое лишь начинает другое (`bloom.int`), — `Names()` ищет по
+    префиксу; теперь точное совпадение. Проверка в `intent_regression`; контроль: прежняя проверка — FAIL с
+    `"unreadable":["bloom.int",...]`.
+  - `reset_settings`: число возвращённых — имена, каждое один раз, чьё прежнее значение принято; отказ назван.
+  - Оставлено (ограничения, сказаны здесь): имя, которое при `set_settings` нечем было прочитать (цвета океана на
+    уровне без него), возвращается не к прежнему значению — его нет; `sg.unpin` посреди серии снимает и пины `--set`
+    загрузки, `Restore` их не ставит; `sg.<группа>` переписывает кнобы уровнем, а не ручными значениями до серии.
+    Вкладка Settings ждёт рендер целиком (`WaitRenderForGame`): строка достаёт до чего угодно.
+
 #### R2. Один реестр настроек (L, риск средний)
 
 - **R2.0. Гейт переноса: список имён и `--settings-dump=<файл>`.** Сегодня в `App.cpp` две цепочки, и они разной
@@ -3800,12 +3947,110 @@ R1.6 −5, R1.7 −1). `core` не включает ничего выше себ
   - Дальше по тому же образцу (скрипты `r22_*.py` из рабочей папки сессии описаны в заметках волны): `vsm`, `tessy`,
     `skyVis`, `gi`, `lod`, `streaming`, `ssr`, `reflections`, затем имена с побочным действием и поля уровневых
     структур.
+
+  **Сделано R2.2b-R2.2e — все остальные имена (2026-11-26, «давай доделывай все»).** Цепочек больше нет:
+  `ApplySweepValue` / `ReadSweepValue` в `App.cpp` — по три строки, `settings::Registry().Apply / Read`; `App.cpp` за
+  R2.2 потерял 1661 + 116 строк (3829 -> 2181 вместе с прочим волны).
+  - Четыре пачки, каждая по образцу R2.2a (читатели «до» в `ReadSweepValue`, плечи «в покое / ниже / выше», перенос
+    скриптом, дампы «после»): (1) `vsm`, `tessy`, `lod`, `streaming`, `gi` + `skyVis`, `ssr` + `reflections` — 181
+    имя; (2) `shadow` / `csm` / `sdsm` / `contact`, `vis` / `gbuffer` / `raster` / `stats` / `textures`, `rt` / `glass`
+    / `render`, облачные тени и трасса, `physics`, `debug`, `frame` / `camera` / `scalability` / `dlss.preset` /
+    `aa.fxaa`, `particles` / `wind` — 147; (3) поля уровневых структур: `fog`, `gtao`, `exposure` + `color` (локальные
+    ссылки `e` / `c` цепочки подставлены выражениями), `sky` / `sun` / `light` / `lightShafts`, `ocean` + `spray`,
+    литералы `cloud` — 172; (4) префиксные блоки и остаток — 177 ключей блоков `cloud.` / `tod.` / `spray.` /
+    `ocean.wake*` (один разбор даёт и читателя «до», и строку «после»; комментарии блоков идут со своими ключами), семьи,
+    ветки с несколькими именами (`display.*`, `image.*`, `controls.*`, `sun.elevation/azimuth`, `sky.*Scale`, блеск
+    океана: функция с телом ветки, строка на имя), имена с глобалами `App.cpp`.
+  - Файлы строк: `app/settings/{Vsm,Tessy,Lod,Streaming,Gi,Reflection,Shadow,Visibility,Render,Cloud,Physics,Debug,
+    Frame,Vfx,Fog,Gtao,Exposure,Sky,Ocean,TimeOfDay,Display,Scalability,Game}SettingRows.cpp`. Глобалы кадра, которые
+    писала цепочка (`g_camFlyForward`, `g_recordDt`, `g_timeScale`, `g_requestDlssMode`, `g_requestRenderScale`,
+    `g_sceneReplicateRequest`), переехали дословно в `app/FrameRequests.h`; `App.h` больше не объявляет `g_timeScale`
+    сам. `App.cpp` потерял 21 include, нужный только цепочке.
+  - **Семья** (`SettingFamily`, `TC_SETTING_FAMILY` в `core/settings/SettingsRegistry.h`): префикс, имя таблицы ключей,
+    `has / apply / read / keys`. Ключи живут в таблице владельца — она и есть одна запись на кноб: `race.`
+    (`game::RaceKeys`), `bot.`, `player.`, `vessel.` (`physics::VesselKeys`, без читателя: у каждой лодки своё),
+    `sg.<группа>` (группы `scalability.json`), цвета океана и `ocean::WakeKnobs` (две семьи на одном префиксе `ocean.`:
+    имя берёт та, чей `has` принял хвост), `exposure.curveEv / curveComp` (индексы точек). Строка с именем отвечает
+    раньше семьи; действия, которые не кнобы (`race.start`, `sg.unpin`, `player.test*`), — строки.
+  - Проверено, каждая пачка: дампы до / после побайтно равны во всех трёх плечах — 280, 410, 560, 895 значений; одно
+    исключение — пачка 2, верхнее плечо, `wind.freezeAt 10.2 -> 13.05`: плечо размораживает ветер, читатель видит его
+    часы, а прогон «до» шёл на холодном кеше шейдеров (два кадра до дампа против шестидесяти). `settings_names.py` —
+    0 расхождений после каждой. Сборки Debug, Release_Editor, Release, Shipping, Development, Cook — без
+    предупреждений; `check_*.py` — 0; `intent_regression`, `inspector_regression` — PASS. Картинка (три вида 11.3, эталон
+    `be9c4487` и текущая, b1 c1 b2 c2): вторые прогоны b-c — лагуна 0.003 %, ванная 0.012 %, море 0.0001 % при полу
+    0.37 / 0.008 / 0.029 % (b1-b2); кадры просмотрены, полные.
+  - Контроль: зажим `cloud.coverage` 1.0 -> 0.9 во временной сборке — дамп верхнего плеча разошёлся ровно строкой
+    `cloud.coverage: 1 -> 0.899999976`. `settings_names.py` над семьями: незнакомая метка таблицы — код 1 с именем
+    семьи; семья убрана — 41 «is gone»; у семьи убран читатель — 35 «can no longer be read back»; ветка
+    `setting == "bloom.intensity"` возвращена в `ApplySweepValue` — «both ... the branch is dead».
+  - Найдено по дороге. (1) Гейт R2.0 не видел ключей из таблиц `FloatKnob` блоков `cloud.` и `tod.` (132 имени): они
+    стали видны читателями пачки 4, список вырос 839 -> 971 (895 читаемых). `settings_names.py` теперь берёт имена из
+    строк и семей реестра (`FAMILY_KEYS` — откуда ключи семьи; семья с незнакомой меткой — ошибка, чтобы новая учила
+    скрипт), цепочку в `App.cpp` читает по-прежнему: ветка, вернувшаяся туда, — находка. (2) Давнее:
+    `raster.bindless:0` при `tessy.gbuffer` даёт ошибку компиляции `TESSY_GBUFFER_MS` каждый кадр — исправлено
+    отдельно ниже.
+  - Сознательные отличия, только для имён, которых нет: неизвестный ключ `tod.*` больше не печатает «нет timeOfDay»
+    (предупреждение — у известных ключей, один раз, как было); неизвестное `spray.*` / `ocean.wake*` без океана было
+    «принято» (`true`), теперь «неизвестно».
+  - Не покрыто дампом: 76 имён без читателя — `vessel.*`, `player.test*`, действия (`race.start/close`, `sg.unpin`,
+    `sg.reload`, `scalability.autodetect`), `ssr.waterExperiment`, `frame.gbvCreationExcludesSubmission`; их строки —
+    тела веток дословно (перенос скриптом, сборка). Флаги строк (`Persistent / LevelOwned / Transient / Scalable`) —
+    эвристика переноса; их сверяет с потребителями R2.n.
+  - **Исправлено попутно: `raster.bindless:0` при `tessy.gbuffer` (2026-11-26).** Переключение кноба просит пересборку
+    всех G-buffer материалов (`Renderer.cpp` A6, `RequestReloadWhere`), в том числе близнецов Tessy N5
+    (`TESSY_GBUFFER_MS`, `ShadowGpuData::EnsureTessyGBufferMaterials_`). Близнец существует только bindless-вариантом
+    (`gbuffer_indirect.hlsl:43 #error`), без него сборка падала, а неудачная пересборка остаётся отложенной и
+    повторяется каждый кадр (так задумано для вотчера шейдеров). Итог: 588-624 упавших компиляции за 5 с, до снимка 99-105
+    кадров вместо 1162. Исправлено в корне: `ChoosesBindless` (`Material.cpp`) берёт bindless-вариант для близнеца
+    всегда, когда его умеет устройство; пока кноб выключен, близнец не используется — слитный путь требует кноба.
+    Проверено: `raster.bindless:0` — 0 упавших компиляций, `:1` — как было (6 из 6 близнецов). Контроль — та же сборка
+    без правки: 588-624. Картинка с `raster.bindless:0` после правки отличается от прежней на 2.6 % — прежняя снималась на
+    сотом кадре; от `raster.bindless:1` — на 2.8 %: табличный путь со своим пределом таблицы альбедо («excess groups
+    cast solid shadows on the table path»), давнее и записанное.
 - **R2.n. Потребители.** Сохранение, загрузка и сброс (`GraphicsControl`, `GraphicsSettings.h:14`), таблица
   `kKnobs` (`settings/Scalability.cpp:23`), Developer Controls (обычный виджет по типу), `reset_settings`.
   Готово: `--scalability-selftest`, `--scalability-check`, круг «сохранить / загрузить / сбросить» (перед ним
   **сохранить копию `user_settings.json` и вернуть её**). Сохранить `check_render_knobs.py` и его охват при
   переносе регистраций и потребителей. Заменять его можно, когда контрольная прямая запись игрового кода
   в рендерную копию перенесённого кноба приводит к ошибке компиляции или к отказу равноценной проверки.
+
+  **Сделано R2.n — три потребителя из четырёх (2026-11-26).**
+  - Таблица `kKnobs` (`Scalability.cpp`) удалена: `ScalabilityKnobs()` строит список из строк реестра с
+    `SettingScalable`. То, что kKnobs держал при имени, теперь флаги строки: «уровень» (`content`) =
+    `SettingLevelOwned`, класс цены — один из новых битов `SettingCost*` (L R I C P B). Флаги 61 строки приведены
+    к kKnobs скриптом (опись нашла 61 расхождение — эвристика переноса R2.2 их не знала). Проверено:
+    `--scalability-selftest` и `--scalability-check` (326 чтений) — PASS; самотест получил проверку «у
+    масштабируемой строки ровно один бит цены». Контроль (по временной сборке на каждый): `gi.rays` без
+    `SettingScalable` — «no knob "gi.rays"» по четырём уровням группы, FAIL, код 4; `bloom.method` без бита цены —
+    «the Scalable row bloom.method has one SettingCost* bit» FAIL, код 1.
+  - `reset_settings` больше не оставляет общепроектные кнобы «как последний раз поставили» — история «липкого
+    кноба» закрыта свойством: `RuntimeHost` (`EditorMcpServer.h`) получил `Read`, `Names`, `Restore`; `App`
+    запоминает значение имени до первого `set_settings` и пин масштабируемости, бывший до него; `reset_settings`
+    сначала возвращает их (новые — раньше, имя, поставленное дважды, встаёт на первое значение; имя без читателя
+    остаётся и называется в ответе) и снимает свои пины, потом переприменяет документ. Новый инструмент MCP
+    `get_settings {names: "a.b;prefix."}` читает имена и префиксы, отличая «нет читателя» от «нет имени».
+    Проверено: `intent_regression` (FakeRuntime: `get_settings` с именем, префиксом и неизвестным; `reset_settings`
+    зовёт `Restore` и пересказывает его) — PASS; живьём, свой редактор на порту 8143: `frame.maxFps`,
+    `cloudShadow.updateFrames`, `vsm.windRange`, `gi.rays`, `fog.gridZ`, `bloom.intensity` — после
+    `set_settings` пять сдвинулись (`gi.rays` 96 упирается в свой потолок 64), после `reset_settings` все шесть
+    вернулись к исходным. Контроль: вызов `Restore` убран из `reset_settings` — гейт FAIL на новой проверке, код 1.
+    `AGENTS.md`, `docs/agents/editor_and_model.md`, `race.md` — без «STICKY».
+  - Developer Controls, «обычный виджет по типу»: новая вкладка `Settings` — каждое имя реестра (971: строки и
+    ключи семей) с виджетом по `SettingType` (флажок, целое, перетаскивание, кнопка для действия, поле отправки для
+    имени без читателя), фильтр по части имени, метки флагов (P L S A), чтение и запись через строку; отрисовываются
+    только видимые строки (клиппер). Правка сохраняемой (`P`) помечает графику изменённой — сохраняется, как правка
+    в соседних вкладках. Особые вкладки остаются кодом. Проверено живьём (`--dev-tab=settings`, снимок): список,
+    виджеты и метки на месте.
+  - Не сделано — сохранение / загрузка / сброс (`GraphicsSettings.cpp`, `GraphicsControl`). Причина — решение о
+    поведении, а не объём. Опись (скрипт `r2n_persist_inventory.py` в папке сессии): 195 сохраняемых полей, у
+    части нет строки, пишущей ту же переменную (CSM — структура со срезами, DLSS — вызовы рендерера, `shadowMode`
+    с переопределением из командной строки, `asyncCompute`); и главное — у двух путей РАЗНЫЕ зажимы:
+    `Sanitize` загрузки (`renderScale` 0.1-1 при `aa.renderScale` 0.25-1, `giRays` округляется до кратного 16,
+    `ssrUe.numSteps` — до кратного 4, подстановка вместо NaN) против зажимов `--set` в строках. Один дескриптор на кноб
+    значит один диапазон — тот, что выберет владелец (В11 ниже); после этого перевод механический: таблица «секция
+    JSON / ключ / имя строки / тип», `Capture` = чтения, `Apply` = записи через строки, `ToJson / FromJson` по
+    таблице, `ResetControl` по имени вместо `GraphicsControl`. На данных владельца выбор почти ничего не меняет:
+    в его `user_settings.json` секция `graphics` хранит одно значение (`frame.vsync`), умолчания сборки — в диапазонах.
 
 #### R12. Ввод: контексты и один канал (S-M, риск низкий)
 
@@ -4133,6 +4378,13 @@ Release_Editor 12 — CLEAN, `EditorSpawnDelete` проходит; полный 
 - **В8.** Сборка с ключом отвергает незашифрованные пакеты (сделано 11-18). Нужны ли моды — и тогда подпись?
 - **В9.** MCP включён по умолчанию — оставить?
 - **В10.** Панель редактора, которая бросила: закрыть панель и жить дальше (R10.2) или падать с дампом, как сейчас?
+- **В11 (2026-11-26, R2.n).** У сохраняемой графики два набора зажимов: `Sanitize` загрузки `user_settings.json`
+  (`GraphicsSettings.cpp`) и строки `--set` реестра — местами разные (`renderScale` 0.1-1 / 0.25-1, `giRays`
+  кратно 16 / без округления, `ssrUe.numSteps` кратно 4, подстановка вместо NaN только у загрузки). Один дескриптор
+  на кноб — один диапазон: (а) берём зажим `--set` (строку) — файл со значением вне его при загрузке зажмётся иначе,
+  чем сейчас; (б) берём зажим загрузки — `--set` и MCP начнут принимать то, что сейчас режут; (в) по кнобу — больше
+  работы, меньше перемен. Формат файла остаётся. Предложение — (а) с подстановкой вместо NaN в строках: в файле
+  владельца одна запись (`frame.vsync`), умолчания сборки внутри диапазонов.
 
 ### 11.5 Исполнителю
 

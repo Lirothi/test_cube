@@ -1318,7 +1318,7 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     // The runtime door (set_settings / reset_settings / get_readouts): listed; refused without an app
     // behind it; with one, --set's own syntax reaches it name by name, an unknown name is reported
     // rather than swallowed, and the exposure is re-metered after a change.
-    for (const char* tool : { "set_settings", "reset_settings", "get_readouts", "get_profile", "get_memory" })
+    for (const char* tool : { "set_settings", "get_settings", "reset_settings", "get_readouts", "get_profile", "get_memory" })
     {
         bool listed = false;
         for (const json& t : (*list)["result"]["tools"])
@@ -1341,6 +1341,22 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
             applied.emplace_back(name, value);
             return true;
         }
+        bool Read(const std::string& name, float& out) override
+        {
+            if (name == "bloom.intensity") { out = 0.5f; return true; }
+            return false; // bloom.sunGlare: known, no reader
+        }
+        std::vector<std::string> Names(const std::string& prefix) override
+        {
+            std::vector<std::string> out;
+            for (const char* n : { "bloom.intensity", "bloom.sunGlare" })
+            {
+                if (std::string(n).rfind(prefix, 0) == 0) { out.emplace_back(n); }
+            }
+            return out;
+        }
+        int restores = 0;
+        std::string Restore() override { ++restores; return "Put back 2 name(s) set_settings changed."; }
         void ResetExposure() override { ++resets; }
         int historyAsked = -1;
         std::string Readouts(int historyRows) override { historyAsked = historyRows; return "{\"fake\":true}"; }
@@ -1396,9 +1412,21 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     Check(runtime.memoryFilter.empty() && runtime.memoryTop == 20 && runtime.memorySnapshot.empty() &&
           runtime.memoryDiff.empty() && !runtime.memoryReport,
         "and by default lists the 20 largest GPU objects -- no snapshot, no diff, no report");
+    // get_settings (architecture plan R2.n): names and prefixes read through the app; a known name without a reader and
+    // an unknown one are told apart.
+    const std::optional<json> got = call(1206, "tools/call", { { "name", "get_settings" },
+        { "arguments", { { "names", "bloom.intensity; nope.knob; bloom.int; bloom.sun*" } } } });
+    const json gotJson = json::parse(text(got), nullptr, false);
+    // "bloom.int" only begins a name (bloom.intensity): unknown, not unreadable -- Names() matches prefixes.
+    Check(!gotJson.is_discarded() && gotJson["values"].value("bloom.intensity", -1.0f) == 0.5f &&
+          gotJson["unreadable"] == json::array({ "bloom.sunGlare" }) &&
+          gotJson["unknown"] == json::array({ "nope.knob", "bloom.int" }),
+        "get_settings reads names and prefixes, and says which are unreadable and which unknown: " + text(got));
     const std::optional<json> reset = call(13, "tools/call", { { "name", "reset_settings" } });
     Check(!(*reset)["result"]["isError"].get<bool>() && runtime.resets == 2,
         "reset_settings re-applies the document and re-meters: " + text(reset));
+    Check(runtime.restores == 1 && text(reset).find("Put back 2 name(s)") != std::string::npos,
+        "and first puts back what set_settings changed (the app's Restore), saying so: " + text(reset));
     editormcp::SetRuntimeHost(nullptr);
 
     // set_camera {lookAt: "sun"}: the view faces the sky's sun, wherever the time of day has it. A

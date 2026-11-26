@@ -27,6 +27,8 @@
 
 #include "core/math/Math.h"
 #include "rendering/core/ResourceDeclarations.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/cascade_hzb.h" // GpuParams's fields, once (R5.3)
 
 class Material;
 class Renderer;
@@ -42,13 +44,13 @@ public:
     // Mirrors CascadeHzbCB (b1) of shadow_cull_cs.hlsl / shadow_cull_post_cs.hlsl.
     struct GpuParams
     {
-        Math::mat4 prevViewProj[kCascades]; // last frame's light view-projection, z flipped
-        Math::mat4 viewProj[kCascades];     // this frame's, z flipped
-        std::uint32_t prevValid[4];
-        std::int32_t viewRect[4];           // (0, 0, content, content)
-        std::uint32_t hzbSize[2];           // mip 0
-        std::uint32_t on;
-        std::uint32_t pad0;
+        // shaders/shared/cascade_hzb.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float4x4 = shader_shared::float4x4;
+        using int4 = shader_shared::int4;
+        using uint = shader_shared::uint;
+        using uint2 = shader_shared::uint2;
+        using uint4 = shader_shared::uint4;
+        CASCADE_HZB_FIELDS
     };
     static_assert(sizeof(GpuParams) == 560, "CascadeHzbCB layout");
 

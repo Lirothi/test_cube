@@ -15,6 +15,8 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/TextureCreate.h"
 #include "rendering/descriptors/SamplerManager.h"
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/sky_lut_debug.h" // the debug view's Constants: the fields, once (R5.3)
 
 namespace
 {
@@ -397,9 +399,15 @@ size_t SkyAtmosphere::BuildDebug(Renderer* renderer, RenderGraph<static_cast<siz
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     deps.push_back(after);
     if (luts != static_cast<size_t>(-1)) deps.push_back(luts);
-    struct Constants { UINT width, height, view; float start; Math::mat4 invProj, projNoJitter; };
+    struct Constants // shaders/shared/sky_lut_debug.h (architecture plan R5.3): the fields, once for HLSL and C++
+    {
+        using float4x4 = shader_shared::float4x4;
+        using uint = shader_shared::uint;
+        using uint2 = shader_shared::uint2;
+        SKY_LUT_DEBUG_FIELDS
+    };
     static_assert(sizeof(Constants) == 144);
-    const Constants data{renderer->GetRenderWidth(), renderer->GetRenderHeight(),
+    const Constants data{Math::uint2(renderer->GetRenderWidth(), renderer->GetRenderHeight()),
         showAerial ? settings.aerialDebugView + 2u : settings.lutDebugView, std::max(0.0f, startDepthMetres),
         camera.GetInvProjMatrix(), camera.GetProjMatrixNoJitter()};
     return graph.AddPass2(RenderPass::Main_SkyAtmosphereDebug, deps, {}, {},
@@ -424,7 +432,7 @@ size_t SkyAtmosphere::BuildDebug(Renderer* renderer, RenderGraph<static_cast<siz
                 RecordComputeDispatch(renderer, t.cl, debugMaterial_.get(), render::kConstantBufferAlignment,
                     [&data](uint8_t* dst) { std::memcpy(dst, &data, sizeof(data)); },
                     {srv_[0], srv_[1], aerialSrv_, renderer->GetDeferredForFrame().depthCopySRV}, {renderer->GetDeferredForFrame().sceneUAV},
-                    renderer->GetSamplerManager()->GetTable(renderer, samplers), data.width, data.height);
+                    renderer->GetSamplerManager()->GetTable(renderer, samplers), data.size.x, data.size.y);
                 renderer->EmitPoint(t.cl, restore);
                 c.EndCL(t);
             };

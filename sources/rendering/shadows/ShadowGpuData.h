@@ -16,6 +16,10 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/CascadeHzb.h"       // occlusion plan S5b: the cascade light-space pyramids
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups (the per-group override table)
+#include "shaders/shared/shader_types.h"
+#include "shaders/shared/tessy_cluster.h" // TessyCluster's fields, once (R5.3)
+#include "shaders/shared/tessy_cluster_lod.h" // TessyClusterLod's fields, once (R5.3)
+#include "shaders/shared/camera_hzb.h" // CameraHzbParams's fields, once (R5.3)
 
 class Renderer;
 struct RenderGraphPassContext;
@@ -306,14 +310,12 @@ public:
     // Mirrors CameraHzbCB (b2 of shadow_cull_cs.hlsl, b1 of cam_cull_post_cs.hlsl).
     struct CameraHzbParams
     {
-        Math::mat4 prevViewProj;    // last frame's camera, no jitter
-        Math::mat4 prevViewToClip;
-        Math::mat4 viewProj;        // this frame's, jittered (the pyramid is the jittered depth)
-        Math::mat4 viewToClip;
-        std::int32_t viewRect[4];   // (0, 0, renderWidth, renderHeight)
-        std::uint32_t hzbSize[2];   // mip 0
-        std::uint32_t prevValid;    // last frame's pyramid: this camera's, same size, built last frame
-        std::uint32_t on;
+        // shaders/shared/camera_hzb.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float4x4 = shader_shared::float4x4;
+        using int4 = shader_shared::int4;
+        using uint = shader_shared::uint;
+        using uint2 = shader_shared::uint2;
+        CAMERA_HZB_FIELDS
     };
     static_assert(sizeof(CameraHzbParams) == 288, "CameraHzbCB layout");
     // Once per frame from SceneRenderer::DecideFrame, before the graph is built: the matrices,
@@ -639,16 +641,11 @@ public:
     // and stays on the classic path in the same frame (plan 4.8). Mirrors tessy_common.hlsli.
     struct TessyCluster
     {
-        std::uint32_t firstIndex;  // mega-absolute, into MegaIndexBuffer()
-        std::uint32_t triCount;
-        float windAlongMax;        // Mesh::Cluster's wind maxima (the cull's sway bound)
-        float windLeafMax;
-        DirectX::XMFLOAT3 center;  // object-space box
-        float radius;              // meshopt sphere radius (N7's LOD)
-        DirectX::XMFLOAT3 extent;
-        std::uint32_t firstMeshlet; // N6: its meshlets in TessyMeshlets (Mesh::ClusterLocalTables, the mesh shader's)
-        std::uint32_t meshletCount;
-        std::uint32_t pad[3];
+        // shaders/shared/tessy_cluster.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float3 = shader_shared::float3;
+        using uint = shader_shared::uint;
+        using uint3 = shader_shared::uint3;
+        TESSY_CLUSTER_FIELDS
     };
     static_assert(sizeof(TessyCluster) == 64, "TessyCluster layout");
     // N6: one meshlet -- {its unique vertices in TessyClusterVerts (mesh-local), how many (<= Mesh::kMeshletMaxVerts, 64),
@@ -657,12 +654,10 @@ public:
     // N7: Mesh::ClusterLod's layout (this header only forward-declares Mesh) -- tessy_vsm_cull_cs.hlsl's ClusterLod.
     struct TessyClusterLod
     {
-        DirectX::XMFLOAT4 lodSphere;
-        DirectX::XMFLOAT4 parentSphere;
-        float lodError;
-        float parentError;
-        std::uint32_t level;
-        std::uint32_t pad;
+        // shaders/shared/tessy_cluster_lod.h (architecture plan R5.3): the fields, once for HLSL and C++.
+        using float4 = shader_shared::float4;
+        using uint = shader_shared::uint;
+        TESSY_CLUSTER_LOD_FIELDS
     };
     static_assert(sizeof(TessyClusterLod) == 48, "TessyClusterLod layout");
     // The tables, the mega buffers they index and their SRVs exist (a level with clusters, mega ready).

@@ -92,13 +92,17 @@ private:
     enum class Tab
     {
         Scalability, Frame, AntiAliasing, Visibility, Reflections, Gi, Fog, Sky,
-        Debug, Lod, Csm, Contact, Vsm, Tessy, Physics, Streaming, Memory, Bindings
+        Debug, Lod, Csm, Contact, Vsm, Tessy, Physics, Streaming, Memory, Bindings, Settings
     };
     struct TabEntry { Tab tab; const char* label; };
     // The navigation list, in its order: Draw's and OpenTab's one table.
-    static const TabEntry kTabs[18];
+    static const TabEntry kTabs[19];
     // The graphics levels (docs/scalability_plan.md §4.5): the levels of the groups, the knobs each sets, the last apply.
     void DrawScalabilityTab();
+    // Every --set name of the settings registry (architecture plan R2.n): a widget by its type, through the row.
+    // True when a persisted setting changed (the graphics settings save it as the other tabs' edits).
+    bool DrawSettingsTab(Scene& scene, SceneRenderSettings& settings);
+    char settingsFilter_[64] = {};
     Tab activeTab_ = Tab::Frame;
 
     void RefreshLevelList();

@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <d3d12.h>
 
+#include "shaders/shared/glass_slots.h" // the glass pass's registers by name
+
 class LightManager;
 class Renderer;
 class Skybox;
@@ -17,8 +19,8 @@ namespace render
 // the renderer (Renderer::SetGlassPassSrvs) for every glass draw -- the TransparentStaticMesh panes and
 // the glass material slots of opaque objects (GBufferRenderable::RenderTranslucent) -- which have no
 // frame access of their own. Was built per pane in TransparentStaticMesh::RecordGraphics.
-inline constexpr size_t kGlassPassSrvCount = 15;
-inline constexpr size_t kGlassNormalMapSlot = 6;
+inline constexpr size_t kGlassPassSrvCount = GLASS_PASS_SRV_COUNT; // shaders/shared/glass_slots.h (R5.3)
+inline constexpr size_t kGlassNormalMapSlot = GLASS_T_NORMAL_MAP;
 using GlassPassSrvs = std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kGlassPassSrvCount>;
 
 // False when a shadow map the table must hold is missing this frame (the glass draws then skip, as

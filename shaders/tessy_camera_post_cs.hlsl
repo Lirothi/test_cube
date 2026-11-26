@@ -33,16 +33,11 @@ cbuffer CameraPostCB : register(b0)
 };
 
 // Mirrors ShadowGpuData::CameraHzbParams.
+#include "shared/shader_types.h"
+#include "shared/camera_hzb.h" // CameraHzbCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer CameraHzbCB : register(b1)
 {
-    row_major float4x4 gCamPrevViewProj;
-    row_major float4x4 gCamPrevViewToClip;
-    row_major float4x4 gCamViewProj;
-    row_major float4x4 gCamViewToClip;
-    int4  gCamViewRect;
-    uint2 gCamHzbSize;
-    uint  gCamHzbPrevValid;
-    uint  gCamHzbOn;
+    CAMERA_HZB_FIELDS
 };
 
 StructuredBuffer<InstancePerObject> Instances        : register(t0);

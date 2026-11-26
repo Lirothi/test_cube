@@ -31,13 +31,15 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
   layers of `docs/architecture_review_plan.md` section 4; today's exceptions are `tools/arch_layers_allow.txt`, which
   only shrinks: `--update` drops an include that is gone), `check_switches.py` (every switch the code reads is a row of
   `sources/app/BootSwitches.cpp` -- name, value, help, kept by Shipping -- and every row is read; `test_cube.exe
-  --help` prints the table; a row's parse function in `app/BootParse.cpp` reads its own switch; a change of a parse is
-  proven by `--boot-dump=<file>` -- every `BootOptions` field, before and after), `check_shaders.py` (its own entry lists AND every permutation of the cook's record
+  --help` prints the table; a row's parse function in `app/BootParse.cpp` / `BootParseDev.cpp` reads its own switch;
+  a change of a parse is proven by `--boot-dump=<file>` -- every `BootOptions` field and the debug switches' globals,
+  before and after), `check_shaders.py` (its own entry lists AND every permutation of the cook's record
   `tools/dist/shader_list.txt` at 6_6: a shader that no longer compiles is a FAIL naming it) (exit code = findings).
   A layout C++ and HLSL share lives in `shaders/shared/*.h` (`shader_types.h`: HLSL's type names for C++; HLSL
-  includes `"shared/x.h"`, C++ `"shaders/shared/x.h"`; the cook packs them). Tools: `arch_metrics.py` (the plan's
-  numbers: map, include graph, header reach, the counters its steps move), `frame_diff.py a.png b.png` (the share of
-  pixels more than 8 levels apart; `--mask`, `--rect`, `--max`).
+  includes `"shared/x.h"`, C++ `"shaders/shared/x.h"`; the cook packs them): a cbuffer is a field-list macro both
+  spell, HLSL's names; a C++ default is `TC_INIT(one argument)` (FXC has no variadic macros). Tools:
+  `arch_metrics.py` (the plan's numbers: map, include graph, header reach, the counters its steps move),
+  `frame_diff.py a.png b.png` (the share of pixels more than 8 levels apart; `--mask`, `--rect`, `--max`).
 - Editor gate: `tools/intent_regression.vcxproj` (Debug; links the Debug game's objects by its tlog, so build that
   first) -> `x64\Debug\intent_regression.exe`, last line `PASS`; `inspector_regression` likewise. After changing
   `sources/editor/intent/`, rebuild `tools/model_reaper.vcxproj` (close its tray icon: the running exe is locked).
@@ -126,12 +128,13 @@ without the editor.
   its PID, never by closing it.
 - Tools: `run_action`/`preview_action` (the local model's `{action, target, params}`), `query`, `get_camera`,
   `set_camera`, `screenshot`, `undo`, `open_level`, `save_level` (= Ctrl+S: ONLY when the owner asked), `set_settings`,
-  `reset_settings`, `get_readouts`, `get_profile`, `get_memory`, `thumbnails`, `play`/`stop`, `build_dist`. In Play, `run_action`,
-  `undo`, `save_level` and `import_asset` are refused; `open_level` refuses over unsaved edits unless `discardChanges`
-  (the owner's call).
-- `set_settings` (the `--set` names) is TRANSIENT but STICKY: start every series with `reset_settings`. It leaves
-  project-wide knobs as last set (`cloudTrace.* cloudShadow.* frame.* skyVis.* gi.* render.* physics.* player.* bot.*`,
-  `wind.freeze`) and a knob the level file doesn't hold yet: name them in every arm. `wind.freeze:1` /
+  `get_settings`, `reset_settings`, `get_readouts`, `get_profile`, `get_memory`, `thumbnails`, `play`/`stop`,
+  `build_dist`. In Play, `run_action`, `undo`, `save_level` and `import_asset` are refused; `open_level` refuses over
+  unsaved edits unless `discardChanges` (the owner's call).
+- `set_settings` (the `--set` names) is TRANSIENT; `reset_settings` undoes it -- every name it changed back to its value
+  before (project-wide knobs too), then the document -- except a name without a reader (`vessel.*`, `player.test*`,
+  actions), which its answer names. Start every series with `reset_settings`. `get_settings {names: "a.b;prefix."}`
+  reads them (the settings registry, `app/settings/*SettingRows.cpp`). `wind.freeze:1` /
   `wind.freezeAt:<s>` hold wind + ocean; `camera.fly:<m/s>` / `camera.spin:<deg/s>` move the camera (stop them in a
   `finally`).
 - MEASURE, DON'T READ A SCREENSHOT (the tone curve clips): pixel probe `debug.probeU/V/Radius` (`debug.probeSource`

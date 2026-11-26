@@ -45,6 +45,7 @@ public:
 
     // Session-only clock rate multiplier (--time-speed); not part of the level.
     void SetSpeed(float speed) { speed_ = speed; }
+    float Speed() const { return speed_; }
 
     // One frame. `sceneLight` is Scene's directional light, `skySun` the sky's sun.
     void Tick(float deltaSeconds, DirectionalLight& sceneLight, DirectionalLight& skySun);

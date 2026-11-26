@@ -35,19 +35,11 @@
     "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)"
 
 // Mirrors SkyOcclusionConstants (SceneRenderer_SkyOcclusion.cpp).
+#include "shared/shader_types.h"
+#include "shared/sky_occlusion.h" // SkyOcclusionCB's fields, once for HLSL and C++ (architecture plan R5.3)
 cbuffer SkyOcclusionCB : register(b0)
 {
-    float4x4 invView;        // CSTrace: the camera (jittered, as the depth it reads)
-    float4x4 invProj;
-    float4x4 topViewProj;    // CSReduce: world -> the top-down renders' clip (the objects' top and the terrain)
-    float4x4 bottomViewProj; // ...and the bottom-up one
-    float4 mapParams;        // x the map's min world x, y its min world z, z 1 / its width (m), w the near level's texel (m)
-    float4 heightParams;     // x the top camera's height, y the bottom camera's, z their near plane, w far - near
-    uint4 sizes;             // x, y CSTrace's output (half resolution); z the depth renders' size; w the level written
-    float4 traceParams;      // x reach (m), y opacity (a slab's coverage -> its opacity), z where the slabs start (m),
-                             // w the receiver's lift off its surface (m)
-    float4 fadeParams;       // the map's edge (SkyOcclusionMap::FadeParams): x, y the camera's world x, z; z the horizontal
-                             // distance from it where the fade starts (m); w 1 / the fade's width (m)
+    SKY_OCCLUSION_FIELDS
 };
 
 // What a texel holds where nothing stands on the ground: no ground (the sea) -- a direction going down goes on.

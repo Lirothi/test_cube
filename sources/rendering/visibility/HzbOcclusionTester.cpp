@@ -207,8 +207,8 @@ void HzbOcclusionTester::RecordTest(Renderer* renderer, ID3D12GraphicsCommandLis
         k.viewRect[1] = 0;
         k.viewRect[2] = static_cast<std::int32_t>(viewWidth);
         k.viewRect[3] = static_cast<std::int32_t>(viewHeight);
-        k.hzbWidth = hzbWidth;
-        k.hzbHeight = hzbHeight;
+        k.hzbSize.x = hzbWidth;
+        k.hzbSize.y = hzbHeight;
         k.boxCount = count;
         std::memcpy(cb.cpu, &k, sizeof(k));
     }
