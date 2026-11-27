@@ -20,9 +20,11 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "core/logging/Log.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cctype>
 #include <chrono>
+#include <functional> // R13.4: the frame's phases
 #include <climits>
 #include <cmath>
 #include <cstdio>
@@ -2059,6 +2061,45 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                          static_cast<double>(sum) / static_cast<double>(frames), worst, frames, when);
             }
         };
+        // Architecture plan R13.4: the frame's schedule, in one place -- its phases by name, in the order every frame runs
+        // them, with a render thread or without one. The game half (after the messages' pump and the input's NewFrame,
+        // which can end the loop) runs beside the frame the render thread draws, or before its own hand-over on one thread;
+        // the hand-over follows the frame's GPU work (beginFrame), then the render half draws (renderScene). Until R13.4
+        // the two loops below each spelled the game half out, the one-thread one in another order (the UI's frame begun
+        // before the clock, the renderer's upkeep inside it): it runs this order now, the render thread's.
+        struct FramePhase
+        {
+            const char* name;
+            std::function<void()> run;
+        };
+        const std::array<FramePhase, 7> gameHalf{ {
+            { "clock", advanceTime },              // the frame's dt (frame.timeScale, frame.recordDt) and a script's camera moves
+            { "ui begin", beginUi },               // ImGui's frame, the profiler's tick
+            { "ui and game", tickUi },             // AppController: the HUD, the editor, MCP, the play session and its systems
+            { "world", tickScene },                // World::Tick: objects, time of day, lamps, wind, buoyancy, physics; the level manager
+            { "self-tests", [&]() {                // --rt-audit-selftest's write into a frozen copy, --retire-selftest=upload's submit
+                rtaudit::GameHalf(scene);
+                render::RetireSelfTestGameHalf(renderer);
+            } },
+            { "level load", [&]() {                // a level asked for this frame, at a GPU idle
+                loadPendingLevel();
+                rtaudit::Jitter();                 // --rt-audit: a different overlap every frame (nothing otherwise)
+            } },
+            { "ui end", closeUi },                 // the HUD's build joined, ImGui's frame final
+        } };
+        const std::array<FramePhase, 2> handOverHalf{ {
+            { "render upkeep", renderUpkeep },     // fonts, the shader watcher, PSO hot reloads, the memory line (render role)
+            { "hand-over", handOver },             // Scene::Sync, ImGui's textures, the HUD, MCP's reads of the render half
+        } };
+        const auto runPhases = [](const auto& phases) { for (const FramePhase& phase : phases) { phase.run(); } };
+        {
+            std::string schedule = "frame: messages, input";
+            for (const FramePhase& phase : gameHalf) { schedule += std::string(" -> ") + phase.name; }
+            schedule += " | the GPU's frame begins";
+            for (const FramePhase& phase : handOverHalf) { schedule += std::string(" -> ") + phase.name; }
+            schedule += " -> render";
+            LOG_INFO(logging::LogCategory::App, "{} (R13.4; with a render thread its game half runs beside the frame it draws)", schedule);
+        }
         harness::FrameContext beginFrameContext{ renderer, scene, levelManager, appController_.SettingsRef(), isRunning_ };
         // The frames as one call: run bare, or inside --scene-stress's catch (below).
         const auto runFrames = [&]()
@@ -2079,15 +2120,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     break;
                 }
                 input.NewFrame(); // after the pump: this frame takes what came since the last one, the wait's too
-                advanceTime();
-                beginUi();
-                tickUi();
-                tickScene();
-                rtaudit::GameHalf(scene); // --rt-audit-selftest's write into a frozen copy
-                render::RetireSelfTestGameHalf(renderer); // --retire-selftest=upload: a submit beside the render thread's frame
-                loadPendingLevel();
-                rtaudit::Jitter();
-                closeUi();
+                runPhases(gameHalf); // R13.4
             }
             if (renderFramePending)
             {
@@ -2118,8 +2151,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             {
                 wholeCycle.emplace(ProfilerScopes::kWholeCycle); // closed where the wait for this frame returns
                 CPU_SCOPE(ProfilerScopes::kGameHandOver);
-                renderUpkeep();
-                handOver();
+                runPhases(handOverHalf); // R13.4
                 handedInputFrame = inputFrames.load(std::memory_order_relaxed); // G9: the input this frame is built from
             }
             else
@@ -2130,15 +2162,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     break;
                 }
                 input.NewFrame(); // after the pump (as with a render thread)
-                beginUi();
-                advanceTime();
-                renderUpkeep();
-                tickUi();
-                tickScene();
-                render::RetireSelfTestGameHalf(renderer); // --retire-selftest=upload (one thread: before the hand-over)
-                loadPendingLevel();
-                closeUi();
-                handOver();
+                runPhases(gameHalf);     // R13.4: the same game half, in the same order
+                runPhases(handOverHalf); // ... and the same hand-over
                 handedInputFrame = inputFrames.load(std::memory_order_relaxed); // G9: the input this frame is built from
                 threading::RoleScope renderRole(threading::ThreadRole::Render);
                 renderScene();
