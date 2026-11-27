@@ -17,6 +17,7 @@
 #include "core/threading/ThreadRole.h"
 #include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
+#include "physics/WaterSurface.h" // R14.1: the world's water, a gate's own
 #include "rendering/renderables/RenderableObject.h"
 #include "third_party/json/json.hpp"
 
@@ -2197,6 +2198,55 @@ namespace physics
                 if (stats.fellOut != 1 || !still || stats.activeBodies != 0)
                 {
                     detail = report;
+                    return finish(Verdict::Fail);
+                }
+            }
+            // R14.1: the world's water is whatever SetWater hands it -- here a flat sea at y 0, no ocean -- and a buoyant
+            // Dynamic ball dropped from 2 m comes to float at it. The arm: the same ball with no water falls out of the world.
+            {
+                struct FlatWater final : WaterSurface
+                {
+                    bool Present() const override { return true; }
+                    bool HasWaves() const override { return false; }
+                    float Level() const override { return 0.0f; }
+                    float SampleHeight(float, float, float) const override { return 0.0f; }
+                };
+                FlatWater sea;
+                const float killY = settings.killY;
+                settings.killY = -20.0f;
+                const auto drop = [&](const WaterSurface* water, float& centreY, std::uint32_t& fellOut)
+                {
+                    GateBody ball;
+                    ball.SetCollisionSettings(customBall(0.25f));
+                    ball.SetPosition(Math::float3(0.0f, 2.0f, 0.0f));
+                    ball.SetBuoyant(true);
+                    ball.SetPhysicsMotion(Motion::Dynamic);
+                    World world;
+                    for (int i = 0; i < 600; ++i)
+                    {
+                        world.SetWater(water); // as the scene does, every frame before the Tick
+                        frame(world, 1.0f / 60.0f);
+                    }
+                    centreY = (ball.GetAuthoredModelMatrix() * ball.GetRenderOffset()).m._42;
+                    fellOut = world.GetStats().fellOut;
+                };
+                float floated = 0.0f;
+                float dry = 0.0f;
+                std::uint32_t floatedOut = 0;
+                std::uint32_t dryOut = 0;
+                drop(&sea, floated, floatedOut);
+                drop(nullptr, dry, dryOut);
+                settings.killY = killY;
+                report += "a ball on the world's water at " + std::to_string(floated) + " m, without it " + std::to_string(dry) + " m (" +
+                    std::to_string(dryOut) + " out); ";
+                if (floatedOut != 0 || std::fabs(floated) > 0.25f)
+                {
+                    detail = report + "the ball should float at the water SetWater gave, within its radius of y 0";
+                    return finish(Verdict::Fail);
+                }
+                if (dryOut != 1)
+                {
+                    detail = report + "the arm: with no water the ball should fall out of the world";
                     return finish(Verdict::Fail);
                 }
             }

@@ -30,8 +30,7 @@
 #include "core/task/TaskSystem.h"
 #include "core/threading/RenderThread.h"
 #include "core/threading/ThreadRole.h"
-#include "ocean/OceanReadback.h"
-#include "ocean/OceanRenderable.h"
+#include "physics/WaterSurface.h" // R14.1: the water, not the ocean
 #include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
 #include "rendering/core/Renderer.h"
@@ -334,7 +333,7 @@ namespace physics
         float stepMooringTurn = 0.0f;
         float stepMooringSettle = 0.0f;
         HelmState helmShown;        // as the last Display drew it: nothing here is the step's
-        const OceanRenderable* ocean = nullptr;
+        const WaterSurface* surface = nullptr; // SetWater: read in Tick only
         std::unique_ptr<PlayerBody> player;
         bool playerWanted = false;
         bool playerPossessed = true;
@@ -1103,11 +1102,10 @@ namespace physics
         {
             SampleVesselWater(elapsed);
             water.clear();
-            if (floaters.empty() || !ocean || !ocean->IsVisibleGame()) { return; }
-            const OceanReadback& readback = ocean->GetReadback();
-            const bool waves = readback.HasSurface();
-            const float level = ocean->GetWaterLevel();
-            const auto height = [&](float x, float z) { return waves ? readback.SampleHeight(x, z) : level; };
+            if (floaters.empty() || !surface || !surface->Present()) { return; }
+            const bool waves = surface->HasWaves();
+            const float level = surface->Level();
+            const auto height = [&](float x, float z) { return waves ? surface->SampleHeight(x, z, 1.0f) : level; };
             JPH::BodyInterface& bodies = system->GetBodyInterface();
             for (const Entry* entry : floaters)
             {
@@ -1124,10 +1122,10 @@ namespace physics
         void SampleVesselWater(float elapsed)
         {
             if (vessels.empty()) { return; }
-            const bool sea = ocean && ocean->IsVisibleGame();
-            const OceanReadback* readback = sea ? &ocean->GetReadback() : nullptr;
-            const bool waves = sea && readback->HasSurface();
-            const float level = sea ? ocean->GetWaterLevel() : 0.0f;
+            const bool sea = surface && surface->Present();
+            const WaterSurface* readFrom = sea ? surface : nullptr; // the member `water` is the floaters' samples
+            const bool waves = sea && readFrom->HasWaves();
+            const float level = sea ? readFrom->Level() : 0.0f;
             JPH::BodyInterface& bodies = system->GetBodyInterface();
             for (Entry* entry : vessels)
             {
@@ -1143,8 +1141,8 @@ namespace physics
                 const float speed = std::fabs(entry->vesselState.speed);
                 const float t = std::clamp((speed - 1.0f) / 2.0f, 0.0f, 1.0f);
                 const float wakeShare = 1.0f - t * t * (3.0f - 2.0f * t);
-                const std::function<float(float, float)> height = [readback, waves, level, wakeShare](float x, float z)
-                    { return waves ? readback->SampleHeight(x, z, wakeShare) : level; };
+                const std::function<float(float, float)> height = [readFrom, waves, level, wakeShare](float x, float z)
+                    { return waves ? readFrom->SampleHeight(x, z, wakeShare) : level; };
                 MeasureVesselWater(entry->water, height, bodies.GetPosition(entry->body), bodies.GetCenterOfMassPosition(entry->body), bodies.GetRotation(entry->body),
                     *entry->vessel, entry->scale, entry->halfLength, entry->halfBeam, elapsed);
             }
@@ -1283,11 +1281,10 @@ namespace physics
             playerInput.jump = false;
 
             float water = kNoWater;
-            if (ocean && ocean->IsVisibleGame())
+            if (surface && surface->Present())
             {
-                const OceanReadback& readback = ocean->GetReadback();
                 const JPH::Vec3 feet = player->Feet();
-                water = readback.HasSurface() ? readback.SampleHeight(feet.GetX(), feet.GetZ()) : ocean->GetWaterLevel();
+                water = surface->HasWaves() ? surface->SampleHeight(feet.GetX(), feet.GetZ(), 1.0f) : surface->Level();
             }
             player->Update(std::clamp(deltaTime, 1.0e-4f, 1.0f / 30.0f), input, tuning, water, *temp);
             // UE's KillZ, for the one thing nothing else stops: no ground and no water under it.
@@ -1662,7 +1659,7 @@ namespace physics
         return impl_->Cast(origin, unitDirection, maxDistance, out);
     }
 
-    void World::SetOcean(const OceanRenderable* ocean) { impl_->ocean = ocean; }
+    void World::SetWater(const WaterSurface* water) { impl_->surface = water; }
 
     void World::SpawnPlayer(const Math::float3& feet)
     {

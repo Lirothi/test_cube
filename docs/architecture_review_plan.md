@@ -5499,6 +5499,37 @@ Debug, реестр настроек и таблица графики, вкла�
   сначала API тела поверх Jolt (позиция, скорость, силы, импульсы, масса и центр масс) и хук фиксированного шага на потоке
   шага, потом сущности по одной. Поэтому сейчас — R10 (реестр панелей, панель с исключением закрывается, разрезы файлов
   UI), а R14 (с R7.2b–d за ним) и R8.2–R8.5 с R4.5e — отдельными заходами со свежим контекстом; R11 — последним.
+
+  **Подшаги R14 (2026-11-27, владелец: «продолжай что там из 3й волны важно здесь»).** Сверено по коду (номера
+  сегодняшние): физика читает океан сама — `PhysicsWorld.cpp:33-34` включает `ocean/OceanReadback.h` и
+  `OceanRenderable.h` (две строки храповика), `SampleWater` :1102, `SampleVesselWater` :1124, `TickPlayer` :1286; лодка,
+  якорь и швартовка — на телах Jolt внутри шага (`PushVessels` :1168 зовёт `PushVessel`, `PullAnchor`, `HoldMooring` из
+  `PhysicsVessel.cpp`), их состояние — поля `Entry` (:289-320); API лодок `World` зовут `app/game` (BoatHelm, PlaySession,
+  Race, PlayWorld), `Scene`, `World.cpp`, вкладка Physics, команда настройки судна. Гейты физики путь мира с водой не
+  проходят вовсе: `GateWorld` гоняет лодку без воды, `GateWater` и `GateVessel` зовут функции лодки напрямую.
+  - **R14.1 — «поверхность воды».** Интерфейс `physics::WaterSurface` (есть ли вода, есть ли волны, уровень, высота в
+    точке с долей следа) и `World::SetWater` вместо `SetOcean`; переходник с океана — на стороне мира (`app/scene`):
+    физика больше не включает океан, храповик −2. Новый проход `GateWorld`: плавучее тело в мире на синтетической воде.
+  - **R14.2 — API тела и хук шага.** Тело поверх Jolt (поза, центр масс, скорости, силы, импульсы, масса, пробуждение) и
+    `FixedTick` — на потоке шага перед каждым `Update`, там, где сегодня `PushVessels`; `PushVessel`, `PullAnchor`,
+    `HoldMooring` переписаны на API тела, ещё в `physics/`: гейты `vessel`, `world`, `async` те же числа.
+  - **R14.3–R14.5** — якорь, швартовка, лодка переезжают в игровой слой поверх R14.2, API лодок `World` — туда же, их
+    гейты — тоже.
+  - **R14.6** — игрок на покадровом хуке и новый проход гейта `player` через настоящий `World::Tick` при 60 и 300
+    кадрах в секунду (контроль — в абзаце R14 выше).
+
+  **Сделано R14.1 (2026-11-27).** `physics/WaterSurface.h`: `Present`, `HasWaves`, `Level`, `SampleHeight(x, z,
+  wakeShare)`; `World::SetWater` вместо `SetOcean`, читается только в `Tick` (как раньше океан). `SampleWater`,
+  `SampleVesselWater`, `TickPlayer` спрашивают поверхность. Переходник `app/scene/OceanWaterSurface` (океан уровня,
+  `IsVisibleGame`, его readback и уровень) привязывает мир в `World::TickPhysics` каждый кадр. Физика больше не включает
+  океан: храповик 33 → 31 (`physics/PhysicsWorld.cpp -> ocean/OceanReadback.h`, `-> ocean/OceanRenderable.h`). Новый
+  проход `GateWorld`: плавучий Dynamic-шар, брошенный с 2 м в мир на плоской воде гейта (y 0), держится на −0.141 м; плечо
+  — тот же шар без воды падает под мир (−20.2 м, `fellOut` 1). Проверено: Debug, Release_Editor, Release; `check_*.py` и
+  `settings_names.py` 0; CRLF; обе регрессии PASS; `--physics-gate` все PASS (Release; Debug — через `intent_regression`).
+  Живьём (свой редактор на своём столе, MCP 8176, `live_float.py`: wind_test, `play`, 8 с, `get_readouts` `vessels`):
+  police_boat y −0.695, fast_boat_13 −0.411, small_yacht −0.323, наклоны и скорости — те же до третьего знака, что у
+  эталона (Release_Editor на R10.4); файл уровня не тронут. Контроль (`ctl141.py`: `SetWater` ничего не хранит) —
+  `--physics-gate=world` FAIL «a ball on the world's water at −20.221310 m»; файл возвращён побайтно.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →
   реестр панелей с `Draw`. **R10.2** (**В10**): отрисовка панели под `try` с восстановлением стека ImGui
   (`ImGui::ErrorRecoveryStoreState` / `TryToRecoverState`, ImGui 1.92): исключение — Error, панель закрыта,

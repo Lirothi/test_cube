@@ -756,6 +756,9 @@
     <ClCompile Include="sources/app/scene/World.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/OceanWaterSurface.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -1661,6 +1664,9 @@
     <ClInclude Include="sources/app/scene/World.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/scene/OceanWaterSurface.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
@@ -1890,6 +1896,9 @@
       <Filter>sources\physics</Filter>
     </ClInclude>
     <ClInclude Include="sources/physics/PhysicsWorld.h">
+      <Filter>sources\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/physics/WaterSurface.h">
       <Filter>sources\physics</Filter>
     </ClInclude>
     <ClInclude Include="sources/physics/CollisionJson.h">

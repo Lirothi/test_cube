@@ -8,7 +8,6 @@
 #include "core/math/Math.h"
 #include "physics/PhysicsTypes.h"
 
-class OceanRenderable;
 class DebugDrawSystem;
 class RenderableObject;
 class RenderableObjectBase;
@@ -26,6 +25,8 @@ class RenderableObjectBase;
 // is not called at all. Objects arrive through the REGISTRY below, never a walk of the scene.
 namespace physics
 {
+    class WaterSurface; // physics/WaterSurface.h
+
     // The objects: RenderableObject::SetPhysicsMotion registers, its destructor unregisters, its setters notify. Thread-safe
     // (a level load may build objects on workers): they only queue, and the world reads the object at its next Tick.
     void Register(RenderableObject* object);
@@ -222,8 +223,9 @@ namespace physics
         // The eye for physics.debug and for the character.
         void SetCamera(const Math::float3& position) { camera_ = position; }
         void SetDebugDraw(DebugDrawSystem* draw) { debugDraw_ = draw; } // physics.debug lines go here
-        // The water for the "buoyant" Dynamic bodies and the player's swim. Null = none.
-        void SetOcean(const OceanRenderable* ocean);
+        // The water for the "buoyant" Dynamic bodies, the boats and the player's swim (R14.1: the physics names no ocean). Null = none.
+        // Read in Tick only; the caller keeps it alive till the next SetWater.
+        void SetWater(const WaterSurface* water);
         // The player: a body from `feet` on, falling if there is nothing under them; below physics.killY it comes back there. A world gone (physics.enabled:0) brings it back with
         // the world. On the frame's clock, in Tick: it is the camera, and a camera moves every frame.
         void SpawnPlayer(const Math::float3& feet);

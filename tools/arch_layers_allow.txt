@@ -12,8 +12,6 @@ app/scene/SceneObjectRegistry.cpp -> app/Systems.h
 app/ui/DeveloperTabDebug.cpp -> editor/EditorController.h
 materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
 ocean/WaterMask.cpp -> physics/PhysicsWorld.h
-physics/PhysicsWorld.cpp -> ocean/OceanReadback.h
-physics/PhysicsWorld.cpp -> ocean/OceanRenderable.h
 rendering/core/RenderTargetManager.cpp -> rendering/shadows/ShadowSettings.h
 rendering/core/Renderer.cpp -> rendering/lighting/VolumetricCloudSettings.h
 rendering/core/Renderer.cpp -> rendering/shadows/ShadowSettings.h

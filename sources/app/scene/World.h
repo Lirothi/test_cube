@@ -18,6 +18,7 @@
 #include "vfx/VesselSpray.h"
 #include "ocean/OceanBuoyancy.h"
 #include "physics/PhysicsWorld.h"
+#include "app/scene/OceanWaterSurface.h" // R14.1: the ocean as the physics' water
 #include "app/scene/TimeOfDay.h"
 #include "rendering/lighting/NightLamps.h"
 
@@ -303,6 +304,7 @@ protected:
     std::function<void(Renderer*, RuntimeObjects&)> gameHandOver_; // R6.2a: SetGameHooks
     std::function<void()> gameForget_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
+    OceanWaterSurface oceanWater_; // the level's ocean as physics_' water, bound every TickPhysics
     vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync
 
     DirectionalLight dirLight_;

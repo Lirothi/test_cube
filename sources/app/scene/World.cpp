@@ -554,7 +554,8 @@ void World::Tick(float deltaTime, Renderer& renderer) {
 
 void World::TickPhysics(float deltaTime, Renderer& renderer)
 {
-    physics_.SetOcean(FindOceanRenderable());
+    oceanWater_.Bind(FindOceanRenderable());
+    physics_.SetWater(&oceanWater_);
     physics_.SetCamera(camera_.GetPosition());
     physics_.SetDebugDraw(renderer.GetDebugDrawSystem());
     physics_.Tick(deltaTime);

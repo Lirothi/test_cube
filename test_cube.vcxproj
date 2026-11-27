@@ -530,6 +530,7 @@
     <ClCompile Include="sources/app/levels/LevelMigration.cpp" />
     <ClCompile Include="sources/app/scene/Scene.cpp" />
     <ClCompile Include="sources/app/scene/World.cpp" />
+    <ClCompile Include="sources/app/scene/OceanWaterSurface.cpp" />
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
@@ -873,6 +874,7 @@
     <ClInclude Include="sources/app/levels/LevelMigration.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />
     <ClInclude Include="sources/app/scene/World.h" />
+    <ClInclude Include="sources/app/scene/OceanWaterSurface.h" />
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h" />
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h" />
     <ClInclude Include="sources/rendering/scene/SceneFrameData.h" />
@@ -953,6 +955,7 @@
     <ClInclude Include="sources/ocean/OceanBuoyancy.h" />
     <ClInclude Include="sources/physics/PhysicsTypes.h" />
     <ClInclude Include="sources/physics/PhysicsWorld.h" />
+    <ClInclude Include="sources/physics/WaterSurface.h" />
     <ClInclude Include="sources/physics/CollisionJson.h" />
     <ClInclude Include="sources/physics/PhysicsInternal.h" />
     <ClInclude Include="sources/ocean/OceanReadback.h" />
