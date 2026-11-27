@@ -5,7 +5,7 @@
 #include "core/math/Math.h"
 #include "core/math/Frustum.h"
 #include "rendering/RenderLayers.h"
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneRenderQueue.h"
 
 struct SceneView
 {

@@ -660,44 +660,44 @@
     <ClCompile Include="sources/rendering/scene/SceneRenderConfig.cpp">
       <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Geometry.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Geometry.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Shadows.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Shadows.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Graph.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Graph.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Lighting.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Lighting.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Reflections.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Gi.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Gi.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_SkyOcclusion.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_SkyOcclusion.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SkyOcclusionMap.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SkyOcclusionMap.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderer_Post.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/post/BloomRenderer.cpp">
       <Filter>sources\rendering\post</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneRenderQueue.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
-    <ClCompile Include="sources/app/scene/SceneResourceBootstrapper.cpp">
-      <Filter>sources\app\scene</Filter>
+    <ClCompile Include="sources/rendering/scene/SceneResourceBootstrapper.cpp">
+      <Filter>sources\rendering\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/Systems.cpp">
       <Filter>sources\app</Filter>
@@ -1532,8 +1532,8 @@
     <ClInclude Include="sources/rendering/scene/SceneRenderConfig.h">
       <Filter>sources\rendering\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneRenderInternal.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneRenderInternal.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/post/BloomRenderer.h">
       <Filter>sources\rendering\post</Filter>
@@ -1541,20 +1541,20 @@
     <ClInclude Include="sources/rendering/post/BloomSettings.h">
       <Filter>sources\rendering\post</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneRenderer.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneRenderer.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneRenderQueue.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneRenderQueue.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneResourceBootstrapper.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SceneView.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SceneView.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
-    <ClInclude Include="sources/app/scene/SkyOcclusionMap.h">
-      <Filter>sources\app\scene</Filter>
+    <ClInclude Include="sources/rendering/scene/SkyOcclusionMap.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/Systems.h">
       <Filter>sources\app</Filter>

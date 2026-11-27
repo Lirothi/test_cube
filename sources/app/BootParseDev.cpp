@@ -14,7 +14,7 @@
 #include "core/diagnostics/CrashHandler.h"
 #include "rendering/core/StreamlineSignature.h"
 #include "app/diagnostics/RtAudit.h" // game thread plan G9: --rt-audit
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "materials/Material.h"

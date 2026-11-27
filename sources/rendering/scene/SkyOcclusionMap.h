@@ -6,7 +6,7 @@
 #include <d3d12.h>
 
 #include "core/math/Math.h"
-#include "app/scene/SceneView.h"
+#include "rendering/scene/SceneView.h"
 #include "rhi/ResourceDeclarations.h"
 
 class Material;

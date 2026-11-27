@@ -1,4 +1,4 @@
-#include "app/scene/SkyOcclusionMap.h"
+#include "rendering/scene/SkyOcclusionMap.h"
 
 #include <algorithm>
 #include <cmath>

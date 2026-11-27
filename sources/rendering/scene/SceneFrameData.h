@@ -21,11 +21,12 @@
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
-struct SceneView; // app/scene/SceneView.h: the views are reached through pointers here
+struct SceneView; // rendering/scene/SceneView.h: the views are reached through pointers here
 class Camera;
 class DirectionalLight;
 namespace render { class LocalShadowCache; }
 class OceanRenderable;
+class OceanSimulation;
 class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
@@ -517,6 +518,9 @@ struct SceneFrameData
     // Water in the level, or null. The deferred lighting pass reads its caustics settings, clock
     // and flipbook; no ocean simply means no caustics.
     OceanRenderable* ocean = nullptr;
+    // The ocean's simulation (its FFT, shore depth, surf), or null -- taken where `ocean` is, so the renderer reads no
+    // app global (architecture plan R6.3: it was Systems::GetOceanSimulation() in three passes).
+    OceanSimulation* oceanSimulation = nullptr;
     // Plan S's fallback without RT (skyVis.fallback): the world from above, or null -- non-null only on a frame the
     // fallback is wanted (the setting on, the RT sky visibility not) and its resources were built.
     SkyOcclusionMap* skyOcclusion = nullptr;

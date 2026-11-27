@@ -2,7 +2,7 @@
 #include "core/diagnostics/BootProfile.h" // game thread plan G10d: the level load's phases
 #include <cstdio>
 #include <utility>
-#include "app/scene/SceneResourceBootstrapper.h"
+#include "rendering/scene/SceneResourceBootstrapper.h"
 #include "core/logging/Log.h" // volumetric fog PSO failures go to the session log
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 

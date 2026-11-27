@@ -14,17 +14,9 @@ app/scene/Scene.h -> app/game/PlayerStart.h
 app/scene/Scene.h -> app/game/Race.h
 app/scene/Scene.h -> app/game/VesselCamera.h
 app/scene/SceneObjectRegistry.cpp -> app/Systems.h
-app/scene/SceneRenderer.cpp -> app/Systems.h
-app/scene/SceneRenderer_Geometry.cpp -> app/Systems.h
-app/scene/SceneRenderer_Graph.cpp -> app/Systems.h
-app/scene/SceneRenderer_Lighting.cpp -> app/Systems.h
-app/scene/SceneRenderer_Post.cpp -> app/Systems.h
-app/scene/SceneRenderer_Reflections.cpp -> app/Systems.h
-app/scene/SceneRenderer_Shadows.cpp -> app/Systems.h
 app/ui/DeveloperWindow.cpp -> editor/EditorController.h
 materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
 ocean/OceanRenderable.cpp -> app/scene/Scene.h
-ocean/OceanSimulation.h -> app/scene/SceneView.h
 ocean/WaterMask.cpp -> physics/PhysicsWorld.h
 physics/PhysicsWorld.cpp -> ocean/OceanReadback.h
 physics/PhysicsWorld.cpp -> ocean/OceanRenderable.h
@@ -38,7 +30,6 @@ rendering/meshes/GpuInstancedModels.cpp -> rendering/renderables/InstanceTypes.h
 rendering/meshes/GpuInstancedModels.h -> rendering/renderables/GBufferRenderable.h
 rendering/meshes/MeshManager.cpp -> rendering/shadows/TessySettings.h
 rendering/meshes/StaticMesh.h -> rendering/renderables/GBufferRenderable.h
-rendering/post/BloomRenderer.h -> app/scene/SceneResourceBootstrapper.h
 rendering/renderables/RenderableObject.cpp -> ocean/OceanBuoyancy.h
 rendering/renderables/RenderableObject.cpp -> ocean/WaterMask.h
 rendering/renderables/RenderableObject.cpp -> physics/PhysicsWorld.h

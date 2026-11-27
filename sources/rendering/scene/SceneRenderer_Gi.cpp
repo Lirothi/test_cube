@@ -1,7 +1,7 @@
 // Interior lighting plan D: the GI probe volume (DDGI over inline RayQuery) -- the two graph passes and
 // what lighting reads. The volume's resources and per-frame placement are rendering/lighting/DdgiVolume;
 // the shaders ddgi_trace_cs.hlsl, ddgi_update_cs.hlsl and ddgi_common.hlsli.
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 
 #include <algorithm>
 #include <cstring>
@@ -19,7 +19,7 @@
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/view/Camera.h"
-#include "app/scene/SceneRenderInternal.h"
+#include "rendering/scene/SceneRenderInternal.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/ddgi_constants.h" // DdgiConstants's fields, once (R5.3)
 #include "shaders/shared/ddgi_usage.h" // DdgiUsageConstants's fields, once (R5.3)

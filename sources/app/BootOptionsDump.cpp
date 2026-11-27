@@ -1,5 +1,5 @@
 #include "app/BootOptions.h"
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneRenderQueue.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSurfSim.h"

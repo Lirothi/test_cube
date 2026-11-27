@@ -5,7 +5,7 @@
 // deliberately NOT part of this step, because an unused include is not a defect and a
 // trimmed one is a second thing to review.
 
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +24,6 @@
 #include "rendering/meshes/LodSelect.h" // S3.6: render::EffectiveDrawLod (receiver LOD for casters)
 
 #include "rendering/view/Camera.h"
-#include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
 #include "core/diagnostics/DiagPaths.h" // P8C-2o kernel survey verdict
@@ -53,7 +52,7 @@
 // R1 (docs/scene_renderer_refactor_plan.md): the helpers every pass body uses moved to an
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
-#include "app/scene/SceneRenderInternal.h"
+#include "rendering/scene/SceneRenderInternal.h"
 using namespace scene_internal;
 
 // ---- Pass_ShadowCull + the two VSM passes ----
@@ -267,7 +266,7 @@ void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext c
     // pass-flow S6: no gates and no flag reads here. The builder decided drawDepth/buildSdf from
     // the SAME OceanSimulation flags this body used to re-read, validated every target and DSV it
     // declared for, and already committed MarkShoreSdfBuilt.
-    OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
+    OceanSimulation* oceanSimulation = frame_->oceanSimulation;
 
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);

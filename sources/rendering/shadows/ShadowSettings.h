@@ -14,7 +14,7 @@
 //
 // Deliberately process globals, not scene state: they survive a level switch the way the dev-window
 // toggles do, and `--shadow-mode=` / `--csm-tint` are parsed in main.cpp before any Scene exists.
-// A per-SCENE shadow setting belongs in CascadeShadowConfig (app/scene/SceneRenderConfig.h) instead;
+// A per-SCENE shadow setting belongs in CascadeShadowConfig (rendering/scene/SceneRenderConfig.h) instead;
 // `csmFilterMode` moved there for that reason, next to the three filter knobs it is tuned with.
 namespace render
 {

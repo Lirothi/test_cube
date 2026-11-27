@@ -26,7 +26,7 @@
 #include <d3d12.h>
 
 #include "rendering/scene/SceneFrameData.h"
-#include "app/scene/SceneResourceBootstrapper.h"
+#include "rendering/scene/SceneResourceBootstrapper.h"
 #include "materials/Texture2D.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderGraph.h"

@@ -17,7 +17,7 @@
 
 #include "rendering/scene/SceneFrameData.h"
 #include "app/scene/Scene.h"
-#include "app/scene/SkyOcclusionMap.h" // skyVis.fallbackResolution / fallbackTexel ranges
+#include "rendering/scene/SkyOcclusionMap.h" // skyVis.fallbackResolution / fallbackTexel ranges
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h" // A3: streaming.* globals
 #include "rendering/core/VisibilityStats.h"

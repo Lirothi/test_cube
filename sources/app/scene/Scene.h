@@ -23,11 +23,11 @@
 #include "rendering/lighting/LightManager.h"
 
 #include "rendering/scene/SceneRenderConfig.h"
-#include "app/scene/SceneRenderQueue.h"
-#include "app/scene/SceneView.h"
-#include "app/scene/SkyOcclusionMap.h"
+#include "rendering/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneView.h"
+#include "rendering/scene/SkyOcclusionMap.h"
 #include "rendering/scene/SceneFrameData.h"
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 #include "core/task/TaskSystem.h" // viewTasks_
 #include "core/threading/ThreadRole.h" // game thread plan: the accessors say which half they belong to
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a

@@ -63,6 +63,12 @@ LAYERS = [
         "ocean": ["ocean/"],
         "vfx": ["vfx/"],
     }),
+    # Architecture plan R6.3: the scene renderer builds the frame out of every feature, the world-side ones too (the
+    # ocean's passes), so it sits above ocean/ and vfx/ and below app/scene, which alone includes it. The rest of
+    # rendering/scene/ (the frame's data, the views, the queues, the resource bootstrapper) stays a feature folder.
+    (3.7, "render-scene", False, {
+        "scene-renderer": ["rendering/scene/SceneRenderer", "rendering/scene/SceneRenderInternal.h"],
+    }),
     (4.0, "world", False, {
         "world": ["app/scene/", "app/camera/", "app/levels/"],
     }),

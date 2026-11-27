@@ -5,7 +5,7 @@
 // deliberately NOT part of this step, because an unused include is not a defect and a
 // trimmed one is a second thing to review.
 
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 #include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 
@@ -25,7 +25,6 @@
 #include "rendering/core/RenderConstants.h"
 
 #include "rendering/view/Camera.h"
-#include "app/Systems.h"
 #include "rendering/debug/DebugDraw.h"
 #include "core/Helpers.h" // GetTimeSeconds (P2 adaptation delta)
 #include "core/diagnostics/DiagPaths.h" // P8C-2o kernel survey verdict
@@ -51,7 +50,7 @@
 // R1 (docs/scene_renderer_refactor_plan.md): the helpers every pass body uses moved to an
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
 // using-directive keeps every call site spelled exactly as it was.
-#include "app/scene/SceneRenderInternal.h"
+#include "rendering/scene/SceneRenderInternal.h"
 #include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
 using namespace scene_internal;
 

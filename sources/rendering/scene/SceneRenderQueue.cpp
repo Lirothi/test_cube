@@ -1,4 +1,4 @@
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneRenderQueue.h"
 
 #include <algorithm>
 #include <cmath>

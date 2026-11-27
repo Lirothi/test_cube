@@ -4969,6 +4969,47 @@ Debug, реестр настроек и таблица графики, вкла�
   **R6.3**: `SceneRenderer*`, `SceneRenderQueue`, `SceneView`, `SceneResourceBootstrapper` → `rendering/scene`
   (перенос). **R6.4**: разделить класс. Гейт типа C, `--rt-audit` обязателен. Остановиться после R6.2 — уже
   большая часть пользы (**В2**).
+
+  **Подшаги R6 (2026-11-27) и порядок.** Сверено по дереву: функции планирования теневых видов (`UpdateCascades`
+  `Scene.cpp:587-1111`, `UpdateClipmap` 1112-1199, `UpdateSdsmFrameParams` 3261-3531, `ReconcileShadowCapacity` /
+  `ApplyShadowCapacity` 3532-3597) работают с `SceneView` и `SceneRenderQueue`, а те лежат в `app/scene` (слой 4):
+  `ShadowViewPlanner` в `rendering/shadows` (слой 3) не смог бы их включить. Поэтому первым — перенос R6.3 (без смены
+  владения, как и требует правило «сначала вынести, потом разделить»), затем R6.1, R6.2, R6.4. Раскладка R6.3 по
+  зависимостям: в `rendering/scene/` (render-feat, 3.0) — `SceneView.h`, `SceneRenderQueue`, `SceneResourceBootstrapper`,
+  `SkyOcclusionMap` (от `ocean/` не зависят; уходят два разрешения храповика — `ocean/OceanSimulation.h ->
+  app/scene/SceneView.h` и `rendering/post/BloomRenderer.h -> app/scene/SceneResourceBootstrapper.h`); сам рендерер
+  (`SceneRenderer.h/.cpp`, девять `SceneRenderer_*.cpp`, `SceneRenderInternal.h`) включает `ocean/OceanSimulation.h` и
+  `ocean/OceanRenderable.h` (3.5) и потому получает в таблице слоёв `check_layers.py` свою строку по префиксу файла —
+  слой render-scene, 3.7: выше `ocean/` / `vfx/` (он их собирает в кадр), ниже `app/scene` (его включает только
+  `Scene.h`). `app/Systems.h` из рендерера уходит: `Systems::GetOceanSimulation()` (три места) заменяется указателем,
+  который `Scene::Sync` кладёт в `SceneFrameData` (как уже лежит `OceanRenderable* ocean`); семь разрешений
+  `SceneRenderer*.cpp -> app/Systems.h` уходят.
+  - **R6.3** (первым): перенос файлов (`git mv`), include, `vcxproj` / `.filters`, таблица слоёв, указатель океана.
+  - **R6.1**: `ShadowViewPlanner` в `rendering/shadows` — состояние видов (каскады и их прошлые коробки, клипмап,
+    локальные виды и их отсечение, кэш разделов SDSM) и пять функций; `Scene` держит его и подаёт входы рендерной
+    половины (камера, солнце, ветер, конфиг каскадов, данные кадра, `shadowGpu_`, `sdsm_`, `vsm_`, свет).
+  - **R6.2**: игровое — `Race`, камеры судна и зрителя, `PlayerStart`, `RaceCourse`, спрей — в `game::`, владеет сессия.
+  - **R6.4**: разделить класс на `World` и `RenderScene`.
+
+  **Сделано R6.3 (2026-11-27).** `git mv` 18 файлов из `app/scene/` в `rendering/scene/`: `SceneView.h`,
+  `SceneRenderQueue.h/.cpp`, `SceneResourceBootstrapper.h/.cpp`, `SkyOcclusionMap.h/.cpp`, `SceneRenderer.h/.cpp`, девять
+  `SceneRenderer_*.cpp`, `SceneRenderInternal.h` (история файлов сохранена). Пути — скриптом (`r63_paths.py` рабочей
+  папки): 77 ссылок в 25 файлах (`include`, 18 путей `vcxproj`, 18 — `.filters` с папкой `sources\rendering\scene`).
+  `Systems::GetOceanSimulation()` в трёх проходах (`SceneRenderer_Graph.cpp` — переходы ресурсов симуляции перед
+  асинхронной трассировкой и проход глубины берега; `SceneRenderer_Shadows.cpp` — сам этот проход) заменён полем
+  `SceneFrameData::oceanSimulation`, которое `PrepareViews` (рендерная половина) берёт рядом с `frameData_.ocean` — то
+  же значение, что проходы читали в том же кадре; семь `#include "app/Systems.h"` из рендерера удалены (пять были
+  не нужны вовсе); `SceneRenderInternal.h` сам включает `DirectionalLight.h` и `Skybox.h` (приходили через
+  `Systems.h`). `check_layers.py`: слой render-scene (3.7) — строка `scene-renderer` по префиксам
+  `rendering/scene/SceneRenderer` и `rendering/scene/SceneRenderInternal.h`; остальное `rendering/scene/` — render-feat.
+  Храповик: 51 → 42 разрешения (`--update`), новых нарушений 0 — ушли семь `SceneRenderer*.cpp -> app/Systems.h`,
+  `ocean/OceanSimulation.h -> SceneView.h` и `BloomRenderer.h -> SceneResourceBootstrapper.h`. Попутно устаревший
+  комментарий `ShadowSettings.h` (`app/scene/SceneRenderConfig.h` — файл давно в `rendering/scene`). Проверено: три
+  конфигурации, `check_*.py` 0, `settings_names` 0, CRLF, обе регрессии PASS (скрытый стол); Release
+  `--scene-stress=150 --rt-audit` CLEAN, `rt audit: PASS` (455 кадров, 74 объекта), 604 простоя GPU — как у эталона;
+  картинка (эталон / после по очереди): lagoon пол 0.057 / 0.013 %, эталон-после 0.12 (первый, прогрев) / 0.012 %;
+  море бимодально (0.0002 / 0.068 %), эталон-после 0.0016 / 0.067 %; bath три круга — эталон-эталон 0.019-0.053 %,
+  после-после 0.043-0.079 %, эталон-после 0.020-0.078 % — в коридоре пола, кадр просмотрен.
 - **R13. Игровые системы** (после R6.2), **R14. Физика как сервис** (после R13; по одной сущности: якорь →
   швартовка → лодка → игрок; `OceanRenderable` в `physics/` — 5 упоминаний → интерфейс «поверхность воды»).
   Якорь, швартовка, лодка и руль бота — под `FixedTick`; игрок — на покадровом хуке, как сегодня

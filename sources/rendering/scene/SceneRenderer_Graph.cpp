@@ -16,7 +16,7 @@
 // correctness constraint, not tidiness: BeginCLGroup/EndCLGroup bracket a shared command list, and
 // a phase boundary in the middle of one would put its members' recording in two different places.
 
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 #include "rendering/streaming/TextureStreaming.h" // A2: Main_TextureStreaming builder
 
 #include <algorithm>
@@ -27,7 +27,6 @@
 #include <initializer_list>
 
 #include "rendering/view/Camera.h"
-#include "app/Systems.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
@@ -44,8 +43,8 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/wind/WindState.h"
 
-#include "app/scene/SceneRenderInternal.h"
-#include "app/scene/SkyOcclusionMap.h" // plan S's fallback without RT
+#include "rendering/scene/SceneRenderInternal.h"
+#include "rendering/scene/SkyOcclusionMap.h" // plan S's fallback without RT
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: the query plan the pass draws
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b: the tester Main_VisTest runs
 #include "rendering/debug/DebugDraw.h"
@@ -326,7 +325,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             // Release the previous forward frame's PIXEL bit before async RT consumes IBL.
             if (frame_->skybox) frame_->skybox->DeclareEnvironment(ctx, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            if (OceanSimulation* oceanSim = Systems::GetOceanSimulation())
+            if (OceanSimulation* oceanSim = frame_->oceanSimulation)
             {
                 // Guarded per resource exactly as the sim's own Prepare guards them: registering a
                 // transition the compile then cannot match is fatal under compiled barriers.
@@ -495,7 +494,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // shore depth map and builds its SDF, and reads nothing the sim writes.
     gb.pShoreDepth = rg.AddPass2(RenderPass::Main_TerrainDepth, { pGiCompute },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-            OceanSimulation* oceanSim = Systems::GetOceanSimulation();
+            OceanSimulation* oceanSim = frame_->oceanSimulation;
             if (!oceanSim) { return {}; }
             ShoreDepthPoints pts{};
             ID3D12Resource* const shoreDepth = oceanSim->GetShoreDepthResource();

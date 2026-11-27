@@ -16,7 +16,7 @@
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
-#include "app/scene/SceneView.h"
+#include "rendering/scene/SceneView.h"
 #include "rhi/ResourceDeclarations.h"
 
 class Renderer;

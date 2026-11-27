@@ -21,7 +21,7 @@
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
-#include "app/scene/SkyOcclusionMap.h" // the sky-from-above map's ranges and coverage
+#include "rendering/scene/SkyOcclusionMap.h" // the sky-from-above map's ranges and coverage
 #include "app/settings/Scalability.h"  // the Scalability tab
 #include "app/settings/UserSettings.h" // the look's sensitivity and inverted vertical (Frame)
 #include "core/logging/Log.h"

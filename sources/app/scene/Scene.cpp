@@ -2697,6 +2697,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.localShadowCache = &localShadowCache_;
     frameData_.vsm = &vsm_;
     frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
+    frameData_.oceanSimulation = Systems::GetOceanSimulation(); // R6.3: the renderer reads it here, not from Systems
 
     mainView.renderLayerMask = renderCamera_.GetRenderLayerMask();
     mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, renderCamera_.GetZNear(), renderCamera_.GetZFar());

@@ -25,7 +25,7 @@
 #include "editor/assets/MaterialFileGen.h" // --seam-ratio (empty outside WITH_EDITOR)
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/RtAudit.h" // game thread plan G9: --rt-audit
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "core/vfs/PakCrypto.h"

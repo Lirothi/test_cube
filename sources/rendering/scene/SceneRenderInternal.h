@@ -19,13 +19,15 @@
 
 #include "rendering/view/Camera.h"
 #include "rendering/scene/SceneFrameData.h"
-#include "app/scene/SceneView.h"
-#include "app/scene/SceneRenderQueue.h"
+#include "rendering/scene/SceneView.h"
+#include "rendering/scene/SceneRenderQueue.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
+#include "rendering/lighting/DirectionalLight.h" // R6.3: came in through app/Systems.h before
+#include "rendering/lighting/Skybox.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/wind/WindState.h"

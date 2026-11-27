@@ -2,14 +2,14 @@
 // sky visibility's target. The map's resources and placement are SkyOcclusionMap; the shader sky_occlusion_cs.hlsl
 // says what it computes; the builders are in SceneRenderer_Graph.cpp (Main_SkyOcclusionMap, Main_SkyOcclusionReduce in
 // the prologue, Main_SkyVisFallback where the RT trace would be).
-#include "app/scene/SceneRenderer.h"
+#include "rendering/scene/SceneRenderer.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 
 #include "rendering/view/Camera.h"
-#include "app/scene/SkyOcclusionMap.h"
+#include "rendering/scene/SkyOcclusionMap.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
@@ -22,7 +22,7 @@
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/wind/WindState.h"
 
-#include "app/scene/SceneRenderInternal.h"
+#include "rendering/scene/SceneRenderInternal.h"
 #include "shaders/shared/shader_types.h"
 #include "shaders/shared/sky_occlusion.h" // SkyOcclusionConstants's fields, once (R5.3)
 using namespace scene_internal;
