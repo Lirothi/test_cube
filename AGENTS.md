@@ -122,7 +122,9 @@ $b=[IO.File]::ReadAllBytes((Resolve-Path $f).Path);$lf=0;$cr=0;for($i=0;$i -lt $
 ALWAYS CHECK THE MCP FIRST, AND EXTEND IT when it lacks something: a tool in `sources/editor/intent/EditorMcpServer.cpp`
 + its case in `tools/intent_regression.cpp` `TestMcpDrivesTheSameRoad` (Debug for the gate, Release_Editor to use).
 One open editor beats dozens of headless launches (~15 s each); headless `--shot`/`--sweep` are for gates and builds
-without the editor.
+without the editor. EVERY check is done the cheapest way, through MCP: a check of the editor's own UI (an Inspector, a
+Developer Controls tab, a panel) too -- it is no "gate" that excuses a series. More than ~4 headless launches is no
+check: extend MCP first (the owner stopped a ~1 h series of one-exe-a-frame shots on 2026-11-27).
 
 - Endpoint `http://127.0.0.1:8128/mcp` (`.mcp.json`; Codex: `.codex/config.toml`, tools `mcp__test_cube_editor__*`).
   Read `editor_guide` first. Scripts send `Content-Type: application/json` (else 415).
