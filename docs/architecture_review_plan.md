@@ -5449,6 +5449,21 @@ Debug, реестр настроек и таблица графики, вкла�
   побайтно, пересобранный Release — 0.014 и 0.068 %. R7: R7.1, R7.2a, R7.3 сделаны; R7.2b–d — после R14.
 - **R8. Фичи графа и одна точка простоя** (после R4, R6, R16). `SceneRenderer_Graph.cpp` — 3125 строк;
   `ShadowGpuData.cpp` — 5808; `VirtualShadowMap.cpp` — 3410.
+
+  **Подшаги R8 (2026-11-27).** Сверено: `SceneRenderer_Graph.cpp` 3126 строк, `ShadowGpuData.cpp` 5816,
+  `VirtualShadowMap.cpp` 3415, `RenderTargetManager.cpp` 1443. `WaitForPreviousFrame` — 35 вызовов в 21 файле (74 до
+  R16.10); по таблице R16.10 большая часть — «оставить» с причиной (разборка, стенды, выбор объекта, скриншот, редкие
+  правки редактора, атлас значков, превью меша, `SubmitAndWait` по договору). Предмет R8 — ожидания рендерной половины
+  до графа, каждое со своим простоем: `RenderScene.cpp:1340` (`ReconcileShadowMode`: пулы VSM, атласы, кэш),
+  `:1222` (ёмкость теней), `:231` и `ShadowGpuData.cpp:2768` (кастеры, мега-буфер), `Renderer.cpp:1948`
+  (`ApplyPendingResize`), `:2777` (`RecreateDeferredTargets`), `:597` (`SyncAsyncQueueMode`), `OceanRenderable.cpp:1279`
+  (атлас каустики), `VolumetricCloud.cpp:134` (загрузка облаков при их включении), и смена уровня (`App.cpp:1779`).
+  - **R8.1 — одна точка простоя рендерной половины**: фичи кладут заявки «пересоздать на простое»; кадр собирает их
+    (решения кадра известны), ждёт GPU один раз и выполняет все, затем строит граф. Счётчик простоев видит одно место.
+  - **R8.2 — интерфейс фичи** (`Reconcile` в этой точке, `Decide`, `Build`) и `SceneRenderer_Graph.cpp` списком фич.
+  - **R8.3–R8.5** — разрез `ShadowGpuData`, `VirtualShadowMap`, `RenderTargetManager::Create` по ответственности.
+  - **R4.5e1–3** — после R8.1 (тот же `BeginFrame`).
+  - Полный `--scene-stress-gbv` в конце (разрешение владельца на R8).
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →
   реестр панелей с `Draw`. **R10.2** (**В10**): отрисовка панели под `try` с восстановлением стека ImGui
   (`ImGui::ErrorRecoveryStoreState` / `TryToRecoverState`, ImGui 1.92): исключение — Error, панель закрыта,
