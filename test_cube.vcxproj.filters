@@ -594,6 +594,9 @@
     <ClCompile Include="sources/app/game/PlayWorld.cpp">
       <Filter>sources\app\game</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/game/BoatHelm.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/game/Race.cpp">
       <Filter>sources\app\game</Filter>
     </ClCompile>
@@ -1461,6 +1464,12 @@
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/PlayWorld.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/BoatHelm.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/Control.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/GameSystem.h">

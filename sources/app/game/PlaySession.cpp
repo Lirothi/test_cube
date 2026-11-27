@@ -89,7 +89,7 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     if (!playing_) { return; }
     playing_ = false;
     possessed_ = false;
-    LeaveHelm(scene, false);
+    LetGo(scene, false); // R13.5
     for (game::GameSystem* system : world_.Systems()) { system->OnSessionEnd(scene); } // R13.2: the race's pilots off, its boats to go
     scene.CloseSessionJournal(); // R13.3: what the session made and left goes at the next hand-over, after the systems' own
     scene.Physics().RemovePlayer();
@@ -105,92 +105,44 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     LOG_INFO(logging::LogCategory::App, "play: stopped, the camera back where it stood");
 }
 
-void PlaySession::TakeHelm(Scene& scene, RenderableObject* vessel)
+void PlaySession::Take(Scene& scene, game::Controllable& controllable, RenderableObject* target)
 {
-    physics::World& world = scene.Physics();
-    if (!world.SetHelm(vessel)) { return; }
-    atHelm_ = true;
-    vesselInReach_ = false;
-    world.RemovePlayer();
-    world_.vesselCamera.Begin();
-    scene.CameraRef().ResetHistory(); // a jump, not a pan
-    LOG_INFO(logging::LogCategory::App, "play: at the helm");
+    // R13.5: TakeHelm's session half (its body is game::BoatHelm::Take).
+    if (!controllable.Take(scene, target)) { return; }
+    controlled_ = &controllable;
+    prompt_ = nullptr;
 }
 
-void PlaySession::LeaveHelm(Scene& scene, bool overTheSide)
+void PlaySession::LetGo(Scene& scene, bool overTheSide)
 {
-    if (!atHelm_) { return; }
-    atHelm_ = false;
-    physics::World& world = scene.Physics();
-    const physics::HelmState helm = world.GetHelm(); // SetHelm clears it
-    world.SetHelm(nullptr);
-    world_.vesselCamera.End();
-    LOG_INFO(logging::LogCategory::App, "play: left the helm");
-    if (!overTheSide || !helm.exists) { return; }
-    // A stride off the hull to starboard, facing it: the water or the ground takes it from there.
-    const float yaw = std::atan2(helm.forward.x, helm.forward.z);
-    const float across = helm.halfBeam + 0.8f;
-    const Math::float3 feet(helm.position.x + std::cos(yaw) * across, helm.position.y + 0.5f, helm.position.z - std::sin(yaw) * across);
-    world.SpawnPlayer(feet);
+    // R13.5: LeaveHelm's session half (game::BoatHelm::Leave): the body back where the controllable says.
+    game::Controllable* controlled = std::exchange(controlled_, nullptr);
+    if (!controlled) { return; }
+    const std::optional<game::BodyPlacement> body = controlled->Leave(scene, overTheSide);
+    if (!body) { return; }
+    scene.Physics().SpawnPlayer(body->feet);
     possessed_ = true;
     justSpawned_ = true;
     Camera& camera = scene.CameraRef();
-    camera.SetPosition(Math::float3(feet.x, feet.y + physics::GameSettings().player.eyeHeight, feet.z));
-    camera.SetYawPitchRoll(yaw - 1.5707963f, 0.0f, 0.0f);
+    camera.SetPosition(Math::float3(body->feet.x, body->feet.y + physics::GameSettings().player.eyeHeight, body->feet.z));
+    camera.SetYawPitchRoll(body->cameraYawRad, 0.0f, 0.0f);
     camera.ResetHistory();
 }
 
-void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime)
+void PlaySession::TickControlled(InputManager& input, Scene& scene, bool controls, float deltaTime)
 {
-    physics::World& world = scene.Physics();
-    const physics::HelmState& helm = world.GetHelm();
-    if (!helm.exists) // gone with its level, or physics.enabled:0
+    // R13.5: TickHelm's session half (game::BoatHelm::Tick): what came of the frame.
+    switch (controlled_->Tick(input, scene, controls, deltaTime))
     {
-        atHelm_ = false;
-        world_.vesselCamera.End();
-        return;
+    case game::Controllable::Held::Yes: break;
+    case game::Controllable::Held::Gone: controlled_ = nullptr; break; // gone with its level, or physics.enabled:0
+    case game::Controllable::Held::LetGo: LetGo(scene, true); break;   // E: over the side
     }
-    Camera& camera = scene.CameraRef();
-    const float yawBefore = camera.GetYaw();
-    const float pitchBefore = camera.GetPitch();
-    // W S / A D (InputManager: the keys count only with `controls`) and what a script says at the helm.
-    physics::VesselInput order;
-    order.throttle = input.GetActionAxis(actions::kMoveZ) + input.GetActionAxis(actions::kHelmThrottle);
-    order.rudder = input.GetActionAxis(actions::kMoveX) + input.GetActionAxis(actions::kHelmRudder);
-    if (controls) { scene.CameraControllerRef().AddLookInput(input); }
-    scene.CameraControllerRef().TakeOwedLook(deltaTime); // the mouse's own road, its smoothing and sensitivity: what it turned the camera by is the orbit's
-    // The autopilot: B hands this helm to the race's bot (game::Race) and takes it back.
-    game::Race& race = world_.race;
-    if (input.TakeActionPress(actions::kAutopilot))
-    {
-        if (!race.HasTrack()) { SetStatus("No race course in this level", 3.0); }
-        else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", 3.0); }
-    }
-    if (race.Autopilot()) { order = race.HelmOrder(); }
-    if (race.HoldsHelm()) { order = physics::VesselInput{}; } // on the grid, the countdown running
-    world.SetHelmInput(order);
-    game::VesselCamera& view = world_.vesselCamera;
-    view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, game::ScriptCamera().orbit,
-              game::ScriptCamera().orbitPitch, deltaTime);
-    if (input.TakeActionPress(actions::kToggleView))
-    {
-        // V: behind -> the cockpit -> cinema -> behind.
-        view.NextView();
-        camera.ResetHistory();
-        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", 3.0);
-    }
-    // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
-    if (input.TakeActionPress(actions::kAnchor))
-    {
-        const bool down = world.ToggleAnchor(helm.object);
-        SetStatus(down ? "Anchor down" : "Anchor up", 3.0);
-    }
-    if (input.TakeActionPress(actions::kInteract)) { LeaveHelm(scene, true); }
 }
 
 void PlaySession::TogglePossess(Scene& scene)
 {
-    if (!playing_ || atHelm_) { return; }
+    if (!playing_ || controlled_) { return; }
     possessed_ = !possessed_;
     scene.Physics().SetPlayerPossessed(possessed_);
     LOG_INFO(logging::LogCategory::App, "play: {}", possessed_ ? "possessed" : "ejected, the camera is free");
@@ -203,7 +155,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     if (mouseFree_ && !uiWantsCursor && !uiCapturingMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { mouseFree_ = false; }
     const bool controls = !mouseFree_ && !uiWantsCursor;
     // On foot with the camera on a bot's boat the mouse stays free: it is the spectator panel's (game::SpectatorSystem::OnDrawUi).
-    const bool watching = !atHelm_ && world_.race.WatchedVessel() != nullptr;
+    const bool watching = !controlled_ && world_.race.WatchedVessel() != nullptr;
     const bool take = controls && !watching && input.WindowIsForeground(); // the mouse is the desktop's: a window in the background keeps the keys and leaves it alone
     if (take != input.IsMouseCaptured()) { input.SetMouseCapture(take); }
     mouseTaken_ = take;
@@ -215,9 +167,9 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     // R13.2: the systems' frame (the race: the bots' orders, and the helm's on autopilot -- before the helm reads its keys;
     // the boats put on the grid are a cut).
     for (game::GameSystem* system : world_.Systems()) { system->OnFrame(scene, deltaTime); }
-    if (atHelm_)
+    if (controlled_)
     {
-        TickHelm(input, scene, controls, deltaTime);
+        TickControlled(input, scene, controls, deltaTime);
         return;
     }
     // On foot, Tab hangs the chase camera on the next racer (the next bot boat outside a race), past the last one gives it back.
@@ -234,18 +186,27 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
         camera.ResetHistory();
         SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", 3.0);
     }
-    // The way aboard: within a few metres of a hull, the key takes the helm.
-    constexpr float kHelmReach = 3.0f;
+    // The way aboard (R13.5: whatever within reach the key hands the player to control -- a boat's helm, within a few
+    // metres of its hull, today).
     const physics::PlayerState onFoot = world.GetPlayerState();
-    RenderableObject* vessel = possessed_ && onFoot.exists ? world.FindVessel(onFoot.feet, kHelmReach) : nullptr;
-    vesselInReach_ = vessel != nullptr;
-    const bool interact = input.TakeActionPress(actions::kInteract); // taken on foot, a hull in reach or not
-    if (vessel && interact)
+    game::Interactable* reached = nullptr;
+    RenderableObject* target = nullptr;
+    if (possessed_ && onFoot.exists)
     {
-        TakeHelm(scene, vessel);
-        if (atHelm_)
+        for (game::Interactable* interactable : Interactables())
         {
-            TickHelm(input, scene, controls, deltaTime);
+            target = interactable->InReach(scene, onFoot.feet);
+            if (target) { reached = interactable; break; }
+        }
+    }
+    prompt_ = reached ? reached->Prompt() : nullptr;
+    const bool interact = input.TakeActionPress(actions::kInteract); // taken on foot, something in reach or not
+    if (reached && interact)
+    {
+        Take(scene, reached->Controls(), target);
+        if (controlled_)
+        {
+            TickControlled(input, scene, controls, deltaTime);
             return;
         }
     }
@@ -268,10 +229,8 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
 bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course)
 {
     if (!playing_) { return true; }
-    atHelm_ = false; // the boat went with the level
-    vesselInReach_ = false;
-    scene.Physics().SetHelm(nullptr);
-    world_.vesselCamera.End();
+    if (game::Controllable* controlled = std::exchange(controlled_, nullptr)) { controlled->Forget(scene); } // R13.5: it went with the level
+    prompt_ = nullptr;
     if (stopOnLevelChange_)
     {
         StopForLevel(scene, input);
@@ -287,10 +246,8 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
 void PlaySession::StopForLevel(Scene& scene, InputManager& input)
 {
     if (!playing_) { return; }
-    atHelm_ = false; // the boat went with the level
-    vesselInReach_ = false;
-    scene.Physics().SetHelm(nullptr);
-    world_.vesselCamera.End();
+    if (game::Controllable* controlled = std::exchange(controlled_, nullptr)) { controlled->Forget(scene); } // R13.5: it went with the level
+    prompt_ = nullptr;
     playing_ = false;
     possessed_ = false;
     scene.CloseSessionJournal(); // R13.3: the level took what the session made with it; nothing is left to write down
@@ -346,7 +303,7 @@ bool PlaySession::SystemsWantCursor() const
 void PlaySession::DrawUi(Scene& scene)
 {
     if (!playing_) { return; }
-    const game::SessionFrame frame{ scene, atHelm_, possessed_ };
+    const game::SessionFrame frame{ scene, controlled_ != nullptr, possessed_ };
     for (game::GameSystem* system : world_.Systems()) { system->OnDrawUi(frame); } // the race's windows and labels, the spectator's
     DrawBoatCard(scene); // on foot beside a boat: what it does
 }
@@ -359,7 +316,7 @@ void PlaySession::DebugDraw(DebugDrawSystem& draw) const
 
 void PlaySession::DrawBoatCard(Scene& scene)
 {
-    if (!playing_ || atHelm_ || !possessed_ || world_.race.WatchedVessel()) { return; }
+    if (!playing_ || controlled_ || !possessed_ || world_.race.WatchedVessel()) { return; }
     physics::World& world = scene.Physics();
     const physics::PlayerState onFoot = world.GetPlayerState();
     if (!onFoot.exists) { return; }
@@ -459,13 +416,10 @@ std::wstring PlaySession::HudLine(const Scene& scene) const
     const double nowSeconds = SessionClock(); // R13.2: the session's clock (the caller's ImGui::GetTime() before)
     wchar_t line[256];
     const physics::PlayerState state = scene.Physics().GetPlayerState();
-    if (atHelm_)
+    std::wstring controlledLine;
+    if (controlled_)
     {
-        const physics::HelmState& helm = scene.Physics().GetHelm();
-        const physics::VesselState& vessel = helm.vessel;
-        std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%%ls   W S throttle   A D rudder   V view: %hs   %ls   E leave",
-                      vessel.speed * 1.94384f, vessel.throttle * 100.0f, vessel.rudder * 100.0f, helm.anchored ? L", ANCHORED" : L"",
-                      game::VesselCamera::ViewName(world_.vesselCamera.GetView()), helm.anchored ? L"X weigh anchor" : L"X anchor");
+        controlledLine = controlled_->HudLine(scene); // R13.5: the helm's ("PLAY: at the helm, ...")
     }
     else if (possessed_ && state.exists)
     {
@@ -475,16 +429,16 @@ std::wstring PlaySession::HudLine(const Scene& scene) const
     {
         std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: the camera is free");
     }
-    std::wstring text = line;
-    if (vesselInReach_) { text += L"   E TAKE THE HELM"; }
+    std::wstring text = controlled_ ? controlledLine : std::wstring(line);
+    if (prompt_) { text += L"   "; text += prompt_; } // R13.5: what within reach the key takes ("E TAKE THE HELM")
 #if WITH_EDITOR
     // K is UE's Keep Simulation Changes: it WRITES the poses into the level (an undo entry). "K keep" beside the boat's keys
     // read as an anchor for this session (owner, 2026-11-09), and the yacht stayed where it was kept after Stop.
-    text += atHelm_ ? L"   Esc stop   K write the poses to the level   Shift+F1 mouse"
+    text += controlled_ ? L"   Esc stop   K write the poses to the level   Shift+F1 mouse"
                     : L"   Esc stop   F8 eject   K write the poses to the level   Shift+F1 mouse";
 #else
     // Every build without the editor has the game's menu on Esc (docs/scalability_plan.md §6.1).
-    text += atHelm_ ? L"   Esc menu" : L"   Esc menu   F8 eject";
+    text += controlled_ ? L"   Esc menu" : L"   Esc menu   F8 eject";
 #endif
     if (mouseFree_) { text += L"   CLICK FOR THE MOUSE"; }
     if (nowSeconds < statusUntil_ && !status_.empty())

@@ -58,7 +58,7 @@ inline constexpr std::string_view kSetDlssQualityDLAA = "SetDlssQualityDLAA";
 inline constexpr std::string_view kMoveWorldX = "MoveWorldX";
 inline constexpr std::string_view kMoveWorldZ = "MoveWorldZ";
 // The helm's throttle and rudder, and the player's sprint, as a script says them (--set player.testThrottle /
-// testRudder / testSprint): added to W S / A D and Shift by their one reader (PlaySession::TickHelm, PlayerController)
+// testRudder / testSprint): added to W S / A D and Shift by their one reader (game::BoatHelm::Tick, PlayerController)
 // -- not injected into MoveZ / MoveX / Sprint, which the free camera reads too.
 inline constexpr std::string_view kHelmThrottle = "HelmThrottle";
 inline constexpr std::string_view kHelmRudder = "HelmRudder";

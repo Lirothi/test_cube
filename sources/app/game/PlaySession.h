@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <string>
 
+#include "app/game/BoatHelm.h" // R13.5
+#include "app/game/Control.h"
 #include "app/game/PlayerController.h"
 #include "app/game/PlayerStart.h"
 #include "app/game/PlayWorld.h" // R6.2a
@@ -45,7 +48,8 @@ public:
     void SetMouseFree(bool free) { mouseFree_ = free; }
     // Once a frame, before Scene::Tick: the mouse and the keys. `uiWantsCursor`: a window is open that wants the mouse.
     void Tick(InputManager& input, Scene& scene, float deltaTime, bool uiWantsCursor, bool uiCapturingMouse);
-    bool AtHelm() const { return playing_ && atHelm_; }
+    // R13.5: the player controls something (a boat's helm): their body is out of the world meanwhile.
+    bool Controlling() const { return playing_ && controlled_ != nullptr; }
     // After a level load: the session goes on from the new level's start, or ends if it was the editor's (returns false, nothing restored: the camera is the new level's).
     bool OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course);
     // After a level load, the session ends where the new level put the camera (nothing put back: the old level's pose
@@ -70,12 +74,15 @@ public:
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);
-    // A boat (docs/play_mode_plan.md): E within reach of its hull takes the helm, E leaves it over the side.
-    void TakeHelm(Scene& scene, RenderableObject* vessel);
-    void LeaveHelm(Scene& scene, bool overTheSide);
+    // R13.5 (game/Control.h): what within reach the interact key hands the player to control -- a boat's helm today
+    // (docs/play_mode_plan.md: E within reach of its hull takes the helm, E leaves it over the side).
+    std::array<game::Interactable*, 1> Interactables() { return { &boatHelm_ }; }
+    void Take(Scene& scene, game::Controllable& controllable, RenderableObject* target);
+    // Let go of what the player controls; `overTheSide`: their body comes back where it says.
+    void LetGo(Scene& scene, bool overTheSide);
     // Its keys are taken (InputManager::TakeActionPress): the E that took the helm this frame is the on-foot listener's,
-    // and TickHelm right after TakeHelm does not see it again as leave (R12.2; until 2026-11-09 it left over the side).
-    void TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime);
+    // and the helm's Tick right after Take does not see it again as leave (R12.2; until 2026-11-09 it left over the side).
+    void TickControlled(InputManager& input, Scene& scene, bool controls, float deltaTime);
 
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;
@@ -93,6 +100,9 @@ private:
     bool mouseTaken_ = false;
     bool justSpawned_ = false; // the body comes in this frame's Tick: till then "no body" does not mean no world
     bool stopOnLevelChange_ = true;
-    bool atHelm_ = false;
-    bool vesselInReach_ = false; // for the HUD's line
+    // R13.5: a boat's helm (game::BoatHelm), what the player controls now (null: on foot or the camera free), and the
+    // prompt of what is within reach (for the HUD's line; null: nothing).
+    game::BoatHelm boatHelm_{ world_, [this](std::string status, double forSeconds) { SetStatus(std::move(status), forSeconds); } };
+    game::Controllable* controlled_ = nullptr;
+    const wchar_t* prompt_ = nullptr;
 };
