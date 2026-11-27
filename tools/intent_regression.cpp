@@ -3818,6 +3818,51 @@ void TestTheEditorAppliesFieldsOfAnotherType(Renderer& renderer, Scene& scene, L
     Check(thrown.empty(), "the editor applies and reads a field of another type without throwing -- " + thrown);
 }
 
+// Architecture plan R9.6d: the model's and MCP's parameters reach readers that take them with value(), and the command
+// bar runs actions, previews them and asks questions in the frame with no catch of its own (MCP has one). A parameter
+// of another type is an answer -- the action's status (RunEditorAction's catch), the preview's problem (the parameter
+// typing), the question's error (editorquery::Answer's catch) -- never a throw.
+void TestAParameterOfAnotherTypeIsAnAnswerNotACrash(const EditorActionContext& actionCtx)
+{
+    std::string what;
+    const auto noThrow = [&what](const auto& call) {
+        try { call(); return true; }
+        catch (const std::exception& e) { what = e.what(); return false; }
+    };
+    // An action: a light's lumens as a word (RunEditorAction is called without ValidateParams by the editor's own commands).
+    EditorCommandStack stack;
+    std::string status;
+    bool ran = true;
+    const Json lights = { { "items", Json::array({ Json{ { "position", Json::array({ 1, 2, 3 }) }, { "lumens", "bright" } } }) } };
+    const bool actionOk =
+        noThrow([&] { ran = RunEditorAction(actionCtx, stack, MakeActionIntent("addLights", lights), {}, status); }) &&
+        !ran && status.find("another type") != std::string::npos && stack.HistorySize() == 0;
+    const std::string actionSays = actionOk ? status : "threw or ran: " + what + " / " + status;
+    // A preview: the same light, as the command bar previews the model's answer -- the parameter typing (ValidateParams)
+    // refuses it before any reader (shown 2026-11-27: without the two catches below and above, it still answered).
+    EditorIntentPreview preview;
+    what.clear();
+    const bool previewOk =
+        noThrow([&] { preview = BuildIntentPreview(actionCtx, MakeActionIntent("addLights", lights)); }) &&
+        !preview.executable && !preview.problem.empty();
+    const std::string previewSays = previewOk ? preview.problem : "threw or passed: " + what + " / " + preview.problem;
+    // A question: a zone named by a number.
+    EditorIntent question;
+    question.kind = EditorIntentKind::Query;
+    EditorIntentQuery ask;
+    ask.query = "zoneInfo";
+    ask.params = Json{ { "zone", 7 } };
+    question.asks.push_back(ask);
+    std::string answer;
+    what.clear();
+    const bool questionOk = noThrow([&] { answer = editorquery::Answer(actionCtx, question); }) &&
+                            answer.find("another type") != std::string::npos;
+    const std::string questionSays = questionOk ? answer : "threw or answered: " + what + " / " + answer;
+    Check(actionOk && previewOk && questionOk,
+          "a parameter of another type is an answer, not a throw -- action: " + actionSays + "; preview: " + previewSays +
+              "; question: " + questionSays);
+}
+
 void TestJsonFieldsAreReadWithoutThrowing()
 {
     const Json h = Json::parse(R"({"build": 4, "zip": null, "version": 1.5, "published": 1, "levels": "a.json",
@@ -7042,6 +7087,7 @@ int main(int argc, char** argv)
         TestRefusalWritesANoteForTheImplementer();
         TestOnlyOrganisingActionsMayTakeTheWholeLevel();
         TestAnUnwantedArgumentIsRefusedNotDropped(actionCtx);
+        TestAParameterOfAnotherTypeIsAnAnswerNotACrash(actionCtx); // R9.6d
         TestAPartialReadSaysHowMuchIsLeft();
         TestAnUnrunLookupIsNeverShown();
         TestGrammarIsWellFormed(document, assets);

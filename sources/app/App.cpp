@@ -37,6 +37,7 @@
 #include <wrl/client.h>
 #include <dxgi1_4.h> // the auto-detect's GPU identity (EnumAdapterByLuid)
 #include "rendering/wind/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 
 std::atomic<bool> g_modelBusy{ false };
 std::atomic<bool> g_modelBusyBackground{ false };
@@ -335,13 +336,13 @@ namespace
             return;
         }
         std::uint32_t added = 0, skipped = 0;
-        const nlohmann::json objects = level.value("objects", nlohmann::json::array());
+        const nlohmann::json objects = jsonfield::Value(level, "objects", nlohmann::json::array());
         for (const nlohmann::json& o : objects)
         {
-            if (!o.is_object() || o.value("type", std::string{}) != "staticMesh" || !o.value("enabled", true)) { continue; }
+            if (!o.is_object() || jsonfield::Value(o, "type", std::string{}) != "staticMesh" || !jsonfield::Value(o, "enabled", true)) { continue; }
             const nlohmann::json* pos = o.contains("position") ? &o["position"] : nullptr;
             if (!pos || !pos->is_array() || pos->size() < 3) { ++skipped; continue; }
-            const std::string baseName = o.value("name", std::string("staticMesh"));
+            const std::string baseName = jsonfield::Value(o, "name", std::string("staticMesh"));
             // Centred on the original (K=4: offsets -1..2), so a camera standing in the level sees
             // copies in every direction instead of a one-sided quadrant at +X/+Z.
             const int lo = -static_cast<int>((k - 1u) / 2u);
@@ -353,8 +354,8 @@ namespace
                     nlohmann::json c = o;
                     c.erase("id"); // a runtime object has no editor identity (AddInitializedObject assigns none)
                     c["name"] = baseName + " rep(" + std::to_string(ix) + "," + std::to_string(iz) + ")";
-                    c["position"][0] = (*pos)[0].get<float>() + static_cast<float>(ix) * stepX;
-                    c["position"][2] = (*pos)[2].get<float>() + static_cast<float>(iz) * stepZ;
+                    c["position"][0] = jsonfield::As((*pos)[0], 0.0f) + static_cast<float>(ix) * stepX;
+                    c["position"][2] = jsonfield::As((*pos)[2], 0.0f) + static_cast<float>(iz) * stepZ;
                     std::unique_ptr<RenderableObjectBase> obj =
                         SceneObjectFactory::CreateStaticMeshFromJson(SceneObjectFactory::ResolveMeshAsset(c));
                     if (obj && scene.AddInitializedObject(renderer, uploads, std::move(obj))) { ++added; }

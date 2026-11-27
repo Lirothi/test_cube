@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/logging/Log.h"
+#include "core/JsonField.h" // R9.6d: Value for the document's fields
 #include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
@@ -350,7 +351,7 @@ namespace
             return object->enabled;
         }
         const EditorObject* environment = FindEnvironmentObject(document, id);
-        return environment ? environment->properties.value("enabled", true) : true;
+        return environment ? jsonfield::Value(environment->properties, "enabled", true) : true; // R9.6d: the document's
     }
 
     std::unique_ptr<EditorCommand> BuildSetEnabledOne(const EditorSceneDocument& document,
@@ -876,7 +877,7 @@ namespace
             if (scale)
             {
                 // A light written before P16.5 carries no flux yet: it starts from what the Inspector would show.
-                const float now = after.value("luminousFluxLm", light->type == "spotLight" ? 12000.0f : 3000.0f);
+                const float now = jsonfield::Value(after, "luminousFluxLm", light->type == "spotLight" ? 12000.0f : 3000.0f);
                 after["luminousFluxLm"] = now * scale->get<float>();
             }
             if (radius) { after[light->type == "spotLight" ? "range" : "radius"] = radius->get<float>(); }
@@ -890,13 +891,13 @@ namespace
             if (sourceRadius) { after["sourceRadius"] = sourceRadius->get<float>(); }
             if ((flicker || flickerHz) && light->type == "pointLight")
             {
-                nlohmann::json f = after.value("flicker", nlohmann::json::object());
+                nlohmann::json f = jsonfield::Value(after, "flicker", nlohmann::json::object());
                 if (!f.is_object()) { f = nlohmann::json::object(); }
                 if (flicker) { f["amplitude"] = flicker->get<float>(); }
                 if (flickerHz) { f["frequencyHz"] = flickerHz->get<float>(); }
                 // Each lamp its own phase: candles in step read as one machine. Kept once given.
                 if (!f.contains("seed")) { f["seed"] = static_cast<std::int64_t>((id.value * 2654435761ull) & 0x7FFFFFFFull) + 1; }
-                if (f.value("amplitude", 0.0f) > 0.0f && !f.contains("frequencyHz")) { f["frequencyHz"] = 3.0f; }
+                if (jsonfield::Value(f, "amplitude", 0.0f) > 0.0f && !f.contains("frequencyHz")) { f["frequencyHz"] = 3.0f; }
                 after["flicker"] = std::move(f);
             }
             // A light already at these values: EditEnvironmentCommand refuses an edit that changes nothing, and the
@@ -5070,7 +5071,32 @@ EditorIntent MakeActionIntent(std::string_view actionId, nlohmann::json params)
     return intent;
 }
 
+static bool RunEditorActionUnchecked(const EditorActionContext& actionCtx, EditorCommandStack& commandStack,
+    const EditorIntent& intent, const std::vector<EditorObjectId>& targets, std::string& outStatus);
+
+// Architecture plan R9.6d: an action's parameters come from the model (the command bar, in the frame), from MCP or from
+// the editor itself, and its readers take some with value(): a parameter of another type threw from deep inside one --
+// out of the frame that is std::terminate with the unsaved level. It is the caller's mistake and comes back as the
+// status, as MCP answered it already (EditorMcpServer's catch around RunDocumentTool).
 bool RunEditorAction(const EditorActionContext& actionCtx,
+    EditorCommandStack& commandStack,
+    const EditorIntent& intent,
+    const std::vector<EditorObjectId>& targets,
+    std::string& outStatus)
+{
+    try
+    {
+        return RunEditorActionUnchecked(actionCtx, commandStack, intent, targets, outStatus);
+    }
+    catch (const nlohmann::json::exception& e)
+    {
+        outStatus = "'" + intent.action + "' was not run: a parameter has a value of another type (" + e.what() + ")";
+        LOG_WARNING(logging::LogCategory::Editor, "action {} refused: {}", intent.action, e.what());
+        return false;
+    }
+}
+
+static bool RunEditorActionUnchecked(const EditorActionContext& actionCtx,
     EditorCommandStack& commandStack,
     const EditorIntent& intent,
     const std::vector<EditorObjectId>& targets,

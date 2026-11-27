@@ -829,7 +829,16 @@ namespace editorquery
             {
                 key = ask.query + "#" + std::to_string(repeat);
             }
-            out[key] = AnswerOne(actionCtx, ask);
+            // R9.6d: a parameter of another type (the model's, the command bar's in the frame) threw from a reader here;
+            // it is that question's answer instead, as "no such query" is.
+            try
+            {
+                out[key] = AnswerOne(actionCtx, ask);
+            }
+            catch (const nlohmann::json::exception& e)
+            {
+                out[key] = { { "error", std::string("a parameter has a value of another type (") + e.what() + ")" } };
+            }
         }
         return out.dump();
     }

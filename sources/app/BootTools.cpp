@@ -77,6 +77,7 @@
 #include <cwchar>
 #include <string>
 #include "app/BootTools.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 
 namespace boot
 {
@@ -608,7 +609,7 @@ int RunAssetTools(const char* lpCmdLine)
             std::ifstream manifest(arg.substr(0, bin) + ".mesh.json"); // vfs-ok: --water-mask-lid, a tool on the loose asset
             const nlohmann::json doc = nlohmann::json::parse(manifest, nullptr, false, true);
             if (!doc.is_discarded() && doc.contains("vessel") && doc["vessel"].is_object()) {
-                waterline = doc["vessel"].value("draft", 0.38f);
+                waterline = jsonfield::Value(doc["vessel"], "draft", 0.38f);
             }
         }
         const std::shared_ptr<const ocean::WaterMaskField> field = ocean::watermask::BuildField(arg, glass, waterline);
@@ -678,7 +679,7 @@ int RunAssetTools(const char* lpCmdLine)
             std::ifstream in(path); // vfs-ok: --lod-report, a tool on the loose assets
             const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false, true);
             if (doc.is_discarded() || !doc.is_object()) { continue; }
-            std::string geometry = doc.value("geometry", std::string());
+            std::string geometry = jsonfield::Value(doc, "geometry", std::string());
             if (const size_t hash = geometry.find('#'); hash != std::string::npos) { geometry.resize(hash); }
             if (geometry.empty()) { continue; }
             MeshManager::BinaryInfo info;
