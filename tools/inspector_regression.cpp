@@ -253,6 +253,60 @@ public:
     }
 };
 
+// Architecture plan R10.2 (owner's В10): a panel that throws -- after ImGui::Begin, after PushID -- is closed and the editor
+// goes on: the frame ends (ImGui::Render), the panel beside it is drawn, the NEXT frame is drawn, and ImGui's recovery
+// settings are as they were. In Debug this runs ImGui's recovery with its assert ON by default: a guard that forgot to
+// switch it off is an assert here (the control), not a pass.
+void TestAThrowingPanelIsClosed(EditorContext& ctx)
+{
+    bool openAfterBegin = true;
+    bool openAfterPushId = true;
+    bool openNeighbour = true;
+    int neighbourFrames = 0;
+    EditorLambdaPanel throwsAfterBegin("throwsAfterBegin", "Throws After Begin", &openAfterBegin, true, [](EditorContext&)
+    {
+        ImGui::Begin("Throws After Begin");
+        ImGui::TextUnformatted("about to throw");
+        throw std::runtime_error("after Begin");
+    }, 10);
+    EditorLambdaPanel throwsAfterPushId("throwsAfterPushId", "Throws After PushID", &openAfterPushId, true, [](EditorContext&)
+    {
+        ImGui::Begin("Throws After PushID");
+        ImGui::PushID("deep");
+        ImGui::PushID(7);
+        throw std::runtime_error("after PushID");
+    }, 20);
+    EditorLambdaPanel neighbour("neighbour", "Neighbour", &openNeighbour, true, [&neighbourFrames](EditorContext&)
+    {
+        ImGui::Begin("Neighbour");
+        ImGui::TextUnformatted("drawn");
+        ImGui::End();
+        ++neighbourFrames;
+    }, 30);
+    ImGuiIO& io = ImGui::GetIO();
+    const bool assertBefore = io.ConfigErrorRecoveryEnableAssert;
+    const bool tooltipBefore = io.ConfigErrorRecoveryEnableTooltip;
+    const bool logBefore = io.ConfigErrorRecoveryEnableDebugLog;
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        for (IEditorPanel* panel : { static_cast<IEditorPanel*>(&throwsAfterBegin), static_cast<IEditorPanel*>(&throwsAfterPushId),
+                                     static_cast<IEditorPanel*>(&neighbour) })
+        {
+            if (panel->IsVisible()) { DrawPanelGuarded(*panel, ctx); }
+        }
+        ImGui::Render();
+    };
+    frame();
+    Check(!openAfterBegin && !openAfterPushId, "a panel that threw (after Begin, after PushID) is closed");
+    Check(neighbourFrames == 1, "the panel beside it is drawn in the same frame");
+    frame();
+    Check(neighbourFrames == 2, "the next frame is drawn");
+    Check(io.ConfigErrorRecoveryEnableAssert == assertBefore && io.ConfigErrorRecoveryEnableTooltip == tooltipBefore &&
+          io.ConfigErrorRecoveryEnableDebugLog == logBefore, "ImGui's recovery settings are as they were");
+    std::puts("PASS: R10.2 a panel that throws (after Begin, after PushID) is closed, the frame and the next one drawn");
+}
+
 void TestMouseGesture(EditorContext& ctx)
 {
     ctx.selection.SetOrdered({ EditorObjectId{1}, EditorObjectId{2} }, {1});
@@ -698,6 +752,7 @@ int main()
         unsigned char* pixels;
         int width, height;
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        TestAThrowingPanelIsClosed(ctx); // R10.2
         TestMouseGesture(ctx);
         TestOutlinerGroupToggle(ctx);
         TestCollisionTab();

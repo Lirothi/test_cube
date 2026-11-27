@@ -93,6 +93,14 @@ private:
     EditorPanelSlot slot_ = EditorPanelSlot::Window;
 };
 
+// Architecture plan R10.2 (owner's В10): a panel's frame under a guard. An exception out of Draw is an Error naming the
+// panel; the ImGui stacks it left open (a Begin, a PushID ...) are unwound to where they stood before it
+// (ImGui::ErrorRecoveryTryToRecoverState) with the recovery's own assert off meanwhile -- ImGui's default asserts when it
+// recovers, and in Debug that is an assert window instead of an editor that lives -- and the settings back after; the
+// panel is closed (one that cannot be closed -- the viewport's gizmo -- says so once a message). The editor goes on with
+// its frame. False: it threw.
+bool DrawPanelGuarded(IEditorPanel& panel, EditorContext& ctx);
+
 class EditorExtensionRegistry
 {
 public:

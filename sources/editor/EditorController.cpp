@@ -4626,7 +4626,7 @@ void EditorController::Draw(
         {
             if (panel->Slot() == slot && panel->IsVisible())
             {
-                panel->Draw(ctx);
+                DrawPanelGuarded(*panel, ctx); // R10.2 (В10): one that throws is closed, the editor goes on
             }
         }
     };

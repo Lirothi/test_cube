@@ -36,6 +36,8 @@
 #include "editor/commands/SetParticlePresetCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "imgui.h"
+#include "imgui_internal.h" // R10.2: ImGuiErrorRecoveryState, ErrorRecoveryStoreState / TryToRecoverState
+#include "core/logging/Log.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/renderables/GBufferRenderable.h"
@@ -1506,6 +1508,62 @@ void EditorLambdaPanel::Draw(EditorContext& ctx)
     {
         draw_(ctx);
     }
+}
+
+namespace
+{
+// R10.2: the ImGui stacks back to `state`, with the recovery's assert and tooltip off meanwhile (its debug log stays: one
+// of the three must, ImGui asserts otherwise), then the settings as they were.
+void RecoverImGui(const ImGuiErrorRecoveryState& state)
+{
+    ImGuiIO& io = ImGui::GetIO();
+    const bool assertBefore = io.ConfigErrorRecoveryEnableAssert;
+    const bool tooltipBefore = io.ConfigErrorRecoveryEnableTooltip;
+    const bool logBefore = io.ConfigErrorRecoveryEnableDebugLog;
+    io.ConfigErrorRecoveryEnableAssert = false;
+    io.ConfigErrorRecoveryEnableTooltip = false;
+    io.ConfigErrorRecoveryEnableDebugLog = true;
+    ImGui::ErrorRecoveryTryToRecoverState(&state);
+    io.ConfigErrorRecoveryEnableAssert = assertBefore;
+    io.ConfigErrorRecoveryEnableTooltip = tooltipBefore;
+    io.ConfigErrorRecoveryEnableDebugLog = logBefore;
+}
+
+void CloseThrownPanel(IEditorPanel& panel, const std::string& what)
+{
+    panel.SetVisible(false);
+    if (!panel.IsVisible())
+    {
+        LOG_ERROR(logging::LogCategory::Editor, "editor: the panel '{}' threw ({}) -- closed; the editor goes on (Window menu opens it again)",
+                  panel.Label(), what);
+        return;
+    }
+    // One that cannot be closed (the viewport's gizmo: no visibility of its own) runs again next frame: once a message.
+    LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::Editor, "editor: the panel '{}' threw ({}) -- it cannot be closed; the editor goes on",
+                               panel.Label(), what);
+}
+} // namespace
+
+bool DrawPanelGuarded(IEditorPanel& panel, EditorContext& ctx)
+{
+    ImGuiErrorRecoveryState state;
+    ImGui::ErrorRecoveryStoreState(&state);
+    try
+    {
+        panel.Draw(ctx);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        RecoverImGui(state);
+        CloseThrownPanel(panel, e.what());
+    }
+    catch (...)
+    {
+        RecoverImGui(state);
+        CloseThrownPanel(panel, "an exception of no std type");
+    }
+    return false;
 }
 
 void EditorExtensionRegistry::RegisterPanel(std::unique_ptr<IEditorPanel> panel)

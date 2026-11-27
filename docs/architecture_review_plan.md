@@ -5527,7 +5527,21 @@ Debug, реестр настроек и таблица графики, вкла�
   эталон — Release_Editor на R7.3, по очереди A B A B): эталон-эталон 0.024 %, новый-новый 0.202 %, эталон-новый 0.173 /
   0.079 % — карта отличий только во вьюпорте (вода, листва), панели совпадают до пикселя; все шесть окон на месте.
   Контроль: реестр без порядка (как регистрировали) — `inspector_regression` FAIL «panels come back in their order»; файл
-  возвращён побайтно.
+  возвращён побайтно. Коммит `073a7a86`.
+
+  **Сделано R10.2 (2026-11-27, В10).** `DrawPanelGuarded(panel, ctx)` (`EditorExtensionRegistry`): глубина стеков ImGui
+  до панели (`ErrorRecoveryStoreState`); исключение из `Draw` (std и любое) — стеки назад (`ErrorRecoveryTryToRecoverState`)
+  с выключенными на это время assert и подсказкой восстановления (журнал восстановления остаётся — без него ImGui сам
+  assert'ит), настройки — как были; Error «the panel '<имя>' threw (<что>) -- closed; the editor goes on»; панель закрыта
+  (`SetVisible(false)`; та, что не закрывается, — гизмо вьюпорта — пишет ошибку раз на сообщение). Кадр редактора рисует
+  каждую панель через неё. Проверено: Debug, Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF; обе
+  регрессии PASS, новая — `inspector_regression` `TestAThrowingPanelIsClosed` (в Debug, где assert восстановления ImGui
+  включён по умолчанию): панели бросают после `Begin` и после `Begin` + двух `PushID` — обе закрыты, соседняя нарисована в
+  том же кадре, следующий кадр нарисован, настройки восстановления ImGui те же. Снимок редактора (как у R10.1, A B A B):
+  эталон-эталон 0.040 %, новый-новый 0.008 %, эталон-новый 0.040 / 0.009 %. Контроль: восстановление с assert как есть —
+  Debug `inspector_regression` падает «Assertion failed: (0) && "Missing End()"» (`imgui.cpp:11742`), код 3 (на своём
+  столе); файл возвращён побайтно. Не покрыто: бросок из настоящей панели редактора живьём (ни одна не бросает по
+  команде) — путь тот же, `DrawPanelGuarded`.
 - **R11. Сборка.** Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
   `TaskSystemEnki.cpp`, `TaskSystemTBB.cpp` (**В4**), папка `bckp/`; `Renderer::InitFence` — пустая обёртка
   «для совместимости» (`Renderer.h:291`, `Renderer.cpp:399`, `:402-405`). Одноимённый `FrameScheduler::InitFence`
