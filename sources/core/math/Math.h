@@ -370,6 +370,8 @@ namespace Math
     inline float  Dot(const float3& a, const float3& b) { return a.Dot(b); }
     inline float3 Cross(const float3& a, const float3& b) { return a.Cross(b); }
     inline float3 Normalize(const float3& v) { return v.Normalized(); }
+    // `v` turned by `q` (unit): q v q*.
+    inline float3 Rotate(const quat& q, const float3& v) { return float3::FromXM(XMVector3Rotate(v.xm(), q.xm())); }
     inline float2 Normalize(const float2& v) { return v.Normalized(); }
 
     inline float3 Lerp(const float3& a, const float3& b, float t) { return float3::Lerp(a, b, t); }

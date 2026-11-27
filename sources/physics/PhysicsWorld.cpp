@@ -31,6 +31,7 @@
 #include "core/threading/RenderThread.h"
 #include "core/threading/ThreadRole.h"
 #include "physics/WaterSurface.h" // R14.1: the water, not the ocean
+#include "physics/PhysicsBody.h"  // R14.2: the boat pushes a StepBody
 #include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
 #include "rendering/core/Renderer.h"
@@ -327,6 +328,9 @@ namespace physics
         std::vector<Entry*> floaters;
         std::vector<Entry*> vessels;
         Entry* helm = nullptr;
+        // R14.2: the game's FixedTicks, run before every step. Changed only on the game thread with no step in flight.
+        std::vector<std::pair<int, std::function<void(const FixedStep&)>>> fixedTicks;
+        int nextFixedTick = 1;
         VesselInput helmInput;      // the game's
         VesselInput stepHelmInput;  // taken for the steps where they start: the step's thread owns this
         float stepMooring = 0.0f;   // physics.mooring* as they stood where the step started
@@ -1143,7 +1147,8 @@ namespace physics
                 const float wakeShare = 1.0f - t * t * (3.0f - 2.0f * t);
                 const std::function<float(float, float)> height = [readFrom, waves, level, wakeShare](float x, float z)
                     { return waves ? readFrom->SampleHeight(x, z, wakeShare) : level; };
-                MeasureVesselWater(entry->water, height, bodies.GetPosition(entry->body), bodies.GetCenterOfMassPosition(entry->body), bodies.GetRotation(entry->body),
+                MeasureVesselWater(entry->water, height, FromJolt(JPH::Vec3(bodies.GetPosition(entry->body))), FromJolt(JPH::Vec3(bodies.GetCenterOfMassPosition(entry->body))),
+                    FromJolt(bodies.GetRotation(entry->body)),
                     *entry->vessel, entry->scale, entry->halfLength, entry->halfBeam, elapsed);
             }
         }
@@ -1163,19 +1168,27 @@ namespace physics
             stepMooringSettle = settings.mooringSettle;
         }
 
+        void RunFixedTicks(float step)
+        {
+            if (fixedTicks.empty()) { return; }
+            const FixedStep fixed(*system, step, FromJolt(system->GetGravity()));
+            for (const auto& tick : fixedTicks) { tick.second(fixed); }
+        }
+
         void PushVessels(float step)
         {
             if (vessels.empty()) { return; }
             const JPH::BodyLockInterface& locks = system->GetBodyLockInterface();
-            const JPH::Vec3 gravity = system->GetGravity();
+            const Math::float3 gravity = FromJolt(system->GetGravity());
             for (Entry* entry : vessels)
             {
                 if (!entry->water.valid) { continue; }
                 system->GetBodyInterface().ActivateBody(entry->body); // Body's own impulses wake nothing
                 JPH::BodyLockWrite lock(locks, entry->body);
                 if (!lock.Succeeded()) { continue; }
-                PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : entry->stepPilotInput, entry->water, entry->floatFactor, gravity, step);
-                if (entry->anchored) { PullAnchor(lock.GetBody(), *entry->vessel, entry->bowLocal, entry->anchorPoint, step); }
+                StepBody pushed(lock.GetBody());
+                PushVessel(pushed, *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : entry->stepPilotInput, entry->water, entry->floatFactor, gravity, step);
+                if (entry->anchored) { PullAnchor(pushed, *entry->vessel, FromJolt(entry->bowLocal), FromJolt(entry->anchorPoint), step); }
                 // Nobody steers it and its own anchor is up: the hard mooring, once it has slowed down, where it was then.
                 JPH::Body& body = lock.GetBody();
                 if (entry == helm || entry->stepPiloted || entry->anchored || (stepMooring <= 0.0f && stepMooringTurn <= 0.0f))
@@ -1193,7 +1206,7 @@ namespace physics
                     entry->mooredAt = JPH::Vec3(static_cast<float>(position.GetX()), 0.0f, static_cast<float>(position.GetZ()));
                     entry->mooredHeading = std::atan2(bow.GetX(), bow.GetZ());
                 }
-                HoldMooring(body, *entry->vessel, entry->mooredAt, entry->mooredHeading, stepMooring, stepMooringTurn, step);
+                HoldMooring(pushed, *entry->vessel, FromJolt(entry->mooredAt), entry->mooredHeading, stepMooring, stepMooringTurn, step);
             }
         }
 
@@ -1410,6 +1423,7 @@ namespace physics
                 if (i > 0)
                 {
                     PushWater(batch.step); // the first step's went in where the steps were started: it may wake a body
+                    RunFixedTicks(batch.step);
                     PushVessels(batch.step);
                     if (i == 1)
                     {
@@ -1490,8 +1504,9 @@ namespace physics
             const bool kinematicMoved = MoveKinematics(step);
             TakeHelmInputs();
             PushWater(step);
+            RunFixedTicks(step);
             PushVessels(step);
-            if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
+            if (!kinematicMoved && fixedTicks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
             PrepareBatch(steps, step);
             stepInFlight = true;
             stepThread.Kick([this]() { RunBatch(); });
@@ -1545,8 +1560,9 @@ namespace physics
                     SampleWater(step);
                     TakeHelmInputs();
                     PushWater(step);
+                    RunFixedTicks(step);
                     PushVessels(step);
-                    if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
+                    if (!kinematicMoved && fixedTicks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
                     PrepareBatch(1, step);
                     RunBatch();
                     MergeOutcome();
@@ -1660,6 +1676,42 @@ namespace physics
     }
 
     void World::SetWater(const WaterSurface* water) { impl_->surface = water; }
+
+    bool FixedStep::With(BodyKey key, const std::function<void(StepBody&)>& use) const
+    {
+        if (key == kNoBody) { return false; }
+        const JPH::BodyID id(key);
+        JPH::BodyInterface& bodies = system_->GetBodyInterface();
+        if (!bodies.IsAdded(id) || bodies.GetMotionType(id) == JPH::EMotionType::Static) { return false; }
+        bodies.ActivateBody(id); // Body's own impulses wake nothing
+        JPH::BodyLockWrite lock(system_->GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) { return false; }
+        StepBody body(lock.GetBody());
+        use(body);
+        return true;
+    }
+
+    int World::AddFixedTick(std::function<void(const FixedStep&)> tick)
+    {
+        impl_->Join();
+        const int id = impl_->nextFixedTick++;
+        impl_->fixedTicks.emplace_back(id, std::move(tick));
+        return id;
+    }
+
+    void World::RemoveFixedTick(int id)
+    {
+        impl_->Join();
+        auto& ticks = impl_->fixedTicks;
+        ticks.erase(std::remove_if(ticks.begin(), ticks.end(), [id](const auto& tick) { return tick.first == id; }), ticks.end());
+    }
+
+    BodyKey World::BodyOf(const RenderableObject* object) const
+    {
+        const auto it = impl_->entries.find(const_cast<RenderableObject*>(object));
+        if (it == impl_->entries.end() || it->second.body.IsInvalid()) { return kNoBody; }
+        return it->second.body.GetIndexAndSequenceNumber();
+    }
 
     void World::SpawnPlayer(const Math::float3& feet)
     {

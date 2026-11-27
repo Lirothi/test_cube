@@ -599,6 +599,7 @@
     <ClCompile Include="sources/physics/JoltRuntime.cpp" />
     <ClCompile Include="sources/physics/PhysicsCharacter.cpp" />
     <ClCompile Include="sources/physics/PhysicsVessel.cpp" />
+    <ClCompile Include="sources/physics/PhysicsBody.cpp" />
     <ClCompile Include="sources/app/game/VesselCamera.cpp" />
     <ClCompile Include="sources/physics/PhysicsShapes.cpp" />
     <ClCompile Include="sources/physics/PhysicsWorld.cpp" />
@@ -956,6 +957,7 @@
     <ClInclude Include="sources/physics/PhysicsTypes.h" />
     <ClInclude Include="sources/physics/PhysicsWorld.h" />
     <ClInclude Include="sources/physics/WaterSurface.h" />
+    <ClInclude Include="sources/physics/PhysicsBody.h" />
     <ClInclude Include="sources/physics/CollisionJson.h" />
     <ClInclude Include="sources/physics/PhysicsInternal.h" />
     <ClInclude Include="sources/ocean/OceanReadback.h" />

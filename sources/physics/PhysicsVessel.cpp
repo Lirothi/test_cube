@@ -1,6 +1,8 @@
 #include "physics/PhysicsInternal.h"
+#include "physics/PhysicsBody.h" // R14.2: the boat pushes a StepBody
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
@@ -37,6 +39,17 @@ namespace physics
             const float t = std::clamp((x - from) / (to - from), 0.0f, 1.0f);
             return t * t * (3.0f - 2.0f * t);
         }
+
+        // R14.2: the boat's step in the engine's types, Jolt's own meaning kept (Vec3::Normalized, NormalizedOr, DegreesToRadians).
+        Math::float3 AxisX() { return Math::float3(1.0f, 0.0f, 0.0f); }
+        Math::float3 AxisY() { return Math::float3(0.0f, 1.0f, 0.0f); }
+        Math::float3 UnitOf(const Math::float3& v) { return v / v.Length(); }
+        Math::float3 NormalizedOr(const Math::float3& v, const Math::float3& fallback)
+        {
+            const float lengthSq = v.Dot(v);
+            return lengthSq <= FLT_MIN ? fallback : v / std::sqrt(lengthSq);
+        }
+        float DegreesToRadians(float degrees) { return degrees * (3.14159265358979323846f / 180.0f); }
     }
 
     JPH::RefConst<JPH::Shape> MakeVesselShape(const JPH::Shape& hull, const VesselSettings& settings, const Math::float3& scale, float& floatFactor, std::string& error)
@@ -81,12 +94,12 @@ namespace physics
         creation.mAngularDamping = 0.05f;
     }
 
-    void MeasureVesselWater(VesselWater& water, const std::function<float(float, float)>& height, JPH::RVec3Arg origin, JPH::RVec3Arg centre, JPH::QuatArg rotation,
+    void MeasureVesselWater(VesselWater& water, const std::function<float(float, float)>& height, const Math::float3& origin, const Math::float3& centre, const Math::quat& rotation,
         const VesselSettings& settings, const Math::float3& scale, float halfLength, float halfBeam, float elapsed)
     {
-        const JPH::Vec3 heading = rotation * ToJolt(settings.forward);
-        const JPH::Vec3 forward = JPH::Vec3(heading.GetX(), 0.0f, heading.GetZ()).NormalizedOr(JPH::Vec3::sAxisX());
-        const JPH::Vec3 starboard = JPH::Vec3::sAxisY().Cross(forward);
+        const Math::float3 heading = Math::Rotate(rotation, settings.forward);
+        const Math::float3 forward = NormalizedOr(Math::float3(heading.x, 0.0f, heading.z), AxisX());
+        const Math::float3 starboard = AxisY().Cross(forward);
         const float along = std::max(kStationAlong * halfLength, 0.05f);
         const float across = std::max(kSampleAcross * halfBeam, 0.05f);
 
@@ -98,8 +111,8 @@ namespace physics
             mean[i] = 0.0f;
             for (int j = 0; j < 3; ++j)
             {
-                const JPH::Vec3 point = centre + forward * (along * static_cast<float>(i - 1)) + starboard * (across * static_cast<float>(j - 1));
-                grid[i][j] = height(point.GetX(), point.GetZ());
+                const Math::float3 point = centre + forward * (along * static_cast<float>(i - 1)) + starboard * (across * static_cast<float>(j - 1));
+                grid[i][j] = height(point.x, point.z);
                 mean[i] += grid[i][j] / 3.0f;
             }
         }
@@ -107,7 +120,7 @@ namespace physics
         const float planeHeight = (mean[0] + mean[1] + mean[2]) / 3.0f;
         const float slopeAlong = (mean[2] - mean[0]) / (2.0f * along);
         const float slopeAcross = ((grid[0][2] - grid[0][0]) + (grid[1][2] - grid[1][0]) + (grid[2][2] - grid[2][0])) / (3.0f * 2.0f * across);
-        const JPH::Vec3 normal = (JPH::Vec3::sAxisY() - forward * slopeAlong - starboard * slopeAcross).Normalized();
+        const Math::float3 normal = UnitOf(AxisY() - forward * slopeAlong - starboard * slopeAcross);
 
         const bool hasRates = water.valid && elapsed > 0.0f;
         const float follow = hasRates ? 1.0f - std::exp(-elapsed / kRateTau) : 0.0f;
@@ -129,10 +142,10 @@ namespace physics
             station.slopeAcross = (grid[i][2] - grid[i][0]) / (2.0f * across);
         }
         water.speed = followRate(planeHeight, water.height, water.speed);
-        JPH::Vec3 spin = JPH::Vec3::sZero();
+        Math::float3 spin(0.0f, 0.0f, 0.0f);
         if (hasRates)
         {
-            const JPH::Vec3 raw = water.normal.Cross(normal) / elapsed;
+            const Math::float3 raw = water.normal.Cross(normal) / elapsed;
             const float rate = raw.Length();
             spin = water.spin + ((rate > kMaxSurfaceSpin ? raw * (kMaxSurfaceSpin / rate) : raw) - water.spin) * follow;
         }
@@ -142,13 +155,13 @@ namespace physics
         water.normal = normal;
         water.forward = forward;
         water.starboard = starboard;
-        const JPH::Vec3 propellerLocal(settings.propeller.x * scale.x, settings.propeller.y * scale.y, settings.propeller.z * scale.z);
-        const JPH::RVec3 propeller = origin + rotation * propellerLocal;
-        water.propellerHeight = height(propeller.GetX(), propeller.GetZ());
+        const Math::float3 propellerLocal(settings.propeller.x * scale.x, settings.propeller.y * scale.y, settings.propeller.z * scale.z);
+        const Math::float3 propeller = origin + Math::Rotate(rotation, propellerLocal);
+        water.propellerHeight = height(propeller.x, propeller.z);
         water.valid = true;
     }
 
-    void PushVessel(JPH::Body& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, JPH::Vec3Arg gravity, float dt)
+    void PushVessel(StepBody& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, const Math::float3& gravity, float dt)
     {
         // The helm answers at its own pace: an engine spools, a rudder swings.
         state.throttle = MoveToward(state.throttle, std::clamp(input.throttle, -1.0f, 1.0f), settings.throttleRate * dt);
@@ -156,31 +169,30 @@ namespace physics
         float rudderAsked = input.rudder;
         if (input.steer) // an autopilot's law, this step (VesselInput::steer)
         {
-            const JPH::Vec3 nose = body.GetRotation() * ToJolt(settings.forward).Normalized();
-            const JPH::RVec3 at = body.GetPosition();
-            const float heading = std::atan2(nose.GetX(), nose.GetZ());
-            const float bearing = std::atan2(input.aimX - static_cast<float>(at.GetX()), input.aimZ - static_cast<float>(at.GetZ()));
+            const Math::float3 nose = body.Rotate(UnitOf(settings.forward));
+            const Math::float3 at = body.Position();
+            const float heading = std::atan2(nose.x, nose.z);
+            const float bearing = std::atan2(input.aimX - at.x, input.aimZ - at.z);
             float error = std::remainder(bearing + input.slip - heading, 6.2831853f);
             const float arc = 2.0f * (std::fabs(error) < 1.5707963f ? std::sin(error) : (error > 0.0f ? 1.0f : -1.0f)) / std::max(input.reach, 1.0f);
-            rudderAsked = input.gain * arc + input.rudderOffset - input.yawDamping * body.GetAngularVelocity().GetY();
+            rudderAsked = input.gain * arc + input.rudderOffset - input.yawDamping * body.AngularVelocity().y;
         }
         state.rudder = MoveToward(state.rudder, std::clamp(rudderAsked, -1.0f, 1.0f), rudderStep);
 
-        const JPH::RVec3 centre = body.GetCenterOfMassPosition();
-        const float weight = settings.mass * -gravity.GetY();
+        const Math::float3 centre = body.CenterOfMass();
+        const float weight = settings.mass * -gravity.y;
         float totalVolume = 0.0f;
         float submergedVolume = 0.0f;
-        JPH::Vec3 centerOfBuoyancy = JPH::Vec3::sZero();
-        body.GetSubmergedVolume(JPH::RVec3(centre.GetX(), water.height, centre.GetZ()), water.normal, totalVolume, submergedVolume, centerOfBuoyancy);
+        Math::float3 centerOfBuoyancy(0.0f, 0.0f, 0.0f);
+        body.SubmergedVolume(Math::float3(centre.x, water.height, centre.z), water.normal, totalVolume, submergedVolume, centerOfBuoyancy);
         // 1 = as much of it under as it floats at at rest. Out of the water nothing below has anything to push against.
         state.immersion = totalVolume > 0.0f ? submergedVolume * buoyancy / totalVolume : 0.0f;
         const float wet = std::clamp(state.immersion, 0.0f, 1.0f);
 
-        const JPH::Quat rotation = body.GetRotation();
-        const JPH::Vec3 up = rotation * JPH::Vec3::sAxisY();
-        const JPH::Vec3 hullAxis = ToJolt(settings.forward).Normalized();
-        const JPH::Vec3 forward = rotation * hullAxis;
-        const JPH::Vec3 starboard = up.Cross(forward);
+        const Math::float3 up = body.Rotate(AxisY());
+        const Math::float3 hullAxis = UnitOf(settings.forward);
+        const Math::float3 forward = body.Rotate(hullAxis);
+        const Math::float3 starboard = up.Cross(forward);
         state.buoyancyLead = submergedVolume > 0.0f ? centerOfBuoyancy.Dot(forward) : 0.0f;
 
         // What holds the heave, the pitch and the roll down: the water's mass going with the hull, far more than the air's. Against the water's own rise and tilting, or a boat lags behind every swell
@@ -191,10 +203,10 @@ namespace physics
             const float keepHeave = std::exp(-settings.heaveDamping * wet * dt);
             const float keepPitch = std::exp(-settings.pitchDamping * wet * dt);
             const float keepRoll = std::exp(-settings.rollDamping * wet * dt);
-            const JPH::Vec3 linear = body.GetLinearVelocity();
-            const float rise = linear.GetY() - water.speed;
-            body.SetLinearVelocityClamped(linear - JPH::Vec3::sAxisY() * (rise * (1.0f - keepHeave)));
-            const JPH::Vec3 angular = body.GetAngularVelocity();
+            const Math::float3 linear = body.LinearVelocity();
+            const float rise = linear.y - water.speed;
+            body.SetLinearVelocityClamped(linear - AxisY() * (rise * (1.0f - keepHeave)));
+            const Math::float3 angular = body.AngularVelocity();
             const float pitching = (angular - water.spin).Dot(starboard);
             const float rolling = (angular - water.spin).Dot(forward);
             body.SetAngularVelocityClamped(angular - starboard * (pitching * (1.0f - keepPitch)) - forward * (rolling * (1.0f - keepRoll)));
@@ -202,21 +214,21 @@ namespace physics
         if (submergedVolume > 0.0f)
         {
             const float lifting = std::min(submergedVolume, settings.reserveLift * totalVolume / buoyancy);
-            body.ApplyBuoyancyImpulse(totalVolume, lifting, centerOfBuoyancy, buoyancy, 0.0f, 0.0f, JPH::Vec3::sZero(), gravity, dt);
+            body.ApplyBuoyancyImpulse(totalVolume, lifting, centerOfBuoyancy, buoyancy, 0.0f, 0.0f, Math::float3(0.0f, 0.0f, 0.0f), gravity, dt);
         }
 
-        const JPH::Vec3 velocity = body.GetLinearVelocity();
+        const Math::float3 velocity = body.LinearVelocity();
         const float u = velocity.Dot(forward);
         const float sway = velocity.Dot(starboard);
-        const float yawRate = body.GetAngularVelocity().Dot(up);
+        const float yawRate = body.AngularVelocity().Dot(up);
         state.speed = u;
         state.waterHeight = water.height;
 
         // The propeller: at the stern, under the centre of mass, so full throttle lifts the bow by itself. Out of the water it spins free -- on the water that stands over it, not on the plane: a
         // long sea lifts the stern clear, and the boat loses its push and its rudder together.
-        const JPH::Vec3 propellerLocal(settings.propeller.x * scale.x, settings.propeller.y * scale.y, settings.propeller.z * scale.z);
-        const JPH::RVec3 propeller = body.GetPosition() + rotation * propellerLocal;
-        const float bite = std::clamp((water.propellerHeight - static_cast<float>(propeller.GetY())) / kPropellerBite, 0.0f, 1.0f);
+        const Math::float3 propellerLocal(settings.propeller.x * scale.x, settings.propeller.y * scale.y, settings.propeller.z * scale.z);
+        const Math::float3 propeller = body.Position() + body.Rotate(propellerLocal);
+        const float bite = std::clamp((water.propellerHeight - propeller.y) / kPropellerBite, 0.0f, 1.0f);
         state.bite = bite;
         const float thrust = (state.throttle >= 0.0f ? settings.thrust : settings.thrust * settings.reverseShare) * state.throttle * bite;
         if (thrust != 0.0f) { body.AddImpulse(forward * (thrust * dt), propeller); }
@@ -225,10 +237,10 @@ namespace physics
         // it turns the other way round.
         const float wash = settings.wash * std::sqrt(std::fabs(state.throttle)) * (state.throttle >= 0.0f ? 1.0f : -1.0f);
         const float flow = u + wash;
-        const float rudderSine = std::sin(state.rudder * JPH::DegreesToRadians(settings.rudderDeg));
+        const float rudderSine = std::sin(state.rudder * DegreesToRadians(settings.rudderDeg));
         // At the centre of mass's height: it turns the boat, and the lean into a turn is the form stability's below.
         const float across = -settings.rudderForce * flow * std::fabs(flow) * rudderSine * bite; // the stern to port turns the bow to starboard
-        if (across != 0.0f) { body.AddImpulse(starboard * (across * dt), centre + forward * JPH::Vec3(propeller - centre).Dot(forward)); }
+        if (across != 0.0f) { body.AddImpulse(starboard * (across * dt), centre + forward * (propeller - centre).Dot(forward)); }
 
         state.impact *= std::exp(-dt / kImpactFade);
         if (wet <= 0.0f) { return; }
@@ -258,19 +270,19 @@ namespace physics
             const float net = side + across;
             if (std::fabs(net) > most) { body.AddImpulse(starboard * ((std::copysign(most, net) - net) * dt), centre); }
         }
-        body.AddImpulse(JPH::Vec3::sAxisY() * (settings.planingLift * planing * weight * wet * dt));
+        body.AddImpulse(AxisY() * (settings.planingLift * planing * weight * wet * dt));
         const float yawTorque = -(settings.yawDrag * std::fabs(yawRate) + settings.yawLinear) * yawRate;
         // The trim is the water's push on the fore part of the bottom -- a planing hull's pressure lies under it -- so it takes the bow's own immersion: a bow lifted out of the water has nothing
         // under it to push. As a torque on a hull wet anywhere it lifted the bow on and on: under the hump at part throttle the small_yacht stood on its stern (2026-11-07, +3 degrees a second
         // to 75: once the bow is out, the water's righting moment is no more than the hump's 100 kN m). Now the bow rises until it leaves the water, ~6 degrees on the small_yacht.
         const VesselStation& bowStation = water.stations[2];
-        const JPH::RVec3 bowKeel = body.GetPosition() + rotation * (hullAxis * bowStation.offset);
-        const float bowWet = std::clamp((bowStation.height - static_cast<float>(bowKeel.GetY())) / std::max(settings.draft * scale.y, 0.01f), 0.0f, 1.0f);
+        const Math::float3 bowKeel = body.Position() + body.Rotate(hullAxis * bowStation.offset);
+        const float bowWet = std::clamp((bowStation.height - bowKeel.y) / std::max(settings.draft * scale.y, 0.01f), 0.0f, 1.0f);
         const float trimTorque = (settings.humpTrim * rising * (1.0f - planing) + settings.planeTrim * planing) * bowWet;
         state.trimTorque = trimTorque;
         // The hull lies along the surface, and leans into a turn by what the turn asks. A roll is its starboard side rising.
-        const float roll = std::asin(std::clamp(starboard.GetY(), -1.0f, 1.0f));
-        const float lean = JPH::DegreesToRadians(std::clamp(settings.bank * u * yawRate, -settings.maxBank, settings.maxBank));
+        const float roll = std::asin(std::clamp(starboard.y, -1.0f, 1.0f));
+        const float lean = DegreesToRadians(std::clamp(settings.bank * u * yawRate, -settings.maxBank, settings.maxBank));
         const float rollTorque = settings.rollStiffness * (std::atan(water.calmAcross) - lean - roll);
         body.AddAngularImpulse((up * yawTorque + forward * rollTorque - starboard * trimTorque) * (wet * dt));
 
@@ -280,16 +292,16 @@ namespace physics
         float worstSlam = 0.0f;
         for (const VesselStation& station : water.stations)
         {
-            const JPH::RVec3 atCentre = centre + water.forward * station.offset;
+            const Math::float3 atCentre = centre + water.forward * station.offset;
             if (settings.waveForce > 0.0f)
             {
                 const float share = settings.waveForce * weight * wet / 3.0f;
-                const JPH::Vec3 push = -(water.forward * station.slopeAlong + water.starboard * station.slopeAcross) * share;
+                const Math::float3 push = -(water.forward * station.slopeAlong + water.starboard * station.slopeAcross) * share;
                 body.AddImpulse(push * dt, atCentre);
             }
-            const JPH::RVec3 keel = body.GetPosition() + rotation * (hullAxis * station.offset);
-            const float depth = station.height - static_cast<float>(keel.GetY());
-            const float fall = station.speed - body.GetPointVelocity(keel).GetY();
+            const Math::float3 keel = body.Position() + body.Rotate(hullAxis * station.offset);
+            const float depth = station.height - keel.y;
+            const float fall = station.speed - body.PointVelocity(keel).y;
             if (settings.slam > 0.0f && depth > 0.0f && fall > kSlamFrom)
             {
                 const float reach = std::clamp(1.0f - depth / std::max(2.0f * settings.draft * scale.y, 0.01f), 0.0f, 1.0f); // the first of the water: past that the volume has it
@@ -297,7 +309,7 @@ namespace physics
                 const float force = std::min(settings.slam * over * over * reach, settings.slamMax * weight);
                 if (force > 0.0f)
                 {
-                    body.AddImpulse(JPH::Vec3::sAxisY() * (force * dt), keel);
+                    body.AddImpulse(AxisY() * (force * dt), keel);
                     worstSlam = std::max(worstSlam, force);
                 }
             }
@@ -305,47 +317,47 @@ namespace physics
         if (weight > 0.0f) { state.impact = std::max(state.impact, worstSlam / weight); }
     }
 
-    void PullAnchor(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg bowLocal, JPH::Vec3Arg anchor, float dt)
+    void PullAnchor(StepBody& body, const VesselSettings& settings, const Math::float3& bowLocal, const Math::float3& anchor, float dt)
     {
         // Along the water: the rode's lift on the bow is the catenary's business, and a spring that also pulled down would
         // drag the bow under in a sea.
-        const JPH::RVec3 bow = body.GetPosition() + body.GetRotation() * bowLocal;
-        JPH::Vec3 out(static_cast<float>(bow.GetX()) - anchor.GetX(), 0.0f, static_cast<float>(bow.GetZ()) - anchor.GetZ());
+        const Math::float3 bow = body.Position() + body.Rotate(bowLocal);
+        Math::float3 out(bow.x - anchor.x, 0.0f, bow.z - anchor.z);
         const float reach = out.Length();
         const float stretch = reach - settings.anchorScope;
         if (stretch <= 0.0f || reach < 1e-4f) { return; }
-        out /= reach;
-        const float running = body.GetPointVelocity(bow).Dot(out); // > 0: the bow runs out along the rode
+        out = out / reach;
+        const float running = body.PointVelocity(bow).Dot(out); // > 0: the bow runs out along the rode
         const float tension = std::max(settings.anchorStiffness * stretch + settings.anchorDamping * running, 0.0f); // a rode only pulls
         if (tension > 0.0f) { body.AddImpulse(out * (-tension * dt), bow); }
     }
 
-    void HoldMooring(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg at, float heading, float stiffness, float turn, float dt)
+    void HoldMooring(StepBody& body, const VesselSettings& settings, const Math::float3& at, float heading, float stiffness, float turn, float dt)
     {
         // Along the water: a critically damped spring on the origin's place, as a change of velocity (stable while omega dt
         // stays small: 2.5 rad/s at 60 Hz is 0.04).
         const float w = std::max(stiffness, 0.0f);
         if (w > 0.0f)
         {
-            const JPH::RVec3 position = body.GetPosition();
-            const JPH::Vec3 linear = body.GetLinearVelocity();
-            const float dx = static_cast<float>(position.GetX()) - at.GetX();
-            const float dz = static_cast<float>(position.GetZ()) - at.GetZ();
-            const float ax = -w * w * dx - 2.0f * w * linear.GetX();
-            const float az = -w * w * dz - 2.0f * w * linear.GetZ();
-            body.SetLinearVelocityClamped(linear + JPH::Vec3(ax * dt, 0.0f, az * dt));
+            const Math::float3 position = body.Position();
+            const Math::float3 linear = body.LinearVelocity();
+            const float dx = position.x - at.x;
+            const float dz = position.z - at.z;
+            const float ax = -w * w * dx - 2.0f * w * linear.x;
+            const float az = -w * w * dz - 2.0f * w * linear.z;
+            body.SetLinearVelocityClamped(linear + Math::float3(ax * dt, 0.0f, az * dt));
         }
         // About the vertical: the bow's heading.
         const float t = std::max(turn, 0.0f);
         if (t > 0.0f)
         {
-            const JPH::Vec3 bow = body.GetRotation() * ToJolt(settings.forward).Normalized();
-            float error = heading - std::atan2(bow.GetX(), bow.GetZ());
+            const Math::float3 bow = body.Rotate(UnitOf(settings.forward));
+            float error = heading - std::atan2(bow.x, bow.z);
             while (error > 3.14159265f) { error -= 6.2831853f; }
             while (error < -3.14159265f) { error += 6.2831853f; }
-            const JPH::Vec3 angular = body.GetAngularVelocity();
-            const float alpha = t * t * error - 2.0f * t * angular.GetY();
-            body.SetAngularVelocityClamped(angular + JPH::Vec3(0.0f, alpha * dt, 0.0f));
+            const Math::float3 angular = body.AngularVelocity();
+            const float alpha = t * t * error - 2.0f * t * angular.y;
+            body.SetAngularVelocityClamped(angular + Math::float3(0.0f, alpha * dt, 0.0f));
         }
     }
 } // namespace physics

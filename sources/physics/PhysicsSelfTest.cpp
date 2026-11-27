@@ -18,6 +18,7 @@
 #include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
 #include "physics/WaterSurface.h" // R14.1: the world's water, a gate's own
+#include "physics/PhysicsBody.h"  // R14.2: the boat pushes a StepBody
 #include "rendering/renderables/RenderableObject.h"
 #include "third_party/json/json.hpp"
 
@@ -945,11 +946,13 @@ namespace physics
                 for (int i = 0; i < steps; ++i)
                 {
                     const std::function<float(float, float)> height = [this](float x, float z) { return sea(x, z, time); };
-                    MeasureVesselWater(water, height, bodies.GetPosition(body), bodies.GetCenterOfMassPosition(body), bodies.GetRotation(body), settings, one, 5.0f, 1.17f, water.valid ? kStep : 0.0f);
+                    MeasureVesselWater(water, height, FromJolt(JPH::Vec3(bodies.GetPosition(body))), FromJolt(JPH::Vec3(bodies.GetCenterOfMassPosition(body))),
+                        FromJolt(bodies.GetRotation(body)), settings, one, 5.0f, 1.17f, water.valid ? kStep : 0.0f);
                     {
                         JPH::BodyLockWrite lock(world.system.GetBodyLockInterface(), body);
-                        PushVessel(lock.GetBody(), settings, one, state, VesselInput{ throttle, rudder }, water, factor, world.system.GetGravity(), kStep);
-                        if (anchored) { PullAnchor(lock.GetBody(), settings, bowLocal, anchorPoint, kStep); }
+                        StepBody pushed(lock.GetBody());
+                        PushVessel(pushed, settings, one, state, VesselInput{ throttle, rudder }, water, factor, FromJolt(world.system.GetGravity()), kStep);
+                        if (anchored) { PullAnchor(pushed, settings, FromJolt(bowLocal), FromJolt(anchorPoint), kStep); }
                     }
                     world.Step(1);
                     time += kStep;
@@ -2247,6 +2250,44 @@ namespace physics
                 if (dryOut != 1)
                 {
                     detail = report + "the arm: with no water the ball should fall out of the world";
+                    return finish(Verdict::Fail);
+                }
+            }
+            // R14.2: a game system between the steps. A FixedTick that gives a Dynamic ball back, every step, the impulse
+            // gravity takes from it holds the ball where it was put; removed, the ball falls.
+            {
+                GateBody ball;
+                ball.SetCollisionSettings(customBall(0.25f));
+                ball.SetPosition(Math::float3(0.0f, 2.0f, 0.0f));
+                ball.SetPhysicsMotion(Motion::Dynamic);
+                World world;
+                frame(world, 1.0f / 60.0f); // builds the body
+                const BodyKey key = world.BodyOf(&ball);
+                int pushes = 0;
+                const int tick = world.AddFixedTick([&pushes, key](const FixedStep& step)
+                {
+                    step.With(key, [&](StepBody& body)
+                    {
+                        body.AddImpulse(step.Gravity() * (-body.Mass() * step.Dt()));
+                        ++pushes;
+                    });
+                });
+                const float start = (ball.GetAuthoredModelMatrix() * ball.GetRenderOffset()).m._42;
+                for (int i = 0; i < 120; ++i) { frame(world, 1.0f / 60.0f); }
+                const float held = (ball.GetAuthoredModelMatrix() * ball.GetRenderOffset()).m._42;
+                world.RemoveFixedTick(tick);
+                for (int i = 0; i < 60; ++i) { frame(world, 1.0f / 60.0f); }
+                const float fell = (ball.GetAuthoredModelMatrix() * ball.GetRenderOffset()).m._42;
+                report += "a FixedTick held a ball at " + std::to_string(held) + " m from " + std::to_string(start) + " (" + std::to_string(pushes) +
+                    " pushes), removed it fell to " + std::to_string(fell) + " m; ";
+                if (key == kNoBody || pushes < 100 || std::fabs(held - start) > 0.05f) // the frame before the tick left it a fall's first step of speed
+                {
+                    detail = report + "a FixedTick giving back gravity's impulse should hold the ball, every step";
+                    return finish(Verdict::Fail);
+                }
+                if (fell > held - 1.0f)
+                {
+                    detail = report + "the arm: with the tick removed the ball should fall";
                     return finish(Verdict::Fail);
                 }
             }

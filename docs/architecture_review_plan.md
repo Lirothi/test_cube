@@ -5529,7 +5529,25 @@ Debug, реестр настроек и таблица графики, вкла�
   Живьём (свой редактор на своём столе, MCP 8176, `live_float.py`: wind_test, `play`, 8 с, `get_readouts` `vessels`):
   police_boat y −0.695, fast_boat_13 −0.411, small_yacht −0.323, наклоны и скорости — те же до третьего знака, что у
   эталона (Release_Editor на R10.4); файл уровня не тронут. Контроль (`ctl141.py`: `SetWater` ничего не хранит) —
-  `--physics-gate=world` FAIL «a ball on the world's water at −20.221310 m»; файл возвращён побайтно.
+  `--physics-gate=world` FAIL «a ball on the world's water at −20.221310 m»; файл возвращён побайтно. Коммит `b8770a03`.
+
+  **Сделано R14.2 (2026-11-27).** `physics/PhysicsBody.h/.cpp`: `StepBody` — тело, каким его видит фиксированный шаг, в
+  типах движка (поза, `Rotate` поворотом Jolt, центр масс, масса, скорости, скорость точки, импульсы, погружённый объём и
+  импульс плавучести Jolt); выдаётся на время вызова под замком тела. `Math::Rotate(quat, float3)`. Хук шага:
+  `World::AddFixedTick` / `RemoveFixedTick` (ждут шага в полёте), `World::BodyOf` (`BodyKey`), `FixedStep::With` (тело
+  будит и блокирует; статичное и ушедшее — `false`); тики идут перед каждым шагом там же, где `PushVessels`: первый шаг
+  пачки — в `KickOwed`, остальные — в `RunBatch`, без своего потока — в `Simulate`. `MeasureVesselWater`, `PushVessel`,
+  `PullAnchor`, `HoldMooring` переписаны на `StepBody` и `Math::float3` (комментарии дословно; смысл `Normalized`,
+  `NormalizedOr`, `DegreesToRadians` Jolt сохранён), `VesselWater` — в типах движка; лодка ещё в `physics/`, переезд —
+  R14.3–R14.5. Числа гейтов: `water`, `world` — байт в байт; `vessel` — округление float в 6–7-м знаке (крутой поворот
+  57.045246 → 57.045258°, крен −3.035250 → −3.035256°, «flat out» 72.288940 → 72.288879 м), во встречном волнении со
+  шлепками скорость 9.977859 → 9.977785 м/с и пробег 409 → 404 м (там малое расходится — шлепки); всё в допусках, PASS.
+  Новый проход `GateWorld`: тик, возвращающий Dynamic-шару каждый шаг импульс тяжести, держит его (1.991 м от 2.000,
+  120 толчков); снятый — шар падает (−2.75 м). Проверено: Debug, Release_Editor, Release; `check_*.py` и
+  `settings_names.py` 0; CRLF; обе регрессии PASS (в Debug — и физические гейты через `intent_regression`, с ассертами
+  Jolt); `--physics-gate` все PASS (Release). Живьём (`live_float.py`, как у R14.1): police_boat −0.695, fast_boat_13
+  −0.411, small_yacht −0.323, наклоны и скорости до третьего знака те же. Контроль (`ctl142.py`: тики не зовутся) —
+  `--physics-gate=world` FAIL «0 pushes», шар −17.1 м; файл возвращён побайтно. Не покрыто: Debug Play с лодкой живьём.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →
   реестр панелей с `Draw`. **R10.2** (**В10**): отрисовка панели под `try` с восстановлением стека ImGui
   (`ImGui::ErrorRecoveryStoreState` / `TryToRecoverState`, ImGui 1.92): исключение — Error, панель закрыта,

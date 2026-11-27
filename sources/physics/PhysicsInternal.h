@@ -133,6 +133,8 @@ namespace physics
         creation.mMassPropertiesOverride.mInertia = JPH::Mat44::sIdentity();
     }
 
+    class StepBody; // physics/PhysicsBody.h (R14.2)
+
     // PhysicsCharacter.cpp: a capsule on the ground, UE's walking mode. Not a body: collision queries only, pushing bodies by
     // impulses as it goes (Jolt's CharacterVirtual). `Feet` is its origin.
     // What the sea is doing under a boat, measured on the game's side, where the water can be read (MeasureVesselWater): the plane that fits the surface over the hull, which Jolt's buoyancy cuts the
@@ -151,10 +153,10 @@ namespace physics
         bool valid = false;
         float height = 0.0f;      // of the plane, at the centre of mass
         float speed = 0.0f;       // m/s, as a station's
-        JPH::Vec3 normal = JPH::Vec3::sAxisY();
-        JPH::Vec3 spin = JPH::Vec3::sZero();     // how fast the plane turns, rad/s
-        JPH::Vec3 forward = JPH::Vec3::sAxisX(); // the hull's, level
-        JPH::Vec3 starboard = -JPH::Vec3::sAxisZ();
+        Math::float3 normal = Math::float3(0.0f, 1.0f, 0.0f);
+        Math::float3 spin = Math::float3(0.0f, 0.0f, 0.0f);     // how fast the plane turns, rad/s
+        Math::float3 forward = Math::float3(1.0f, 0.0f, 0.0f);  // the hull's, level
+        Math::float3 starboard = Math::float3(0.0f, 0.0f, -1.0f);
         float propellerHeight = 0.0f; // the water's, over the propeller: on a crest's back it comes out
         float calmAcross = 0.0f;  // the surface's rise toward starboard, slowly: what the form stability lies along. The chop passes under a hull faster than it can roll
         VesselStation stations[3];
@@ -165,18 +167,18 @@ namespace physics
     // What its body is made with, past the shape.
     void SetVesselBody(JPH::BodyCreationSettings& creation, const VesselSettings& settings);
     // `height` answers the water's height at (x, z); `elapsed` is the time since the last measure, 0 = a first look, no rates yet. `origin` is the mesh's, `centre` the centre of mass.
-    void MeasureVesselWater(VesselWater& water, const std::function<float(float, float)>& height, JPH::RVec3Arg origin, JPH::RVec3Arg centre, JPH::QuatArg rotation,
+    void MeasureVesselWater(VesselWater& water, const std::function<float(float, float)>& height, const Math::float3& origin, const Math::float3& centre, const Math::quat& rotation,
         const VesselSettings& settings, const Math::float3& scale, float halfLength, float halfBeam, float elapsed);
-    // One step on the water: its buoyancy, the helm, the hull and the waves.
-    void PushVessel(JPH::Body& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, JPH::Vec3Arg gravity, float dt);
+    // One step on the water: its buoyancy, the helm, the hull and the waves. R14.2: on a StepBody, in the engine's types.
+    void PushVessel(StepBody& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, const Math::float3& gravity, float dt);
     // The anchor's rode on the bow (`bowLocal`, the body's space), from `anchor` (world; its height not read): nothing within
     // anchorScope, past it the stretch's spring and the bow's run along it, never a push. One step's impulse.
-    void PullAnchor(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg bowLocal, JPH::Vec3Arg anchor, float dt);
+    void PullAnchor(StepBody& body, const VesselSettings& settings, const Math::float3& bowLocal, const Math::float3& anchor, float dt);
     // A boat nobody steers (owner, 2026-11-13: "when we board one, the others must stand on a hard anchor"): its place along
     // the water (`at`, its origin's x and z) and its heading (`heading`, of its bow -- the settings' forward -- about the
     // vertical) held by critically damped springs on the velocities, `stiffness` and `turn` rad/s their own frequencies
     // (physics.mooring*): it heaves, pitches and rolls on the waves and stays put.
-    void HoldMooring(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg at, float heading, float stiffness, float turn, float dt);
+    void HoldMooring(StepBody& body, const VesselSettings& settings, const Math::float3& at, float heading, float stiffness, float turn, float dt);
 
     // A height no water reaches: no water here.
     inline constexpr float kNoWater = -1.0e30f;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -23,9 +24,33 @@ class RenderableObjectBase;
 //
 // What does not move does not pay: a body is created once, and without an active body or a moving boat PhysicsSystem::Update
 // is not called at all. Objects arrive through the REGISTRY below, never a walk of the scene.
+namespace JPH { class PhysicsSystem; }
+
 namespace physics
 {
     class WaterSurface; // physics/WaterSurface.h
+    class StepBody;     // physics/PhysicsBody.h
+
+    // A body as game code names it to the fixed step (R14.2): its id, taken on the game thread (World::BodyOf). kNoBody = none.
+    using BodyKey = std::uint32_t;
+    inline constexpr BodyKey kNoBody = 0xFFFFFFFFu;
+
+    // One fixed step as a game system's FixedTick sees it (World::AddFixedTick): its length, gravity, and the bodies one at a time.
+    class FixedStep
+    {
+    public:
+        FixedStep(JPH::PhysicsSystem& system, float dt, const Math::float3& gravity) : system_(&system), dt_(dt), gravity_(gravity) {}
+        float Dt() const { return dt_; }
+        const Math::float3& Gravity() const { return gravity_; }
+        // `use` with the body, woken and under its lock. False = no such body any more (its object gone), or one that cannot
+        // move (static): `use` is not called.
+        bool With(BodyKey key, const std::function<void(StepBody&)>& use) const;
+
+    private:
+        JPH::PhysicsSystem* system_;
+        float dt_;
+        Math::float3 gravity_;
+    };
 
     // The objects: RenderableObject::SetPhysicsMotion registers, its destructor unregisters, its setters notify. Thread-safe
     // (a level load may build objects on workers): they only queue, and the world reads the object at its next Tick.
@@ -258,6 +283,15 @@ namespace physics
         bool TuneVessels(const std::string& key, float value);
 
         bool RayCast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out) const;
+
+        // R14.2: game code between the steps (a boat's engine, its anchor): `tick` runs before every step, on the step's thread
+        // (the game's when the world steps in line), with that step. It reaches bodies only through the FixedStep, and never an
+        // object (one may be gone by then), nor anything the game thread writes meanwhile. Waits for a step in flight. The id
+        // is RemoveFixedTick's.
+        int AddFixedTick(std::function<void(const FixedStep&)> tick);
+        void RemoveFixedTick(int id);
+        // The object's body as a FixedTick names it; kNoBody until the world built one (the Tick after it was registered).
+        BodyKey BodyOf(const RenderableObject* object) const;
 
         // The bodies that moved, as they stand (the editor's Keep).
         void CollectSimulatedPoses(std::vector<SimulatedPose>& out) const;
