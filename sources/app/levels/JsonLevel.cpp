@@ -1,6 +1,7 @@
 #include "app/game/PlayerStartJson.h"
 #include "app/game/RaceCourseJson.h"
 #include "app/levels/JsonLevel.h"
+#include "app/levels/LevelEnvironment.h" // R9.4: the environment's one road
 
 #include "core/diagnostics/BootProfile.h"
 #include "core/logging/Log.h"
@@ -99,25 +100,6 @@ float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
 {
     if (!j.is_array() || j.size() < 3) { return def; }
     return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
-}
-
-void ParsePointLightFlicker(const json& source, PointLightDesc& desc)
-{
-    const auto it = source.find("flicker");
-    if (it == source.end() || !it->is_object())
-    {
-        return;
-    }
-
-    const json& flicker = *it;
-    desc.flicker.amplitude = flicker.value("amplitude", desc.flicker.amplitude);
-    desc.flicker.frequencyHz = flicker.value("frequencyHz", desc.flicker.frequencyHz);
-    const auto seedIt = flicker.find("seed");
-    if (seedIt != flicker.end() && seedIt->is_number_integer())
-    {
-        const std::int64_t seed = seedIt->get<std::int64_t>();
-        desc.flicker.seed = seed > 0 ? static_cast<std::uint32_t>(seed) : 0u;
-    }
 }
 
 bool IsFreeCameraStart(const json& o)
@@ -284,23 +266,15 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     // level without it keeps its cubemap. It used to be a Developer-window combo that lived only for
     // the session, so a level could not state what it was and every reload came back HDRI.
     {
-        SkyAtmosphereSettings sky{};
-        if (const auto it = j.find("skyAtmosphere"); it != j.end() && it->is_object())
-        {
-            SkyAtmosphereSettingsJson::ApplyOverrides(*it, sky);
-        }
-        scene.SetSkyAtmosphere(sky);
+        const auto it = j.find("skyAtmosphere");
+        levelenv::ApplySkyAtmosphere(scene, it != j.end() && it->is_object() ? &*it : nullptr); // R9.4
     }
     // Plan part C: the clouds, the same shape -- the section's presence gives the level clouds, its
     // absence leaves the struct default (off). They need the procedural sky; the renderer says so
     // once if a level pairs them with a cubemap.
     {
-        VolumetricCloudSettings clouds{};
-        if (const auto it = j.find("volumetricCloud"); it != j.end() && it->is_object())
-        {
-            VolumetricCloudSettingsJson::ApplyOverrides(*it, clouds);
-        }
-        scene.SetVolumetricCloud(clouds);
+        const auto it = j.find("volumetricCloud");
+        levelenv::ApplyVolumetricCloud(scene, it != j.end() && it->is_object() ? &*it : nullptr); // R9.4
     }
 
     if (j.contains("skybox") && j["skybox"].contains("texture"))
@@ -336,30 +310,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
                 continue;
             }
             SpotLightDesc desc{};
-            desc.position = ToFloat3(sl.value("position", json::array()));
-            desc.direction = ToFloat3(sl.value("direction", json::array()), float3(0.0f, -1.0f, 0.0f)).Normalized();
-            desc.range = sl.value("range", desc.range);
-            desc.innerAngle = DirectX::XMConvertToRadians(sl.value("innerAngleDeg", 15.0f));
-            desc.outerAngle = DirectX::XMConvertToRadians(sl.value("outerAngleDeg", 25.0f));
-            desc.color = ToFloat3(sl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f));
-            // P16.5: `luminousFluxLm` is the field going forward; `intensity` is the pre-P16.5
-            // number, converted by the r/2 rule (PhotographicSettings.h). NOT lossless -- the
-            // falloff shape changed with the unit -- so an existing level keeps its lights roughly
-            // where they were rather than exactly.
-            desc.luminousFluxLm = sl.contains("luminousFluxLm")
-                ? sl.value("luminousFluxLm", desc.luminousFluxLm)
-                : render::LumensFromLegacyIntensity(sl.value("intensity", 5.0f), desc.range);
-            desc.shadowNormalBias = sl.value("shadowNormalBias", desc.shadowNormalBias);
-            desc.volumetricIntensity = sl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
-            desc.shadowDepthBias = sl.value("shadowDepthBias", desc.shadowDepthBias);
-            desc.shadowsEnabled = sl.value("shadowsEnabled", desc.shadowsEnabled);
-            desc.onAt = LampSwitchFromName(sl.value("onAt", std::string())); // plan L
-            desc.dayBrightness = std::max(sl.value("dayBrightness", desc.dayBrightness), 0.0f);
-            desc.shadowBias = sl.value("shadowBias", desc.shadowBias);           // local-light shadows S1 (UE's)
-            desc.shadowSlopeBias = sl.value("shadowSlopeBias", desc.shadowSlopeBias);
-            desc.shadowSharpen = sl.value("shadowSharpen", desc.shadowSharpen); // S2
-            desc.sourceRadius = std::max(sl.value("sourceRadius", desc.sourceRadius), 0.0f);
-            desc.nearPlane = sl.value("shadowNear", desc.nearPlane);           // S8: the shadow projection's near
+            levelenv::ReadSpotLight(sl, desc, levelenv::JsonRead::Strict); // R9.4: the editor's reader too
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
         }
@@ -375,21 +326,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             }
 
             PointLightDesc desc{};
-            desc.position = ToFloat3(pl.value("position", json::array()), desc.position);
-            desc.radius = pl.value("radius", desc.radius);
-            desc.color = ToFloat3(pl.value("color", json::array()), desc.color);
-            desc.luminousFluxLm = pl.contains("luminousFluxLm") // P16.5, see the spot above
-                ? pl.value("luminousFluxLm", desc.luminousFluxLm)
-                : render::LumensFromLegacyIntensity(pl.value("intensity", 1.0f), desc.radius);
-            desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
-            desc.volumetricIntensity = pl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
-            ParsePointLightFlicker(pl, desc);
-            desc.onAt = LampSwitchFromName(pl.value("onAt", std::string())); // plan L
-            desc.dayBrightness = std::max(pl.value("dayBrightness", desc.dayBrightness), 0.0f);
-            desc.shadowBias = pl.value("shadowBias", desc.shadowBias);           // local-light shadows S1 (UE's)
-            desc.shadowSlopeBias = pl.value("shadowSlopeBias", desc.shadowSlopeBias);
-            desc.shadowSharpen = pl.value("shadowSharpen", desc.shadowSharpen); // S2
-            desc.sourceRadius = std::max(pl.value("sourceRadius", desc.sourceRadius), 0.0f);
+            levelenv::ReadPointLight(pl, desc, levelenv::JsonRead::Strict); // R9.4: the editor's reader too
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }
@@ -456,22 +393,9 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     // compatibility story for old levels, so there is deliberately no fallback to the directional
     // light's legacy `exposure` here. P4 is where those two meet.
     {
-        render::CameraExposureSettings exposure{};
-        const nlohmann::json* exposureSection = PostProcessSection(j, "cameraExposure");
-        if (exposureSection)
-        {
-            render::PhotographicSettingsJson::ApplyOverrides(*exposureSection, exposure);
-        }
-        // The P3B local-exposure fields used to live in `colorPipeline`; lift them if this level
-        // still writes them there. Done AFTER the camera parse so an explicit new-block value wins.
-        if (const nlohmann::json* colorSection = PostProcessSection(j, "colorPipeline"))
-        {
-            render::PhotographicSettingsJson::MigrateLegacyLocalExposure(
-                *colorSection,
-                exposureSection ? *exposureSection : nlohmann::json::object(),
-                exposure);
-        }
-        scene.SetCameraExposure(exposure);
+        // R9.4: the camera over its defaults, then the P3B local-exposure keys a level written before them still
+        // carries in its colour pipeline (lifted AFTER the camera parse, so an explicit new-block value wins).
+        levelenv::ApplyCameraExposure(scene, PostProcessSection(j, "cameraExposure"), PostProcessSection(j, "colorPipeline"));
         // Plan section 6.4: a level load invalidates the adapted value. Without this the camera
         // would spend the first seconds of a new level adapting down from the previous one's
         // brightness, which is exactly the "spend seconds adapting from stale history" that
@@ -482,37 +406,17 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     // P6B: screen-space AO. A level without the section keeps the struct defaults, whose
     // `enabled = false` reproduces the pre-P6B image exactly.
     {
-        GtaoSettings gtao{};
-        if (const nlohmann::json* section = PostProcessSection(j, "gtao"))
-        {
-            GtaoSettingsJson::ApplyOverrides(*section, gtao);
-        }
-        scene.SetGtao(gtao);
+        levelenv::ApplyGtao(scene, PostProcessSection(j, "gtao")); // R9.4
 
-        HeightFogSettings heightFog{};
-        if (const nlohmann::json* section = HeightFogSection(j))
-        {
-            HeightFogSettingsJson::ApplyOverrides(*section, heightFog);
-        }
-        scene.SetHeightFog(heightFog);
+        levelenv::ApplyHeightFog(scene, HeightFogSection(j));
 
         // P8: a level without the section gets the struct defaults, i.e. bloom OFF.
-        BloomSettings bloom{};
-        if (const nlohmann::json* section = PostProcessSection(j, "bloom"))
-        {
-            BloomSettingsJson::ApplyOverrides(*section, bloom);
-        }
-        scene.SetBloom(bloom);
+        levelenv::ApplyBloom(scene, PostProcessSection(j, "bloom"));
     }
 
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.
     {
-        render::ColorPipelineSettings color{};
-        if (const nlohmann::json* section = PostProcessSection(j, "colorPipeline"))
-        {
-            render::PhotographicSettingsJson::ApplyOverrides(*section, color);
-        }
-        scene.SetColorPipeline(color);
+        levelenv::ApplyColorPipeline(scene, PostProcessSection(j, "colorPipeline")); // R9.4
     }
 
     ctx.scene.SetLevelPlayerStart(std::nullopt);

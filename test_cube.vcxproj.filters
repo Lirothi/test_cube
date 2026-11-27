@@ -636,6 +636,9 @@
     <ClCompile Include="sources/app/levels/Level.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/levels/LevelEnvironment.cpp">
+      <Filter>sources\app\levels</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/levels/LevelManager.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
@@ -1497,6 +1500,9 @@
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/LevelDocumentSink.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/levels/LevelEnvironment.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/levels/LevelManager.h">

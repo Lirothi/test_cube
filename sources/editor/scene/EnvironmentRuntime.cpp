@@ -1,4 +1,5 @@
 #include "editor/scene/EnvironmentRuntime.h"
+#include "app/levels/LevelEnvironment.h" // R9.4: the level loader's road for lights and sections
 #include "core/vfs/Vfs.h"
 #include "rendering/core/PhotographicSettings.h" // P16.5 lumens migration
 #include "app/scene/GtaoSettingsJson.h"
@@ -52,25 +53,6 @@ namespace
             return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
         }
         return def;
-    }
-
-    void ParsePointLightFlicker(const nlohmann::json& source, PointLightDesc& desc)
-    {
-        const auto it = source.find("flicker");
-        if (it == source.end() || !it->is_object())
-        {
-            return;
-        }
-
-        const nlohmann::json& flicker = *it;
-        desc.flicker.amplitude = JF(flicker, "amplitude", desc.flicker.amplitude);
-        desc.flicker.frequencyHz = JF(flicker, "frequencyHz", desc.flicker.frequencyHz);
-        const auto seedIt = flicker.find("seed");
-        if (seedIt != flicker.end() && seedIt->is_number_integer())
-        {
-            const std::int64_t seed = seedIt->get<std::int64_t>();
-            desc.flicker.seed = seed > 0 ? static_cast<std::uint32_t>(seed) : 0u;
-        }
     }
 
     // Map an env light entity to its LightManager index. JsonLevel skips disabled
@@ -202,20 +184,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         auto& points = ctx.scene.GetLightManager().PointLights();
         if (i < 0 || i >= static_cast<int>(points.size())) { return; }
         PointLightDesc d;
-        d.position = JF3(p, "position", d.position);
-        d.radius = JF(p, "radius", d.radius);
-        d.color = JF3(p, "color", d.color);
-        // P16.5: newest field wins, else migrate the legacy number. Mirrors JsonLevel.
-        d.luminousFluxLm = p.contains("luminousFluxLm")
-            ? JF(p, "luminousFluxLm", d.luminousFluxLm)
-            : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
-        d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
-        d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
-        ParsePointLightFlicker(p, d);
-        d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
-        d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
-        d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
+        levelenv::ReadPointLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -224,24 +193,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         auto& spots = ctx.scene.GetLightManager().SpotLights();
         if (i < 0 || i >= static_cast<int>(spots.size())) { return; }
         SpotLightDesc d;
-        d.position = JF3(p, "position", d.position);
-        d.direction = JF3(p, "direction", d.direction).Normalized();
-        d.range = JF(p, "range", d.range);
-        d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
-        d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
-        d.color = JF3(p, "color", d.color);
-        d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
-            ? JF(p, "luminousFluxLm", d.luminousFluxLm)
-            : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
-        d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
-        d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
-        d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
-        d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
-        d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
-        d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
-        d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
-        d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
+        levelenv::ReadSpotLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
         spots[i].SetDesc(d);
     }
     else if (env.type == "timeOfDay")
@@ -258,37 +210,32 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         // P1: rebuilt from defaults on every edit rather than patched in place, so clearing a
         // field in the inspector returns it to the documented default instead of keeping whatever
         // the previous edit left behind.
-        render::CameraExposureSettings exposure{};
-        render::PhotographicSettingsJson::ApplyOverrides(p, exposure);
         // The P3B fields moved here from the Color Pipeline object; an unconverted document still
         // has them over there, so lift them rather than snapping the level back to neutral.
+        const nlohmann::json* colorPipeline = nullptr;
         for (const EditorObject& other : ctx.document.Environment())
         {
             if (other.type == "colorPipeline")
             {
-                render::PhotographicSettingsJson::MigrateLegacyLocalExposure(other.properties, p, exposure);
+                colorPipeline = &other.properties;
                 break;
             }
         }
-        ctx.scene.SetCameraExposure(exposure);
+        levelenv::ApplyCameraExposure(ctx.scene, &p, colorPipeline); // R9.4: the level loader's road
     }
     else if (env.type == "gtao")
     {
         // P6B: rebuilt from defaults on every edit, same reasoning as the two blocks around it --
         // a field the document does not carry must land on the struct default, not on whatever the
         // previous edit left behind.
-        GtaoSettings gtao{};
-        GtaoSettingsJson::ApplyOverrides(p, gtao);
-        ctx.scene.SetGtao(gtao);
+        levelenv::ApplyGtao(ctx.scene, &p); // R9.4
     }
     else if (env.type == "heightFog")
     {
         // P7: rebuilt from defaults on every edit, same reasoning as the blocks around it -- a
         // field the document does not carry must land on the struct default, not on whatever the
         // previous edit left behind.
-        HeightFogSettings heightFog{};
-        HeightFogSettingsJson::ApplyOverrides(p, heightFog);
-        ctx.scene.SetHeightFog(heightFog);
+        levelenv::ApplyHeightFog(ctx.scene, &p); // R9.4
     }
     else if (env.type == "postProcess")
     {
@@ -300,57 +247,32 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             const auto it = p.find(key);
             return (it != p.end() && it->is_object()) ? *it : kEmpty;
         };
-        {
-            render::CameraExposureSettings exposure{};
-            render::PhotographicSettingsJson::ApplyOverrides(sub("cameraExposure"), exposure);
-            ctx.scene.SetCameraExposure(exposure);
-        }
-        {
-            render::ColorPipelineSettings color{};
-            render::PhotographicSettingsJson::ApplyOverrides(sub("colorPipeline"), color);
-            ctx.scene.SetColorPipeline(color);
-        }
-        {
-            GtaoSettings gtao{};
-            GtaoSettingsJson::ApplyOverrides(sub("gtao"), gtao);
-            ctx.scene.SetGtao(gtao);
-        }
-        {
-            HeightFogSettings heightFog{};
-            HeightFogSettingsJson::ApplyOverrides(sub("heightFog"), heightFog);
-            ctx.scene.SetHeightFog(heightFog);
-        }
-        {
-            BloomSettings bloom{};
-            BloomSettingsJson::ApplyOverrides(sub("bloom"), bloom);
-            ctx.scene.SetBloom(bloom);
-        }
+        // R9.4: the level loader's road, group by group. The camera here takes NO lift from the colour pipeline's old
+        // local-exposure keys, which the loader does (PostProcessSection) -- as before; R9.5 decides it.
+        levelenv::ApplyCameraExposure(ctx.scene, &sub("cameraExposure"), nullptr);
+        levelenv::ApplyColorPipeline(ctx.scene, &sub("colorPipeline"));
+        levelenv::ApplyGtao(ctx.scene, &sub("gtao"));
+        levelenv::ApplyHeightFog(ctx.scene, &sub("heightFog"));
+        levelenv::ApplyBloom(ctx.scene, &sub("bloom"));
     }
     else if (env.type == "bloom")
     {
         // P8: rebuilt from defaults on every edit, same reasoning as the blocks around it -- a
         // field the document does not carry must land on the struct default, not on whatever the
         // previous edit left behind.
-        BloomSettings bloom{};
-        BloomSettingsJson::ApplyOverrides(p, bloom);
-        ctx.scene.SetBloom(bloom);
+        levelenv::ApplyBloom(ctx.scene, &p); // R9.4
     }
     else if (env.type == "colorPipeline")
     {
         // P3C: rebuilt from defaults on every edit, same reasoning as cameraExposure above.
-        render::ColorPipelineSettings color{};
-        render::PhotographicSettingsJson::ApplyOverrides(p, color);
-        ctx.scene.SetColorPipeline(color);
+        levelenv::ApplyColorPipeline(ctx.scene, &p); // R9.4
         // Legacy documents still carry the local-exposure fields here; keep the camera in step so
         // an old level behaves the same as before the move until it is re-saved.
         for (const EditorObject& other : ctx.document.Environment())
         {
             if (other.type == "cameraExposure")
             {
-                render::CameraExposureSettings exposure{};
-                render::PhotographicSettingsJson::ApplyOverrides(other.properties, exposure);
-                render::PhotographicSettingsJson::MigrateLegacyLocalExposure(p, other.properties, exposure);
-                ctx.scene.SetCameraExposure(exposure);
+                levelenv::ApplyCameraExposure(ctx.scene, &other.properties, &p);
                 break;
             }
         }
@@ -391,15 +313,11 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     }
     else if (env.type == "skyAtmosphere")
     {
-        SkyAtmosphereSettings sky{};
-        SkyAtmosphereSettingsJson::ApplyOverrides(p, sky);
-        ctx.scene.SetSkyAtmosphere(sky);
+        levelenv::ApplySkyAtmosphere(ctx.scene, &p); // R9.4
     }
     else if (env.type == "volumetricCloud")
     {
-        VolumetricCloudSettings clouds{};
-        VolumetricCloudSettingsJson::ApplyOverrides(p, clouds);
-        ctx.scene.SetVolumetricCloud(clouds);
+        levelenv::ApplyVolumetricCloud(ctx.scene, &p); // R9.4
     }
     else if (env.type == "wind")
     {
@@ -555,43 +473,14 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
         if (e.type == "spotLight")
         {
             SpotLightDesc d;
-            d.position = JF3(p, "position", d.position);
-            d.direction = JF3(p, "direction", d.direction).Normalized();
-            d.range = JF(p, "range", d.range);
-            d.innerAngle = JF(p, "innerAngleDeg", 15.0f) * kDeg2Rad;
-            d.outerAngle = JF(p, "outerAngleDeg", 25.0f) * kDeg2Rad;
-            d.color = JF3(p, "color", d.color);
-            d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
-                ? JF(p, "luminousFluxLm", d.luminousFluxLm)
-                : render::LumensFromLegacyIntensity(JF(p, "intensity", 5.0f), d.range);
-            d.shadowNormalBias = JF(p, "shadowNormalBias", d.shadowNormalBias);
-            d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
-            d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
-            d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
-            d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
-            d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
-            d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
-            d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
+            levelenv::ReadSpotLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
         }
         else if (e.type == "pointLight")
         {
             PointLightDesc d;
-            d.position = JF3(p, "position", d.position);
-            d.radius = JF(p, "radius", d.radius);
-            d.color = JF3(p, "color", d.color);
-            d.luminousFluxLm = p.contains("luminousFluxLm") // P16.5
-                ? JF(p, "luminousFluxLm", d.luminousFluxLm)
-                : render::LumensFromLegacyIntensity(JF(p, "intensity", 1.0f), d.radius);
-            d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
-            d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
-            ParsePointLightFlicker(p, d);
-            d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
-            d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
-            d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
+            levelenv::ReadPointLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }
