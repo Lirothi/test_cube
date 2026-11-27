@@ -10,11 +10,6 @@
 
 #include <functional> // R6.2a: the game's hooks
 #include "rendering/renderables/RenderableObject.h"
-#include "rendering/shadows/ShadowGpuData.h"
-#include "rendering/shadows/LocalShadowCache.h"
-#include "rendering/shadows/VirtualShadowMap.h"
-#include "rendering/shadows/SdsmShadows.h"
-#include "rendering/shadows/ShadowViewPlanner.h" // R6.1
 #include "app/camera/CameraController.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -22,16 +17,8 @@
 #include "rendering/lighting/LightManager.h"
 
 #include "rendering/scene/SceneRenderConfig.h"
-#include "rendering/scene/SceneRenderQueue.h"
-#include "rendering/scene/SceneView.h"
-#include "rendering/scene/SkyOcclusionMap.h"
-#include "rendering/scene/SceneFrameData.h"
-#include "rendering/scene/SceneRenderer.h"
-#include "core/task/TaskSystem.h" // viewTasks_
+#include "rendering/scene/RenderScene.h" // R6.4a: the render half
 #include "core/threading/ThreadRole.h" // game thread plan: the accessors say which half they belong to
-#include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
-#include "rendering/visibility/OcclusionQueries.h"
-#include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "rendering/wind/WindState.h"
 #include "vfx/VesselSpray.h"
 #include "ocean/OceanBuoyancy.h"
@@ -53,12 +40,12 @@ public:
     // What steers the game camera: the free fly, the look and its smoothing, the wheel's speed (game half only).
     CameraController& CameraControllerRef() { TC_CHECK_GAME("Scene::CameraControllerRef"); return cameraController_; }
     const CameraController& CameraControllerRef() const { TC_CHECK_GAME("Scene::CameraControllerRef"); return cameraController_; }
-    // The render half's camera: the game camera's pose taken at Sync, its own jitter, matrices and history.
-    const Camera& RenderCamera() const { TC_CHECK_RENDER("Scene::RenderCamera"); return renderCamera_; }
+    // The render half's camera (RenderScene::RenderCamera).
+    const Camera& RenderCamera() const { return render_.RenderCamera(); }
 
     const DirectionalLight& GetDirectionalLight() const { TC_CHECK_GAME("Scene::GetDirectionalLight"); return dirLight_; }
-    // The render half's sun: the scene light (with the atmosphere's transmittance) as Sync copied it.
-    const DirectionalLight& RenderSun() const { TC_CHECK_RENDER("Scene::RenderSun"); return renderSun_; }
+    // The render half's sun (RenderScene::RenderSun).
+    const DirectionalLight& RenderSun() const { return render_.RenderSun(); }
     // P4 measurement hook: the sweep harness needs to drive the sun's own controls to measure how
     // much of the level's `exposure` the auto-exposure silently cancels. Runtime only -- like the
     // camera settings above, nothing here writes the level.
@@ -111,37 +98,21 @@ public:
     render::ColorPipelineSettings& ColorPipelineRef() { return colorPipeline_; }
     LightManager& GetLightManager() { return lightManager_; }
     const LightManager& GetLightManager() const { return lightManager_; }
-    const render::LocalShadowCache& GetLocalShadowCache() const { return localShadowCache_; } // S7 readout
     Skybox* GetSkybox() const { return skyBox_.get(); }
 
-    // Rung 2: the virtual-shadow-map page pool + page table (dev-window "VSM" tab reads its stats).
-    const VirtualShadowMap& Vsm() const { return vsm_; }
+    // R6.4a: the render half's readouts and services (RenderScene says what each is).
+    const render::LocalShadowCache& GetLocalShadowCache() const { return render_.GetLocalShadowCache(); }
+    const VirtualShadowMap& Vsm() const { return render_.Vsm(); }
+    bool IsRtReflectActive() const { return render_.IsRtReflectActive(); }
+    void InvalidateRaytracing() { render_.InvalidateRaytracing(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetRtTlasSrv(UINT frameIndex) const { return render_.GetRtTlasSrv(frameIndex); }
+    const SceneFrameData::CascadeData& GetCascadeData() const { return render_.GetCascadeData(); }
+    const ShadowGpuData& ShadowGpu() const { return render_.ShadowGpu(); }
+    const SdsmShadows& Sdsm() const { return render_.Sdsm(); }
 
-    // RT reflections for glass (S15): forwarded from the scene renderer so the
-    // transparent pass can bind the TLAS + gate ray tracing.
-    bool IsRtReflectActive() const { return sceneRenderer_.IsRtReflectActive(); }
-    // I2: after a material's GPU textures are rebuilt, drop the RT acceleration/bindless caches so
-    // they re-register with the new SRVs (else the geom-info table dangles -> DEVICE_HUNG). Call
-    // with the GPU idle. Cheap no-op when RT is off.
-    void InvalidateRaytracing() { sceneRenderer_.InvalidateRaytracing(); }
-    D3D12_CPU_DESCRIPTOR_HANDLE GetRtTlasSrv(UINT frameIndex) const { return sceneRenderer_.GetTlasSrvCpu(frameIndex); }
-
-    const mat4& GetCascadeView(size_t index) const;
-    const mat4& GetCascadeProj(size_t index) const;
-    float2 GetCascadeScale(size_t index) const;
-    float2 GetCascadeBias(size_t index) const;
-    float GetCascadeTexelWS(size_t index) const;
-    float GetCascadeDepthBias(size_t index) const;
-    const float* GetCascadeSplitsVS() const { return frameData_.cascades.splitsVS; }
-    // S0.1: the whole cascade block, including the *Dbg diagnostics the developer window reads.
-    const SceneFrameData::CascadeData& GetCascadeData() const { return frameData_.cascades; }
     // The game's copy (Developer Controls, --set); the render half reads the one Sync took (game thread plan G2).
     CascadeShadowConfig& CascadeConfig() { TC_CHECK_GAME("Scene::CascadeConfig"); return cascadeConfig_; }
     const CascadeShadowConfig& CascadeConfig() const { TC_CHECK_GAME("Scene::CascadeConfig"); return cascadeConfig_; }
-    // Occlusion plan S5b: the cascade HZB cull's counters for the Render tab (read-only).
-    const ShadowGpuData& ShadowGpu() const { return shadowGpu_; }
-    // S15: the SDSM partition readout (dev window + --sdsm-readout).
-    const SdsmShadows& Sdsm() const { return sdsm_; }
 
     void InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
     void FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
@@ -310,7 +281,7 @@ public:
     }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
-    const SceneFrameData& FrameData() const { TC_CHECK_RENDER("Scene::FrameData"); return frameData_; }
+    const SceneFrameData& FrameData() const { return render_.FrameData(); } // RenderScene::FrameData
 
     // W1: the global wind source of truth (drives the ocean's force/direction and, from W3 on,
     // foliage sway). Advanced each Tick from the ocean's shared clock; authored by the "wind"
@@ -334,58 +305,11 @@ private:
     // that may read its buffers, its mesh's last reference, its textures -- an editor delete or respawn idled the GPU
     // for that until then.
     static void RetireRemovedObject(std::unique_ptr<RenderableObjectBase> object);
-    // Game thread plan G4b': the render half's side of a caster-set change -- its queues dropped, its version moved.
-    void ApplyStaticSetToRender();
-
-    static constexpr int kCascades = SceneFrameData::kCascades;
-
-    void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM<->SDSM resource switch
-    // Plan S's fallback without RT: wanted this frame (the setting on, the RT trace not), and its textures' size / freeing
-    // at the GPU-idle point before PrepareViews (skyVis.fallbackResolution).
-    bool SkyOcclusionWanted(const Renderer* renderer) const;
-    void ReconcileSkyOcclusion(Renderer* renderer);
-    // R6.1: what the shadow view planner reads from the render half this frame (`camera`: the one it plans for).
-    ShadowPlanInputs ShadowInputs(const Camera& camera);
-    // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
-    // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
-    // `sameGeometry`: only the shadow view capacity changed (ShadowGpuData::Rebuild keeps the local shadow cache).
-    void RebuildShadowCasters(Renderer& renderer, bool sameGeometry = false);
-    // The mega VB/IB alone, after ShadowGpuData::UpdateForFrame rebuilt a changed caster set (it waited for the GPU).
-    void RebuildShadowMegaBuffer(Renderer& renderer);
-    // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.
-    void ReconcileShadowLodCurve(Renderer* renderer);
-    // Occlusion plan S0: which render::VisibilityStats slot a view writes (camera 0, cascades
-    // 1..4), or -1 for the views that have none (local lights, clipmap levels).
-    int VisibilitySlotFor(const SceneView& view) const;
-    // The render camera's matrices, lens and layers into the main view (architecture plan R1.4: the view was the
-    // camera's own member, which its CalcMatrices wrote). Right after renderCamera_.CalcMatrices.
-    void SyncCameraView();
-    // Occlusion plan S3a: on the CAMERA view's prepare task, after the frustum cull and the chunk
-    // masks -- consults the history for every surviving opaque object (per chunk for terrain),
-    // drops the occluded ones from the visible buckets, ANDs occluded chunks out of the mask and
-    // queues this frame's queries. Never for a shadow view (asserted).
-    void ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded, std::uint32_t& chunksOccluded);
-    // S3a.6: one query per local light's influence volume (UE SOQ_LightInfluenceSphere). Main
-    // thread, before the camera task -- the history is single-threaded and the camera task only
-    // starts afterwards. Fills spotLightOccluded_ / pointLightOccluded_ (1 = its shadow pass draws
-    // nothing and its lighting entry is zeroed this frame). Its casters are NOT culled.
-    void ConsiderLightOcclusion(const Frustum& cameraFrustum);
-
-    void PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask);
-    void PrepareViews(Renderer* renderer);
     void SyncObjectsForRender(SceneObjectSyncReason reason);
 
-    SceneRenderer sceneRenderer_{};
     CascadeShadowConfig cascadeConfig_{};
 
-    // Per-frame pass inputs, filled by Sync (the values from game state) and PrepareViews (cascade caches,
-    // view/light pointers). SceneRenderer's pass bodies read from this.
-    SceneFrameData frameData_{};
-    bool syncedThisFrame_ = false; // Sync ran since the last Render
-
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
-    // Has the ocean been told where this level's terrain sits? One sweep of objects_ per load.
-    bool shoreAreaValid_ = false;
 #if WITH_EDITOR
     // Lockstep with objects_: objectIds_[i] is the editor id of objects_[i], or
     // 0 for a runtime object with no editor identity.
@@ -395,77 +319,12 @@ private:
     std::vector<SceneObjectId> selectedEditorObjectIds_;
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
-    // R6.1: the shadow views -- cascades, VSM's clipmap, the local lights', their cull -- and the planning that keeps state
-    // between frames (last frame's cascade boxes, the clipmap's depth centres, the SDSM partition cache).
-    ShadowViewPlanner shadowViews_{};
-    // PrepareViews' working lists, kept between frames for their capacity (two allocations a frame as locals).
-    std::vector<SceneView*> viewsToCull_;
-    std::vector<TaskSystem::TaskHandle> viewTasks_;
-    // Step 6e: the directional cascades + spot shadow views all bucketize the same
-    // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
-    // shared — each shadow view only runs its own per-frustum Cull against it.
-    SceneRenderQueue shadowCasterSource_{};
-    // Classification and opaque BatchKey order do not depend on camera pose. Cache them until
-    // membership/visibility/layer or the camera layer mask changes; frustum cull, transparent
-    // depth sort and LOD selection still run every frame.
-    SceneRenderQueue cameraObjectSource_{};
-    std::uint32_t renderQueueSourceVersion_ = 0;
-    std::uint32_t renderQueueSourceMask_ = 0;
-    bool renderQueueSourcesValid_ = false;
-    // Rung 0 / Steps 1-2: GPU-side shadow data (per-caster instance + bounds, per-view
-    // frustum planes). Built at level load, maintained per frame; not yet consumed by any pass.
-    ShadowGpuData shadowGpu_{};
-    // Local-light plan S7: the atlas spot / point lights' cache of their static casters (pool + entries).
-    render::LocalShadowCache localShadowCache_{};
-    // Plan S's fallback without RT (skyVis.fallback): the world from above, drawn when the camera moved a snap step.
-    SkyOcclusionMap skyOcclusion_{};
-    // ...and a static caster moved since it last asked (the object sync's ParallelFor sets it, PrepareViews takes it).
-    std::atomic<bool> staticCasterMoved_{ false };
-    // S9e: grows the view capacity to what the last selection wanted (doubling, up to the ceiling) -- ReconcileShadowMode,
-    // at its GPU-idle point. Returns whether it grew (everything sized by views has then been re-created).
-    bool ReconcileShadowCapacity(Renderer* renderer);
-    // S9e: sets the capacity and re-makes what is sized by it (scene views, VSM, SDSM) -- GPU idle; the caller rebuilds
-    // the casters. ReconcileShadowCapacity grows through it, FinalizeLevelLoad resets to the initial capacity.
-    void ApplyShadowCapacity(Renderer* renderer, unsigned spots, unsigned points);
-    // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
-    // heap that records this frame's plan and the CPU copy of the results frame N - latency read
-    // at the top of PrepareViews (kept alive for the camera task's Consider calls).
-    std::uint64_t frameNumber_ = 0; // S4: this frame's number, the camera-visible stamp (see PrepareViewQueue)
-    vis::OcclusionHistory occlusionHistory_{};
-    vis::OcclusionQueryHeap occlusionQueries_{};
-    std::vector<std::uint64_t> occlusionResults_;
-    // S3b: the alternative producer for the same history (vis.method:2) and its CPU copy.
-    vis::HzbOcclusionTester hzbTester_{};
-    std::vector<std::uint32_t> hzbResults_;
-    std::vector<std::uint8_t> spotLightOccluded_;  // S3a.6, per LightManager spot index
-    std::vector<std::uint8_t> pointLightOccluded_; // per point index
-    // render::g_localShadowWindRange: each light's last verdict (1 = rigid), for the hysteresis. Per LightManager index.
-    std::vector<std::uint8_t> spotWindRigid_;
-    std::vector<std::uint8_t> pointWindRigid_;
-    // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at
-    // level load; not yet consumed by any pass.
-    VirtualShadowMap vsm_{};
-    // S15: the SDSM analysis (partition buffer + GPU-written cull planes). Allocated only while
-    // the mode is Sdsm and released on the way out, the same residency rule VSM follows.
-    SdsmShadows sdsm_{};
     LightManager lightManager_{};
     Camera camera_;       // the GAME camera (CameraRef)
     CameraController cameraController_{camera_}; // its input (CameraControllerRef)
-    // Game thread plan G2: the render half's copies, written only by Sync (and by the render half itself), never read by
-    // the game half -- the camera (pose taken, matrices and history its own), the suns, the wind, the cascade knobs and
-    // the editor selection the frame draws.
-    Camera renderCamera_;
-    SceneView cameraView_; // the main view: renderCamera_'s matrices (SyncCameraView), the frustum, the queue
-    bool renderCameraCut_ = false; // the game camera was cut since the last frame: repeat it after CalcMatrices
-    DirectionalLight renderSun_;
-    DirectionalLight renderSkySun_;
-    vfx::WindState renderWind_{};
-    CascadeShadowConfig renderCascadeConfig_{};
-    std::vector<std::uint64_t> renderSelection_;
 
     SceneRenderSettings renderSettings_{};
     std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes (the game's)
-    std::uint32_t renderStaticSetVersion_ = 0; // G4b': the render half's, moved by ApplyStaticSetToRender
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
@@ -490,4 +349,12 @@ private:
     BloomSettings bloom_{};                           // P8; level-scoped, see GetBloom
 
     std::unique_ptr<Skybox> skyBox_;
+
+    // R6.4a: the render half -- what Sync hands it and what it keeps to draw (RenderScene.h). Declared after the world's
+    // containers it holds references to: made after them, gone before them.
+    RenderScene render_{ objects_,
+#if WITH_EDITOR
+                         objectIds_,
+#endif
+                         lightManager_, skyBox_ };
 };

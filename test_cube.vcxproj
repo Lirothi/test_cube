@@ -499,6 +499,7 @@
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
     <ClCompile Include="sources/rendering/scene/SceneRenderConfig.cpp" />
+    <ClCompile Include="sources/rendering/scene/RenderScene.cpp" />
     <ClCompile Include="sources/rendering/scene/SceneRenderer.cpp" />
     <ClCompile Include="sources/rendering/scene/SceneRenderer_Geometry.cpp" />
     <ClCompile Include="sources/rendering/scene/SceneRenderer_Shadows.cpp" />
@@ -837,6 +838,7 @@
     <ClInclude Include="sources/rendering/scene/SceneRenderInternal.h" />
     <ClInclude Include="sources/rendering/post/BloomRenderer.h" />
     <ClInclude Include="sources/rendering/post/BloomSettings.h" />
+    <ClInclude Include="sources/rendering/scene/RenderScene.h" />
     <ClInclude Include="sources/rendering/scene/SceneRenderer.h" />
     <ClInclude Include="sources/rendering/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/rendering/scene/SceneResourceBootstrapper.h" />

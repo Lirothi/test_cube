@@ -663,6 +663,9 @@
     <ClCompile Include="sources/rendering/scene/SceneRenderConfig.cpp">
       <Filter>sources\rendering\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/scene/RenderScene.cpp">
+      <Filter>sources\rendering\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/scene/SceneRenderer.cpp">
       <Filter>sources\rendering\scene</Filter>
     </ClCompile>
@@ -1552,6 +1555,9 @@
     </ClInclude>
     <ClInclude Include="sources/rendering/post/BloomSettings.h">
       <Filter>sources\rendering\post</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/scene/RenderScene.h">
+      <Filter>sources\rendering\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/scene/SceneRenderer.h">
       <Filter>sources\rendering\scene</Filter>
