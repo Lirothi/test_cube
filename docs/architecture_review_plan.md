@@ -5542,7 +5542,22 @@ Debug, реестр настроек и таблица графики, вкла�
   Debug `inspector_regression` падает «Assertion failed: (0) && "Missing End()"» (`imgui.cpp:11742`), код 3 (на своём
   столе); файл возвращён побайтно. Не покрыто: бросок из настоящей панели редактора живьём (ни одна не бросает по
   команде) — путь тот же, `DrawPanelGuarded`.
-- **R11. Сборка.** Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
+
+  **Сделано R10.5 (2026-11-27).** `OceanControlsWindow.{h,cpp}` — `git mv` из `ocean/` в `app/ui/` (рядом с
+  `DeveloperWindow`, его единственным владельцем); include-ы `DeveloperWindow.h` и самого окна, пути и фильтр в
+  `test_cube.vcxproj` / `.filters`. Код окна не тронут. ImGui вне `ui/`, `editor/`, `app/` теперь только у
+  `rendering/debug/TextureDebugViewer.h` (было ещё окно океана в слое мира). Исключений слоёв не убавилось: окно включало
+  только вниз (`rendering/core/Renderer.h`, `ocean/*`), `check_layers` 0, 33 разрешённых — как было. Проверено: Debug,
+  Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS. Снимок окна живьём: редактор
+  на своём столе (`CreateDesktopW`) с `--mcp-port=8174`, F7 через `PostMessage` окну, снимок MCP `screenshot` с панелями
+  (`ocean_window_shot.py`; `imgui.ini` и `editor_state.json` возвращаются), эталон — Release_Editor на R7.3, A B A B:
+  эталон-эталон 0.180 %, новый-новый 0.076 %, эталон-новый 0.141 / 0.122 %; на кадре окно «Ocean Controls [F7]» со
+  спектром и всеми секциями. Контроль: тот же запуск без F7 — 14.7 % от кадра с окном (снимок видит окно).
+  Найдено по пути: `check_render_knobs.py` молча пропускал файл из `GAME_FILES`, которого нет, — перенесённое окно выпало
+  бы из проверки с зелёным итогом. Теперь путь новый, запись без файла — находка, запись может быть шаблоном (для
+  разрезанных файлов R10.3/R10.4), итог называет число проверенных файлов (36). Контроль (`ctl105_knobs.py`): старый
+  путь — 1 находка «no such file»; чтение копии рендера `ocean::g_shoreRunup` в окне — 1 находка с его строкой; файл
+  возвращён побайтно. Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
   `TaskSystemEnki.cpp`, `TaskSystemTBB.cpp` (**В4**), папка `bckp/`; `Renderer::InitFence` — пустая обёртка
   «для совместимости» (`Renderer.h:291`, `Renderer.cpp:399`, `:402-405`). Одноимённый `FrameScheduler::InitFence`
   (`FrameScheduler.cpp:106`) создаёт заборы и ОСТАЁТСЯ: `Renderer.cpp:360` зовёт его напрямую.

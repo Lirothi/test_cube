@@ -471,7 +471,7 @@
     <ClCompile Include="sources/app/ui/LogWindow.cpp" />
     <ClCompile Include="sources/app/ui/ProfilerHud.cpp" />
     <ClCompile Include="sources/app/ui/MemoryTab.cpp" />
-    <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
+    <ClCompile Include="sources/app/ui/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/game/PlayerStart.cpp" />
     <ClCompile Include="sources/app/game/PlayerController.cpp" />
     <ClCompile Include="sources/app/game/PlaySession.cpp" />
@@ -804,7 +804,7 @@
     <ClInclude Include="sources/app/ui/DeveloperWindow.h" />
     <ClInclude Include="sources/app/ui/LogWindow.h" />
     <ClInclude Include="sources/app/ui/MemoryTab.h" />
-    <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
+    <ClInclude Include="sources/app/ui/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/game/PlayerStart.h" />
     <ClInclude Include="sources/app/game/PlayerController.h" />
     <ClInclude Include="sources/app/game/PlaySession.h" />

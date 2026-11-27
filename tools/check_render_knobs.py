@@ -7,14 +7,17 @@ exchanges them. A game file that reads or writes ns::g_x directly races the rend
     python tools/check_render_knobs.py            # exit code = findings
 
 The game files are the ones that set knobs: the command line, --set / --sweep / MCP, graphics_settings.json,
-Developer Controls, the hotkeys, the Inspector, the ocean controls. A new one goes in GAME_FILES."""
+Developer Controls, the hotkeys, the Inspector, the ocean controls. A new one goes in GAME_FILES (a glob for a file cut
+in pieces). An entry that names no file is a finding: a moved file used to leave the check silently (R10.5 moved the
+ocean controls to app/ui, and the old path was skipped)."""
+import glob
 import os
 import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources')
 GAME_FILES = ['app/App.cpp', 'app/GraphicsSettings.cpp', 'app/ui/DeveloperWindow.cpp', 'app/AppController.cpp',
-              'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'ocean/OceanControlsWindow.cpp', 'app/ui/MemoryTab.cpp',
+              'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'app/ui/OceanControlsWindow.cpp', 'app/ui/MemoryTab.cpp',
               'app/settings/Scalability.cpp', 'app/settings/UserSettings.cpp', 'app/settings/DisplayMode.cpp',
               'app/ui/GameSettingsMenu.cpp']
 REG = re.compile(r'::knob::Register\(\s*\w+_game\s*,\s*\w+\s*,\s*"([\w:]+)"\s*\)')
@@ -38,10 +41,15 @@ def main():
     # The settings registry's rows (architecture plan R2.2-...): the --set names moved out of App.cpp, one file a prefix.
     rows_dir = os.path.join(ROOT, 'app', 'settings')
     rows = sorted('app/settings/' + fn for fn in os.listdir(rows_dir) if fn.endswith('SettingRows.cpp'))
-    for rel in GAME_FILES + rows:
+    files = []
+    for entry in GAME_FILES:
+        found = sorted(os.path.relpath(p, ROOT).replace(os.sep, '/') for p in glob.glob(os.path.join(ROOT, entry)))
+        if not found:
+            findings += 1
+            print(f'{entry}: in GAME_FILES, but no such file -- moved or renamed? point the entry at it')
+        files += found
+    for rel in files + rows:
         path = os.path.join(ROOT, rel)
-        if not os.path.exists(path):
-            continue
         with open(path, encoding='utf-8', errors='replace') as f:
             for ln, line in enumerate(f, 1):
                 code = line.split('//', 1)[0]
@@ -49,7 +57,7 @@ def main():
                     if rx.search(code):
                         findings += 1
                         print(f'{rel}:{ln}: {q} is the render half\'s copy -- use {q}_game')
-    print(f'{len(knobs)} twinned knobs, {findings} finding(s)')
+    print(f'{len(knobs)} twinned knobs, {len(files) + len(rows)} game files, {findings} finding(s)')
     return findings
 
 

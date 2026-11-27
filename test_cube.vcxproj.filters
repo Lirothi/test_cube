@@ -570,8 +570,8 @@
     <ClCompile Include="sources/app/ui/MemoryTab.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
-    <ClCompile Include="sources/ocean/OceanControlsWindow.cpp">
-      <Filter>sources\ocean</Filter>
+    <ClCompile Include="sources/app/ui/OceanControlsWindow.cpp">
+      <Filter>sources\app\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/App.cpp">
       <Filter>sources\app</Filter>
@@ -1409,8 +1409,8 @@
     <ClInclude Include="sources/app/ui/MemoryTab.h">
       <Filter>sources\app\ui</Filter>
     </ClInclude>
-    <ClInclude Include="sources/ocean/OceanControlsWindow.h">
-      <Filter>sources\ocean</Filter>
+    <ClInclude Include="sources/app/ui/OceanControlsWindow.h">
+      <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/App.h">
       <Filter>sources\app</Filter>

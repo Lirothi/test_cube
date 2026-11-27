@@ -1,4 +1,4 @@
-#include "ocean/OceanControlsWindow.h"
+#include "app/ui/OceanControlsWindow.h"
 
 #include "ocean/OceanWakeKnobs.h"
 

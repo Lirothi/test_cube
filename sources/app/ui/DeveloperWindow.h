@@ -41,7 +41,7 @@ public:
 #include "app/ui/LogWindow.h"
 #include "app/ui/MemoryTab.h"
 #include "materials/Texture2D.h"
-#include "ocean/OceanControlsWindow.h"
+#include "app/ui/OceanControlsWindow.h" // R10.5: the ocean's window is the app's UI
 #include "rendering/debug/TextureDebugViewer.h"
 #include "ui/ImGuiWindowUtils.h"
 
