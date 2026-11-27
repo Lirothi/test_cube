@@ -53,6 +53,31 @@ EditorObject MakeObject(uint64_t id, const char* type, Json properties)
     return object;
 }
 
+// Architecture plan R10.1: the registry is the list of panels -- registered out of order, they come back in Order() (equal
+// orders in their registration order), each with its slot; nothing else names them (the editor's frame and Window menu
+// walk this list).
+void TestPanelRegistryIsTheList()
+{
+    EditorExtensionRegistry registry;
+    std::vector<std::string> drawn;
+    const auto panel = [&drawn](const char* id, int order, EditorPanelSlot slot = EditorPanelSlot::Window)
+    {
+        return std::make_unique<EditorLambdaPanel>(id, id, nullptr, slot == EditorPanelSlot::Window,
+            [&drawn, id](EditorContext&) { drawn.emplace_back(id); }, order, slot);
+    };
+    registry.RegisterPanel(panel("c", 30));
+    registry.RegisterPanel(panel("gizmo", 0, EditorPanelSlot::AfterWindows));
+    registry.RegisterPanel(panel("a", 10));
+    registry.RegisterPanel(panel("b1", 20));
+    registry.RegisterPanel(panel("b2", 20));
+    std::string order;
+    for (const auto& p : registry.Panels()) { order += std::string(p->Id()) + " "; }
+    Check(order == "gizmo a b1 b2 c ", "panels come back in their order, equal orders as registered");
+    Check(registry.FindPanel("gizmo")->Slot() == EditorPanelSlot::AfterWindows && registry.FindPanel("a")->Slot() == EditorPanelSlot::Window,
+          "each keeps its slot");
+    std::puts("PASS: R10.1 the panel registry is the list (order, slot)");
+}
+
 void TestComponents()
 {
     using InspectorPropertyDelta::MergeComponents;
@@ -646,6 +671,7 @@ int main()
     try
     {
         TestComponents();
+        TestPanelRegistryIsTheList(); // R10.1
         std::puts("Inspector regression: construct CPU context");
         auto renderer = std::make_unique<Renderer>();
         auto scene = std::make_unique<Scene>();

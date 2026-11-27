@@ -1474,12 +1474,16 @@ EditorLambdaPanel::EditorLambdaPanel(std::string id,
     std::string label,
     bool* visible,
     bool showInWindowList,
-    DrawFn draw)
+    DrawFn draw,
+    int order,
+    EditorPanelSlot slot)
     : id_(std::move(id))
     , label_(std::move(label))
     , visible_(visible)
     , showInWindowList_(showInWindowList)
     , draw_(std::move(draw))
+    , order_(order)
+    , slot_(slot)
 {
 }
 
@@ -1508,7 +1512,12 @@ void EditorExtensionRegistry::RegisterPanel(std::unique_ptr<IEditorPanel> panel)
 {
     if (panel)
     {
-        panels_.push_back(std::move(panel));
+        // R10.1: kept in Order() (a stable insertion: equal orders keep their registration order) -- the frame and the
+        // Window menu walk this list as it is.
+        const int order = panel->Order();
+        const auto at = std::upper_bound(panels_.begin(), panels_.end(), order,
+            [](int value, const std::unique_ptr<IEditorPanel>& p) { return value < p->Order(); });
+        panels_.insert(at, std::move(panel));
     }
 }
 

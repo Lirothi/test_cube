@@ -214,8 +214,8 @@ sends.
 `--editor` opens the Level Editor at boot (its panels per `editor_state.json` `levelEditor.panelState.*Visible`;
 `--shot-delay` 40+ frames); also `--dev-tab=<label>`, `--mem-window`, `--log-window`, `--show-import[=<name>]`,
 `--edit-mesh=<mesh.json>[#section]`, `--inspect=<type|object>[#group]`, `--settings-menu[=<tab>]`,
-`--build-dist[=<profile>]`. ImGui reads the real cursor: posted mouse messages never reach it. A panel must be
-registered AND called in `EditorController::Draw`'s `drawPanel` list, or it never shows.
+`--build-dist[=<profile>]`. ImGui reads the real cursor: posted mouse messages never reach it. A panel shows once it is
+registered (`EditorLambdaPanel`'s order and slot; R10.1: the frame and the Window menu walk the registry, no list of names).
 
 ## Settings files
 

@@ -5511,6 +5511,23 @@ Debug, реестр настроек и таблица графики, вкла�
   **R10.3**: `InspectorPanel.cpp` (5137) и `EditorActionRegistry.cpp` (5164) — по файлу на домен.
   **R10.4**: `DeveloperWindow.cpp` (4226) — по файлу на вкладку. **R10.5**: `ocean/OceanControlsWindow` →
   `app/ui`. Гейт типа D.
+
+  **Сделано R10.1 (2026-11-27).** Якорь сдвинулся: списков было два — кадр (`EditorController.cpp:4631-4712`,
+  `drawPanel` × 12, последний после всплывающего окна) и меню «Window» (`:4242-4267`, × 11), и в обоих ещё числилась
+  `modelChat`, давно влитая в Command Bar. Теперь у панели свой порядок и место (`IEditorPanel::Order`, `Slot`:
+  окна или после них — гизмо вьюпорта, ему нужен захват мыши окон этого кадра), заданные там же, где она регистрируется
+  (`EditorLambdaPanel(..., order, slot)`); `EditorExtensionRegistry::RegisterPanel` держит список в порядке (устойчивая
+  вставка: равные — как регистрировали); кадр и меню обходят `Panels()`. Порядок — меню (Content Browser, Outliner,
+  Inspector, History, Command Bar, Import, Mesh, Material, Level Errors, Build); в кадре Content Browser теперь рисуется до
+  Outliner (было наоборот). Правило AGENTS.md «панель должна быть в списке `drawPanel`» и абзац заметки
+  `editor_and_model.md` переписаны. Проверено: Debug, Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF;
+  обе регрессии PASS, новая — `inspector_regression` `TestPanelRegistryIsTheList` (зарегистрированы вразнобой — выходят по
+  порядку, равные — как регистрировали, место сохраняется). Снимок редактора (wind_test, панели по
+  `editor_state.json`, ветер и время заморожены, `imgui.ini` и `editor_state.json` возвращаются перед каждым запуском;
+  эталон — Release_Editor на R7.3, по очереди A B A B): эталон-эталон 0.024 %, новый-новый 0.202 %, эталон-новый 0.173 /
+  0.079 % — карта отличий только во вьюпорте (вода, листва), панели совпадают до пикселя; все шесть окон на месте.
+  Контроль: реестр без порядка (как регистрировали) — `inspector_regression` FAIL «panels come back in their order»; файл
+  возвращён побайтно.
 - **R11. Сборка.** Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
   `TaskSystemEnki.cpp`, `TaskSystemTBB.cpp` (**В4**), папка `bckp/`; `Renderer::InitFence` — пустая обёртка
   «для совместимости» (`Renderer.h:291`, `Renderer.cpp:399`, `:402-405`). Одноимённый `FrameScheduler::InitFence`

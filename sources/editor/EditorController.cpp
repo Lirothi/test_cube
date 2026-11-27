@@ -3392,7 +3392,7 @@ void EditorController::Draw(
                         action.type == ContentBrowserAction::Type::OpenLevelPreservingCamera;
                     RequestOpenLevelPath(panelCtx.levelManager, asset->path, preserveCamera);
                 }
-            }));
+            }, 10)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "importAssets",
@@ -3431,7 +3431,7 @@ void EditorController::Draw(
                         }
                     }
                 }
-            }));
+            }, 60)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "meshEditor",
@@ -3449,7 +3449,7 @@ void EditorController::Draw(
                         materialEditor_.Open(materialName, materialPath);
                         showMaterialEditor_ = true;
                     });
-            }));
+            }, 70)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "materialEditor",
@@ -3461,7 +3461,7 @@ void EditorController::Draw(
                 // I2: edit a data/materials/<name>.json (textures/params/flags/shader). Save
                 // re-registers the preset, evicts its cache, and respawns referencing objects.
                 materialEditor_.Draw(panelCtx, assetRegistry_, &showMaterialEditor_);
-            }));
+            }, 80)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "buildDistribution",
@@ -3505,7 +3505,7 @@ void EditorController::Draw(
                     return false;
                 };
                 buildDistPanel_.Draw(&showBuildDistPanel_, hooks);
-            }));
+            }, 100)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "levelErrors",
@@ -3552,7 +3552,7 @@ void EditorController::Draw(
                     ImGui::PopID();
                 }
                 ImGui::End();
-            }));
+            }, 90)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "sceneOutliner",
@@ -3653,7 +3653,7 @@ void EditorController::Draw(
                     RunEditorAction(EditorActionContext{ panelCtx, assetRegistry_, extensions_ }, commandStack_,
                         MakeActionIntent("setEnabled", params), outlinerAction.targets, levelStatus_);
                 }
-            }));
+            }, 20)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "inspector",
@@ -3665,7 +3665,7 @@ void EditorController::Draw(
                 inspector_.Draw(panelCtx, commandStack_, assetRegistry_, extensions_, &showInspector_);
                 // A course's "Race the bots" (EditorRaceTracks.h): the grid is set, the session starts at this frame's end.
                 if (editorrace::TakeBotRacePlay()) { playRequest_ = PlayRequest{ PlayRequest::Kind::Play, false, true }; }
-            }));
+            }, 30)); // R10.1: its order
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
             "commandHistory",
@@ -3675,7 +3675,7 @@ void EditorController::Draw(
             [this](EditorContext& panelCtx)
             {
                 commandHistory_.Draw(panelCtx, commandStack_, &showCommandHistory_);
-            }));
+            }, 40)); // R10.1: its order
 
         // E8: registered only when something can actually parse a phrase. With no source
         // available the panel is not hidden or greyed out -- it is not there at all, because
@@ -3691,7 +3691,7 @@ void EditorController::Draw(
                 {
                     commandBar_.Draw(panelCtx, commandStack_, assetRegistry_, extensions_,
                         buryDepthPercent_, &showCommandBar_);
-                }));
+                }, 50)); // R10.1: its order
         }
 
         // THE MODEL CHAT PANEL IS GONE, folded into the Command Bar. It was the same model
@@ -3709,7 +3709,7 @@ void EditorController::Draw(
             [this](EditorContext& panelCtx)
             {
                 viewportGizmo_.Update(panelCtx, commandStack_, assetRegistry_, extensions_);
-            }));
+            }, 0, EditorPanelSlot::AfterWindows)); // R10.1: its order (drawn after the windows)
 
         extensionsRegistered_ = true;
     }
@@ -4239,32 +4239,20 @@ void EditorController::Draw(
             }
             if (ImGui::BeginMenu("Window"))
             {
-                const auto drawPanelMenuItem = [this](const char* panelId)
+                // R10.1: every registered panel that shows in the list, in its order (the registry's) -- no list of names.
+                for (const std::unique_ptr<IEditorPanel>& panel : extensions_.Panels())
                 {
-                    IEditorPanel* panel = extensions_.FindPanel(panelId);
-                    if (!panel || !panel->ShowInWindowList())
+                    if (!panel->ShowInWindowList())
                     {
-                        return;
+                        continue;
                     }
-
                     bool visible = panel->IsVisible();
                     const std::string label(panel->Label());
                     if (ImGui::MenuItem(label.c_str(), nullptr, &visible))
                     {
                         panel->SetVisible(visible);
                     }
-                };
-                drawPanelMenuItem("contentBrowser");
-                drawPanelMenuItem("sceneOutliner");
-                drawPanelMenuItem("inspector");
-                drawPanelMenuItem("commandHistory");
-                drawPanelMenuItem("commandBar");
-                drawPanelMenuItem("modelChat");
-                drawPanelMenuItem("importAssets");
-                drawPanelMenuItem("meshEditor");
-                drawPanelMenuItem("materialEditor");
-                drawPanelMenuItem("levelErrors");
-                drawPanelMenuItem("buildDistribution");
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Session Log", nullptr, logWindowOpen))
                 {
@@ -4628,38 +4616,21 @@ void EditorController::Draw(
 
     harness::EditorChatFrame(scriptHost);
 
-    const auto drawPanel = [this, &ctx](const char* panelId)
+    // R10.1: the panels in the slot, each visible one in its order (the registry's). Until R10.1 this was a list of names
+    // beside the registration, and registering a panel was not drawing it: a panel left out of the list existed, toggled
+    // from the Window menu, persisted its visibility -- and never appeared (twice, until a screenshot showed the gap); a
+    // panel that went (the model chat, folded into the Command Bar) stayed named in it.
+    const auto drawPanels = [this, &ctx](EditorPanelSlot slot)
     {
-        IEditorPanel* panel = extensions_.FindPanel(panelId);
-        if (panel && panel->IsVisible())
+        for (const std::unique_ptr<IEditorPanel>& panel : extensions_.Panels())
         {
-            panel->Draw(ctx);
+            if (panel->Slot() == slot && panel->IsVisible())
+            {
+                panel->Draw(ctx);
+            }
         }
     };
-
-    // Each panel is registered, then drawn in the same order as before. The
-    // viewport/gizmo panel runs after ImGui windows so mouse capture is current.
-    drawPanel("sceneOutliner");
-    drawPanel("contentBrowser");
-    drawPanel("inspector");
-    drawPanel("commandHistory");
-    // Registering a panel is not the same as drawing one: this list is what actually puts
-    // it on screen, and leaving a panel out of it produces a window that exists, toggles
-    // from the Window menu, persists its visibility -- and never appears. Which is exactly
-    // what happened to these two until a screenshot showed the gap.
-    drawPanel("commandBar");
-    drawPanel("modelChat");
-    // The chat judged a message to be an edit rather than a question, so hand the phrase to
-    // the Command Bar and open that window. Read HERE rather than inside the panel's own
-    // lambda because that lambda is registered once and would have to capture an
-    // EditorActionContext that is rebuilt every frame. What lands there is a PREVIEW waiting
-    // to be confirmed -- the chat can start an edit, but it cannot commit one, and a preview
-    // in a window nobody opened is the same as no preview at all.
-    drawPanel("importAssets");
-    drawPanel("meshEditor");
-    drawPanel("materialEditor");
-    drawPanel("levelErrors");
-    drawPanel("buildDistribution");
+    drawPanels(EditorPanelSlot::Window);
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {
@@ -4709,7 +4680,7 @@ void EditorController::Draw(
         }
         ImGui::EndPopup();
     }
-    drawPanel("viewportGizmo");
+    drawPanels(EditorPanelSlot::AfterWindows); // the viewport's gizmo: after the windows, so the mouse's capture is current
     {
         CPU_SCOPE(ProfilerScopes::kEditorSyncSceneSelection);
         selectionOutlineRadius_ = std::clamp(selectionOutlineRadius_, 1, 8);

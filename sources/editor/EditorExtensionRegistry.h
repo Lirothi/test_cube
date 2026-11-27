@@ -13,6 +13,10 @@
 struct EditorContext;
 class EditorCommandStack;
 
+// Architecture plan R10.1: where in the editor's frame a panel is drawn. Windows: with the other windows, in Order();
+// AfterWindows: after them and the frame's popups (the viewport's gizmo: the mouse's capture is the windows' by then).
+enum class EditorPanelSlot : unsigned char { Window, AfterWindows };
+
 class IEditorPanel
 {
 public:
@@ -24,6 +28,11 @@ public:
     virtual bool IsVisible() const = 0;
     virtual void SetVisible(bool visible) = 0;
     virtual void Draw(EditorContext& ctx) = 0;
+    // R10.1: the registry is the list: the frame draws and the Window menu lists every registered panel in Order() (lowest
+    // first), in its Slot() -- no second list of names that a new panel must also be added to (it showed nowhere until it
+    // was, twice; and a panel that went stayed named in both lists).
+    virtual int Order() const = 0;
+    virtual EditorPanelSlot Slot() const = 0;
 };
 
 class IEditorObjectFactory
@@ -61,7 +70,9 @@ public:
         std::string label,
         bool* visible,
         bool showInWindowList,
-        DrawFn draw);
+        DrawFn draw,
+        int order,
+        EditorPanelSlot slot = EditorPanelSlot::Window);
 
     std::string_view Id() const override { return id_; }
     std::string_view Label() const override { return label_; }
@@ -69,6 +80,8 @@ public:
     bool IsVisible() const override;
     void SetVisible(bool visible) override;
     void Draw(EditorContext& ctx) override;
+    int Order() const override { return order_; }
+    EditorPanelSlot Slot() const override { return slot_; }
 
 private:
     std::string id_;
@@ -76,6 +89,8 @@ private:
     bool* visible_ = nullptr;
     bool showInWindowList_ = true;
     DrawFn draw_;
+    int order_ = 0;
+    EditorPanelSlot slot_ = EditorPanelSlot::Window;
 };
 
 class EditorExtensionRegistry
@@ -90,6 +105,7 @@ public:
     const IEditorObjectFactory* FindObjectFactory(std::string_view type) const;
     const IEditorPropertyDrawer* FindPropertyDrawer(std::string_view type) const;
 
+    // R10.1: in Order() (RegisterPanel keeps them so): what the editor's frame draws and its Window menu lists.
     const std::vector<std::unique_ptr<IEditorPanel>>& Panels() const { return panels_; }
     const std::vector<std::unique_ptr<IEditorObjectFactory>>& ObjectFactories() const { return objectFactories_; }
 

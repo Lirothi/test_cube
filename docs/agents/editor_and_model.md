@@ -268,7 +268,10 @@ object of that NAME, quoted when it has a space (`--inspect="small_yacht 001#end
 one string -- a Python list quotes the switch's name with it), any group scrolling to the Inspector's end, where the
 type's own rows are (Physics, Buoyancy); the log says `--inspect: selected object '<name>'`.
 
-**Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
-hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
-Window menu, persists its visibility -- and never appears. Two panels shipped that way until a
-screenshot showed the gap, because no headless gate can see ImGui wiring.
+**Registering a panel is drawing it (since R10.1, 2026-11-27).** `EditorController::Draw` ended with a
+hardcoded list of `drawPanel("<id>")` calls (and the Window menu with another); a panel missing from it existed, toggled
+from the Window menu, persisted its visibility -- and never appeared. Two panels shipped that way until a screenshot
+showed the gap, because no headless gate can see ImGui wiring; a panel that went (the model chat) stayed named in both
+lists. Now the frame and the menu walk the registry (`EditorExtensionRegistry::Panels`, kept in each panel's `Order()`,
+drawn in its `Slot()`: the windows, or after them -- the viewport's gizmo); `inspector_regression`
+`TestPanelRegistryIsTheList` holds the order.
