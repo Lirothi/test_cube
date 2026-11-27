@@ -1,6 +1,7 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "app/levels/LevelMigration.h" // R9.5: an older level read as today's
 #include "app/scene/TimeOfDaySettingsJson.h" // T4: WithAllKeys
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <exception>
@@ -18,7 +19,7 @@ namespace
         {
             return def;
         }
-        return Math::float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+        return Math::float3(jsonfield::As(j[0], def.x), jsonfield::As(j[1], def.y), jsonfield::As(j[2], def.z)); // R9.6c
     }
 
     // Keys lifted into EditorObject; everything else stays in `properties` so it
@@ -133,8 +134,8 @@ EditorObject EditorSceneDocument::ObjectFromJson(EditorObjectId id, const nlohma
 {
     EditorObject obj;
     obj.id = id;
-    obj.type = o.value("type", std::string());
-    obj.enabled = o.value("enabled", true);
+    obj.type = jsonfield::Value(o, "type", std::string());
+    obj.enabled = jsonfield::Value(o, "enabled", true);
     if (o.contains("name") && o["name"].is_string())
     {
         obj.name = o["name"].get<std::string>();

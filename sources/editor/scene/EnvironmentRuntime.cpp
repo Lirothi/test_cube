@@ -8,6 +8,7 @@
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -50,7 +51,7 @@ namespace
         const auto it = p.find(key);
         if (it != p.end() && it->is_array() && it->size() >= 3)
         {
-            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            return Math::float3(jsonfield::As((*it)[0], def.x), jsonfield::As((*it)[1], def.y), jsonfield::As((*it)[2], def.z)); // R9.6c
         }
         return def;
     }
@@ -64,7 +65,7 @@ namespace
         for (const EditorObject& e : doc.Environment())
         {
             if (e.type != target.type) { continue; }
-            const bool enabled = e.properties.value("enabled", true);
+            const bool enabled = jsonfield::Value(e.properties, "enabled", true);
             if (e.id.value == target.id.value) { return enabled ? idx : -1; }
             if (enabled) { ++idx; }
         }
@@ -78,7 +79,7 @@ namespace
 
     void ApplySkybox(EditorContext& ctx, const nlohmann::json& p)
     {
-        const std::string texture = p.value("texture", std::string());
+        const std::string texture = jsonfield::Value(p, "texture", std::string());
 
         // R16.10: Apply parked the render thread; the old sky goes through render::deferred (Scene::SetSkybox) and the
         // new one's upload with the next hand-over -- no GPU idle (it was a WaitForPreviousFrame and a SubmitAndWait).
@@ -315,8 +316,8 @@ void EnvironmentRuntime::ApplyChange(
 {
     threading::WaitRenderForGame("EnvironmentRuntime::ApplyChange"); // as Apply
     const bool enabledChanged =
-        env.properties.value("enabled", true) !=
-        previous.properties.value("enabled", true);
+        jsonfield::Value(env.properties, "enabled", true) !=
+        jsonfield::Value(previous.properties, "enabled", true);
 
     if (env.type == "pointLight" || env.type == "spotLight")
     {
@@ -333,9 +334,9 @@ void EnvironmentRuntime::ApplyChange(
 
     if (env.type == "ocean")
     {
-        const std::string preset = env.properties.value("preset", std::string());
+        const std::string preset = jsonfield::Value(env.properties, "preset", std::string());
         const std::string previousPreset =
-            previous.properties.value("preset", std::string());
+            jsonfield::Value(previous.properties, "preset", std::string());
         if (preset != previousPreset && !preset.empty())
         {
             if (OceanSimulation* ocean = Systems::GetOceanSimulation())
@@ -366,7 +367,7 @@ void EnvironmentRuntime::ApplyChange(
             }
         }
 
-        ctx.scene.SetOceanVisible(env.properties.value("enabled", true));
+        ctx.scene.SetOceanVisible(jsonfield::Value(env.properties, "enabled", true));
         Apply(ctx, env);
         return;
     }
@@ -452,7 +453,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
     for (const EditorObject& e : ctx.document.Environment())
     {
         const nlohmann::json& p = e.properties;
-        if (!p.value("enabled", true)) { continue; }
+        if (!jsonfield::Value(p, "enabled", true)) { continue; }
         if (e.type == "spotLight")
         {
             SpotLightDesc d;

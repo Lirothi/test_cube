@@ -1,5 +1,6 @@
 #include "editor/ui/ImportPanel.h"
 #include "core/memory/MemScope.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -260,7 +261,7 @@ namespace
         const nlohmann::json manifest = nlohmann::json::parse(
             file, nullptr, false, true);
         if (manifest.is_discarded() || !manifest.is_object()) { return 0.0f; }
-        const float scale = manifest.value("spawnScale", 0.0f);
+        const float scale = jsonfield::Value(manifest, "spawnScale", 0.0f);
         return scale > 0.0f ? scale : 0.0f;
     }
 
@@ -394,7 +395,7 @@ namespace
                 nlohmann::json existing = nlohmann::json::parse(
                     existingFile, nullptr, false, true);
                 if (!existing.is_discarded() && existing.is_object() &&
-                    existing.value("version", 0) == 1 &&
+                    jsonfield::Value(existing, "version", 0) == 1 &&
                     existing.contains("sources") && existing["sources"].is_array())
                 {
                     std::set<std::string> replaced;
@@ -429,8 +430,7 @@ namespace
                         merged.push_back(entry);
                     }
                     manifest["sources"] = std::move(merged);
-                    manifest["trackAllSources"] = existing.value(
-                        "trackAllSources", false);
+                    manifest["trackAllSources"] = jsonfield::Value(existing, "trackAllSources", false);
                     if (existing.contains("spawnScale"))
                     {
                         manifest["spawnScale"] = existing["spawnScale"];
@@ -1010,22 +1010,22 @@ namespace
             // Reproduce the asset's OWN settings (same keys the Mesh Editor's Save reads).
             // Defaults here MUST equal MeshLoadOptions' defaults — the writer below erases
             // default-valued keys.
-            bakeOpt.lodRatioScale = asset.value("lodRatioScale", 1.0f);
-            bakeOpt.lodErrorScale = asset.value("lodErrorScale", 1.0f);
+            bakeOpt.lodRatioScale = jsonfield::Value(asset, "lodRatioScale", 1.0f);
+            bakeOpt.lodErrorScale = jsonfield::Value(asset, "lodErrorScale", 1.0f);
             bakeOpt.lodSimplifyOptions =
-                (asset.value("lodPermissive", false) ? meshopt_SimplifyPermissive : 0u) |
-                (asset.value("lodDropSmallParts", false) ? meshopt_SimplifyPrune : 0u);
+                (jsonfield::Value(asset, "lodPermissive", false) ? meshopt_SimplifyPermissive : 0u) |
+                (jsonfield::Value(asset, "lodDropSmallParts", false) ? meshopt_SimplifyPrune : 0u);
             if (const auto la = asset.find("lod3Aggressive"); la != asset.end() && la->is_boolean()) { bakeOpt.lod3Aggressive = la->get<bool>(); }
             else { bakeOpt.lod3Aggressive.reset(); } // absent = harsh only with a foliage slot (Lod3AggressiveOf)
-            bakeOpt.lod3RatioScale = asset.value("lod3RatioScale", 1.0f);
-            bakeOpt.lod3ErrorScale = asset.value("lod3ErrorScale", 1.0f);
-            bakeOpt.foliagePruneKeep = asset.value("foliagePruneKeep", 0.35f);
-            bakeOpt.foliageInnerRatio = asset.value("foliageInnerRatio", 0.5f);
-            bakeOpt.foliageInnerError = asset.value("foliageInnerError", 0.15f);
-            bakeOpt.foliageGrow = asset.value("foliageGrow", 1.0f);
-            bakeOpt.foliageUvWeight = asset.value("foliageUvWeight", 0.0f);
-            bakeOpt.lodNormalWeight = asset.value("lodNormalWeight", 0.0f);
-            bakeOpt.bakeScale = asset.value("bakeScale", 1.0f);
+            bakeOpt.lod3RatioScale = jsonfield::Value(asset, "lod3RatioScale", 1.0f);
+            bakeOpt.lod3ErrorScale = jsonfield::Value(asset, "lod3ErrorScale", 1.0f);
+            bakeOpt.foliagePruneKeep = jsonfield::Value(asset, "foliagePruneKeep", 0.35f);
+            bakeOpt.foliageInnerRatio = jsonfield::Value(asset, "foliageInnerRatio", 0.5f);
+            bakeOpt.foliageInnerError = jsonfield::Value(asset, "foliageInnerError", 0.15f);
+            bakeOpt.foliageGrow = jsonfield::Value(asset, "foliageGrow", 1.0f);
+            bakeOpt.foliageUvWeight = jsonfield::Value(asset, "foliageUvWeight", 0.0f);
+            bakeOpt.lodNormalWeight = jsonfield::Value(asset, "lodNormalWeight", 0.0f);
+            bakeOpt.bakeScale = jsonfield::Value(asset, "bakeScale", 1.0f);
         }
         // A node split out of a multi-object glTF sits where that file's LAYOUT put it -- fern_02's
         // variants stand a metre apart, so three of them baked with the pivot beside the plant. On a
@@ -1134,7 +1134,7 @@ namespace
             // barely moved the palms beside it. Scaling the strength by the plant's height keeps
             // the LEAN roughly equal across sizes; the floor keeps the smallest tufts alive.
             constexpr float kWindReferenceHeightM = 6.0f;
-            const float spawn = asset.value("spawnScale", 1.0f);
+            const float spawn = jsonfield::Value(asset, "spawnScale", 1.0f);
             const float heightM = bakedHeightM * (spawn > 0.0f ? spawn : 1.0f);
             const float strength = heightM > 0.0f
                 ? std::round(std::clamp(heightM / kWindReferenceHeightM, 0.1f, 1.0f) * 100.0f) / 100.0f

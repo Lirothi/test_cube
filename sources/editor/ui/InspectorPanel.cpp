@@ -2,6 +2,7 @@
 #include "app/scene/GtaoSettingsJson.h"
 #include "rendering/core/PhotographicSettingsJson.h" // E1: the curve plot parses as the runtime does
 #include "rendering/lighting/TimeOfDaySettings.h"    // the moon's light colour default
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -79,7 +80,7 @@ namespace
         const auto it = p.find(key);
         if (it != p.end() && it->is_array() && it->size() >= 3)
         {
-            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            return Math::float3(jsonfield::As((*it)[0], def.x), jsonfield::As((*it)[1], def.y), jsonfield::As((*it)[2], def.z));
         }
         return def;
     }
@@ -121,7 +122,7 @@ namespace
         {
             return false;
         }
-        outEnabled = environment->properties.value("enabled", true);
+        outEnabled = jsonfield::Value(environment->properties, "enabled", true);
         return true;
     }
 
@@ -234,7 +235,7 @@ namespace
             return;
         }
 
-        const std::string current = object.properties.value("mesh", std::string());
+        const std::string current = jsonfield::Value(object.properties, "mesh", std::string());
         const EditorAssetRecord* currentRecord = FindMeshAsset(registry, current);
 
         std::string currentLabel;
@@ -248,7 +249,7 @@ namespace
         }
         else
         {
-            const std::string legacyModel = object.properties.value("model", std::string());
+            const std::string legacyModel = jsonfield::Value(object.properties, "model", std::string());
             currentLabel = legacyModel.empty()
                 ? std::string("(none)")
                 : std::filesystem::path(legacyModel).filename().string() + " (legacy)";
@@ -301,7 +302,7 @@ namespace
             return;
         }
 
-        const std::string meshKey = object.properties.value("mesh", std::string());
+        const std::string meshKey = jsonfield::Value(object.properties, "mesh", std::string());
         const EditorAssetRecord* meshAsset = FindMeshAsset(registry, meshKey);
         const bool canOpenMesh = meshAsset && static_cast<bool>(ctx.openMeshEditor);
         ImGui::BeginDisabled(!canOpenMesh);
@@ -535,7 +536,7 @@ namespace
             env.type == "pointLight" || env.type == "spotLight" || env.type == "ocean";
         if (showEnabled && supportsEnable)
         {
-            bool enabled = tgt().value("enabled", true);
+            bool enabled = jsonfield::Value(tgt(), "enabled", true);
             if (ImGui::Checkbox("Enabled", &enabled))
             {
                 nlohmann::json after = withField("enabled", enabled);
@@ -589,7 +590,7 @@ namespace
         };
         auto checkB = [&](const char* label, const char* key, bool def)
         {
-            bool v = tgt().value(key, def);
+            bool v = jsonfield::Value(tgt(), key, def);
             if (ImGui::Checkbox(label, &v))
             {
                 nlohmann::json after = withField(key, v);
@@ -599,7 +600,7 @@ namespace
         // Plan L: when a light comes on (rendering/lighting/NightLamps.h); the key is absent while it is "always".
         auto onAtCombo = [&]()
         {
-            const LampSwitch current = LampSwitchFromName(tgt().value("onAt", std::string()));
+            const LampSwitch current = LampSwitchFromName(jsonfield::Value(tgt(), "onAt", std::string()));
             static const char* const kLabels[] = { "Always", "At night", "By day" };
             int index = static_cast<int>(current);
             if (ImGui::Combo("On At", &index, kLabels, 3) && index != static_cast<int>(current))
@@ -636,7 +637,7 @@ namespace
                           "exposure multiplier is exactly 1.0 AND no metering work is scheduled, so "
                           "the frame is bit-for-bit what it was before any of this existed - off is "
                           "a true no-op, not a neutral value being applied.");
-            if (!tgt().value("enabled", false))
+            if (!jsonfield::Value(tgt(), "enabled", false))
             {
                 ImGui::TextDisabled("Dormant: exposure multiplier is exactly 1.0.");
             }
@@ -647,7 +648,7 @@ namespace
                           "every pixel in the frame shifts including ones the feature never "
                           "touched.");
 
-            const bool automatic = tgt().value("autoExposure", true);
+            const bool automatic = jsonfield::Value(tgt(), "autoExposure", true);
             if (automatic)
             {
                 ImGui::SeparatorText("Target");
@@ -961,7 +962,7 @@ namespace
                                            JsonFloat(tgt(), "shutterSpeedSec", 1.0f / 125.0f),
                                            JsonFloat(tgt(), "isoSensitivity", 100.0f)) -
                    JsonFloat(tgt(), "manualCompensationEv", 0.0f));
-            const float multiplier = tgt().value("enabled", false)
+            const float multiplier = jsonfield::Value(tgt(), "enabled", false)
                 ? render::ExposureMultiplierFromEv100(shownEv)
                 : render::kIdentityExposureMultiplier;
             ImGui::TextDisabled(automatic
@@ -1154,7 +1155,7 @@ namespace
         {
             // P3C. Same set the dev window exposes, so a look tuned live can be written into the
             // level here rather than only through the clipboard button.
-            const std::string curve = tgt().value("toneCurve", std::string("legacy"));
+            const std::string curve = jsonfield::Value(tgt(), "toneCurve", std::string("legacy"));
             int curveIndex = (curve == "agx") ? 1 : ((curve == "filmic" || curve == "film") ? 2 : 0);
             {
                 const char* kCurveNames[] = { "Legacy (ACES fit)", "AgX", "Filmic (Unreal)" };
@@ -1297,7 +1298,7 @@ namespace
             // P6B. Every tooltip states the PERFORMANCE consequence as well as the look one, because
             // three of these knobs are linear in GPU cost and that is not guessable from the name.
             {
-                bool gtaoEnabled = tgt().value("enabled", false);
+                bool gtaoEnabled = jsonfield::Value(tgt(), "enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &gtaoEnabled);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = gtaoEnabled; }
@@ -1331,7 +1332,7 @@ namespace
                           "behaviour). At 0 the second walk's COMPUTE PATH is off entirely - the "
                           "same exact no-op as Sky Radius at the bottom, kept as its own switch.");
             {
-                int skyMip = static_cast<int>(tgt().value("skyMipBias", 2u));
+                int skyMip = static_cast<int>(jsonfield::Value(tgt(), "skyMipBias", 2u));
                 const bool changed = ImGui::SliderInt("Sky Mip Bias", &skyMip, 0, 5);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["skyMipBias"] = static_cast<std::uint32_t>(skyMip < 0 ? 0 : skyMip); }
@@ -1352,7 +1353,7 @@ namespace
 
             ImGui::SeparatorText("Quality (these cost GPU time)");
             {
-                int angles = static_cast<int>(tgt().value("numAngles", 2u));
+                int angles = static_cast<int>(jsonfield::Value(tgt(), "numAngles", 2u));
                 const bool changed = ImGui::SliderInt("Directions", &angles, 1, 8);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["numAngles"] = static_cast<std::uint32_t>(angles < 1 ? 1 : angles); }
@@ -1362,7 +1363,7 @@ namespace
                           "roughly doubles the raw pass. 2 is the UE default (r.GTAO.NumAngles) and "
                           "leans on the temporal stage to average the rest over time.");
             {
-                int steps = static_cast<int>(tgt().value("numSteps", 6u));
+                int steps = static_cast<int>(jsonfield::Value(tgt(), "numSteps", 6u));
                 const bool changed = ImGui::SliderInt("Steps", &steps, 2, 16);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["numSteps"] = static_cast<std::uint32_t>(steps < 1 ? 1 : steps); }
@@ -1380,7 +1381,7 @@ namespace
 
             ImGui::SeparatorText("Filtering");
             {
-                bool denoise = tgt().value("denoise", true);
+                bool denoise = jsonfield::Value(tgt(), "denoise", true);
                 const bool changed = ImGui::Checkbox("Denoise", &denoise);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["denoise"] = denoise; }
@@ -1389,7 +1390,7 @@ namespace
             InspectorHelp("Bilateral 5x5 across depth and normal, about 0.017 ms. Removes roughly 40% "
                           "of the raw noise; off is immediately visible as per-pixel grain.");
             {
-                bool temporal = tgt().value("temporal", true);
+                bool temporal = jsonfield::Value(tgt(), "temporal", true);
                 const bool changed = ImGui::Checkbox("Temporal", &temporal);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["temporal"] = temporal; }
@@ -1417,14 +1418,14 @@ namespace
 
             ImGui::SeparatorText("Advanced");
             {
-                bool gbufferNormal = tgt().value("useGBufferNormal", false);
+                bool gbufferNormal = jsonfield::Value(tgt(), "useGBufferNormal", false);
                 const bool changed = ImGui::Checkbox("Normal from G-buffer", &gbufferNormal);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["useGBufferNormal"] = gbufferNormal; }
                 trackContinuousEdit(changed);
             }
             {
-                bool useHzb = tgt().value("useHzb", true);
+                bool useHzb = jsonfield::Value(tgt(), "useHzb", true);
                 const bool changed = ImGui::Checkbox("Use depth pyramid (HZB)", &useHzb);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["useHzb"] = useHzb; }
@@ -1447,7 +1448,7 @@ namespace
             // UE parameter it corresponds to -- and, where a UE default does NOT carry over, says
             // why. That distinction is the whole reason these numbers are not simply theirs.
             {
-                bool fogEnabled = tgt().value("enabled", false);
+                bool fogEnabled = jsonfield::Value(tgt(), "enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &fogEnabled);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = fogEnabled; }
@@ -1626,7 +1627,7 @@ namespace
             // P8. Every tooltip says where the number is measured, because the two that matter --
             // threshold and intensity -- are in units that are easy to assume wrongly.
             {
-                bool bloomEnabled = tgt().value("enabled", false);
+                bool bloomEnabled = jsonfield::Value(tgt(), "enabled", false);
                 const bool changed = ImGui::Checkbox("Enabled", &bloomEnabled);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["enabled"] = bloomEnabled; }
@@ -1638,7 +1639,7 @@ namespace
 
             ImGui::SeparatorText("Method");
             {
-                int method = static_cast<int>(tgt().value("method", 0u));
+                int method = static_cast<int>(jsonfield::Value(tgt(), "method", 0u));
                 const char* kMethods[] = { "Standard (pyramid)", "Convolution (FFT)" };
                 const bool changed = ImGui::Combo("Method", &method, kMethods, 2);
                 beginContinuousEdit(changed);
@@ -1668,7 +1669,7 @@ namespace
                           "light is PARTITIONED, not added: the scene is dimmed by exactly what the "
                           "flare takes.");
 
-            if (tgt().value("method", 0u) == 0u)
+            if (jsonfield::Value(tgt(), "method", 0u) == 0u)
             {
             ImGui::SeparatorText("Standard (pyramid) only");
             dragF("Threshold", "threshold", -1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
@@ -1688,7 +1689,7 @@ namespace
                           "default here. Lower = a longer shoulder, so highlights ease into the "
                           "bloom instead of switching on at a fixed brightness.");
             {
-                bool firefly = tgt().value("fireflyClamp", false);
+                bool firefly = jsonfield::Value(tgt(), "fireflyClamp", false);
                 const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["fireflyClamp"] = firefly; }
@@ -1705,7 +1706,7 @@ namespace
                           "and fainter, it does not get brighter.");
             }
 
-            if (tgt().value("method", 0u) == 1u)
+            if (jsonfield::Value(tgt(), "method", 0u) == 1u)
             {
                 ImGui::SeparatorText("Kernel (convolution only)");
                 // P8C-2r: WHICH image. Everything downstream -- placement, the core clamp, the
@@ -1731,7 +1732,7 @@ namespace
                         }
                         std::sort(kernels.begin(), kernels.end());
                     }
-                    const std::string cur = tgt().value("convKernel", std::string("textures/BloomKernelStar.dds"));
+                    const std::string cur = jsonfield::Value(tgt(), "convKernel", std::string("textures/BloomKernelStar.dds"));
                     int sel = -1;
                     std::vector<const char*> items;
                     items.reserve(kernels.size());
@@ -1772,7 +1773,7 @@ namespace
                     {
                         for (int i = 0; i < 3; ++i)
                         {
-                            ktint[i] = tgt()["convKernelTint"][i].get<float>();
+                            ktint[i] = jsonfield::As(tgt()["convKernelTint"][i], ktint[i]);
                         }
                     }
                     const bool changed = ImGui::ColorEdit3("Kernel Tint", ktint,
@@ -1882,7 +1883,7 @@ namespace
                 {
                     for (int i = 0; i < 3; ++i)
                     {
-                        tint[i] = tgt()["convAnamorphicTint"][i].get<float>();
+                        tint[i] = jsonfield::As(tgt()["convAnamorphicTint"][i], tint[i]);
                     }
                 }
                 const bool changed = ImGui::ColorEdit3("Anamorphic Tint", tint,
@@ -1896,7 +1897,7 @@ namespace
 
             ImGui::SeparatorText("Lens Ghosts (any bloom method)");
             {
-                int ghosts = static_cast<int>(tgt().value("convGhosts", 0u));
+                int ghosts = static_cast<int>(jsonfield::Value(tgt(), "convGhosts", 0u));
                 const bool changed = ImGui::SliderInt("Ghost Count", &ghosts, 0, 8);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["convGhosts"] = static_cast<std::uint32_t>(ghosts < 0 ? 0 : ghosts); }
@@ -1910,7 +1911,7 @@ namespace
                           "rest mirrored through the centre). No sun position and no sprite "
                           "atlas exist anywhere: two suns give two chains for free.");
             {
-                int blades = static_cast<int>(tgt().value("convBlades", 6u));
+                int blades = static_cast<int>(jsonfield::Value(tgt(), "convBlades", 6u));
                 const bool changed = ImGui::SliderInt("Blades", &blades, 0, 12);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["convBlades"] = static_cast<std::uint32_t>(blades < 0 ? 0 : blades); }
@@ -2040,7 +2041,7 @@ namespace
                     }
                     std::sort(coronaImages.begin(), coronaImages.end());
                 }
-                const std::string cur = tgt().value("sunRaysTexture", std::string());
+                const std::string cur = jsonfield::Value(tgt(), "sunRaysTexture", std::string());
                 std::vector<const char*> items{ "(procedural)" };
                 int sel = cur.empty() ? 0 : -1;
                 for (size_t i = 0; i < coronaImages.size(); ++i)
@@ -2056,7 +2057,7 @@ namespace
             InspectorHelp("Draw the corona from a painted image (grayscale on black, for additive "
                           "use; any textures/*corona* or *glare* file) or procedurally. The image is "
                           "one texture fetch a pixel; the procedural one has the knobs below.");
-            const bool coronaFromImage = !tgt().value("sunRaysTexture", std::string()).empty();
+            const bool coronaFromImage = !jsonfield::Value(tgt(), "sunRaysTexture", std::string()).empty();
             if (coronaFromImage)
             {
                 dragF("Corona Size", "sunRaysTextureSizeDeg", 15.0f, 0.1f, 0.5f, 90.0f, "%.1f deg");
@@ -2067,7 +2068,7 @@ namespace
             else
             {
             {
-                int bundles = static_cast<int>(tgt().value("sunRaysBundles", 12u));
+                int bundles = static_cast<int>(jsonfield::Value(tgt(), "sunRaysBundles", 12u));
                 const bool changed = ImGui::SliderInt("Bundles", &bundles, 1, 64);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["sunRaysBundles"] = static_cast<std::uint32_t>(bundles < 1 ? 1 : bundles); }
@@ -2087,7 +2088,7 @@ namespace
                           "(measured within 20 % from 0 to 1). On a small corona a high strength "
                           "packs a bundle's needles into one beam.");
             {
-                int needles = static_cast<int>(tgt().value("sunRaysCount", 100u));
+                int needles = static_cast<int>(jsonfield::Value(tgt(), "sunRaysCount", 100u));
                 const bool changed = ImGui::SliderInt("Needles", &needles, 16, 1000);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["sunRaysCount"] = static_cast<std::uint32_t>(needles < 16 ? 16 : needles); }
@@ -2113,7 +2114,7 @@ namespace
             dragF("Star Spikes", "sunRaysSpikes", 0.0f, 0.01f, 0.0f, 3.0f, "%.2f");
             InspectorHelp("An extra REGULAR star on top (eyelashes, an aperture's spikes). 0 = none.");
             {
-                int spikes = static_cast<int>(tgt().value("sunRaysSpikeCount", 6u));
+                int spikes = static_cast<int>(jsonfield::Value(tgt(), "sunRaysSpikeCount", 6u));
                 const bool changed = ImGui::SliderInt("Star Spike Count", &spikes, 2, 32);
                 beginContinuousEdit(changed);
                 if (changed) { tgt()["sunRaysSpikeCount"] = static_cast<std::uint32_t>(spikes < 2 ? 2 : spikes); }
@@ -2220,7 +2221,7 @@ namespace
                 dragFlicker("Amplitude", "amplitude", 0.35f, 0.01f, 0.0f, 1.0f);
                 dragFlicker("Frequency (Hz)", "frequencyHz", 7.0f, 0.1f, 0.0f, 60.0f);
 
-                int seed = tgt()["flicker"].value("seed", 3);
+                int seed = jsonfield::Value(tgt()["flicker"], "seed", 3);
                 const bool seedChanged = ImGui::DragInt("Seed", &seed, 1.0f, 0, 1000000);
                 beginContinuousEdit(seedChanged);
                 if (seedChanged) { tgt()["flicker"]["seed"] = std::max(seed, 0); }
@@ -2328,7 +2329,7 @@ namespace
             checkB("Animate", "animate", false);
             InspectorHelp("Run the clock. Off, the level is one instant -- what is saved is what you see. "
                           "On, edits that do not touch the time keep the running clock where it is.");
-            const bool real = tgt().value("realPositions", false);
+            const bool real = jsonfield::Value(tgt(), "realPositions", false);
             if (!real)
             {
                 dragF("Day Length (min)", "dayLengthMin", 30.0f, 0.1f, 0.01f, 10000.0f, "%.1f");
@@ -2393,7 +2394,7 @@ namespace
             scrollAnchor();
             colorEdit();
             checkB("Use Colour Temperature", "useSunTemperature", false);
-            if (tgt().value("useSunTemperature", false))
+            if (jsonfield::Value(tgt(), "useSunTemperature", false))
             {
                 dragF("Temperature (K)", "sunTemperatureK", 6500.0f, 25.0f, 1000.0f, 15000.0f, "%.0f");
             }
@@ -3310,7 +3311,7 @@ namespace
                           "runs the volume's whole time loop while the clouds travel 16 formation tiles -- at "
                           "30 km/h over a 12 km tile a cloud lives 15-30 minutes. No wind, no change.");
             {
-                int seed = static_cast<int>(tgt().value("seed", 0u));
+                int seed = static_cast<int>(jsonfield::Value(tgt(), "seed", 0u));
                 if (ImGui::DragInt("Seed", &seed, 1.0f, 0, 100000))
                 {
                     nlohmann::json after = withField("seed", static_cast<unsigned>(std::max(seed, 0)));
@@ -3421,7 +3422,7 @@ namespace
             InspectorHelp("UE MultiScatteringEclipse: how much each octave keeps the phase's "
                           "direction. Lower makes the extra light more even.");
             {
-                int octaves = static_cast<int>(tgt().value("msOctaves", 2u));
+                int octaves = static_cast<int>(jsonfield::Value(tgt(), "msOctaves", 2u));
                 if (ImGui::SliderInt("Multi-scatter Octaves", &octaves, 0, 2))
                 {
                     nlohmann::json after = withField("msOctaves", static_cast<unsigned>(std::clamp(octaves, 0, 2)));
@@ -3455,7 +3456,7 @@ namespace
 
             ImGui::SeparatorText("Tracing");
             {
-                int samples = static_cast<int>(tgt().value("viewSampleCountMax", 128u));
+                int samples = static_cast<int>(jsonfield::Value(tgt(), "viewSampleCountMax", 128u));
                 if (ImGui::DragInt("View Samples (max)", &samples, 1.0f, 4, 768))
                 {
                     nlohmann::json after = withField("viewSampleCountMax", static_cast<unsigned>(std::clamp(samples, 4, 768)));
@@ -3466,7 +3467,7 @@ namespace
                           "divided by this, constant for shorter rays (3 km / 128 = 23 m). This is where the "
                           "cost is: 0.43 ms at 128, 0.71 at 256 (2560 x 1440, DLSS Balanced).");
             {
-                int samples = static_cast<int>(tgt().value("viewSampleCountMin", 2u));
+                int samples = static_cast<int>(jsonfield::Value(tgt(), "viewSampleCountMin", 2u));
                 if (ImGui::DragInt("View Samples (min)", &samples, 1.0f, 1, 768))
                 {
                     nlohmann::json after = withField("viewSampleCountMin", static_cast<unsigned>(std::clamp(samples, 1, 768)));
@@ -3482,7 +3483,7 @@ namespace
             InspectorHelp("UE DistanceToSampleMaxCount: the ray length View Samples are spread over (UE 15 km). "
                           "Shorter = finer steps, the same count: sharper edges through a thin layer.");
             {
-                int samples = static_cast<int>(tgt().value("shadowSampleCount", 4u));
+                int samples = static_cast<int>(jsonfield::Value(tgt(), "shadowSampleCount", 4u));
                 if (ImGui::DragInt("Sun Shadow Samples", &samples, 1.0f, 1, 80))
                 {
                     nlohmann::json after = withField("shadowSampleCount", static_cast<unsigned>(std::clamp(samples, 1, 80)));
@@ -3538,7 +3539,7 @@ namespace
             dragF("Shadow Depth Bias (km)", "shadowDepthBiasKm", 0.0f, 0.01f, -5.0f, 5.0f, "%.2f");
             InspectorHelp("UE CloudShadowDepthBias: pushes the recorded cloud front along the light.");
             {
-                int samples = static_cast<int>(tgt().value("shadowMapSampleCount", 16u));
+                int samples = static_cast<int>(jsonfield::Value(tgt(), "shadowMapSampleCount", 16u));
                 if (ImGui::DragInt("Shadow Map Samples", &samples, 1.0f, 4, 128))
                 {
                     nlohmann::json after = withField("shadowMapSampleCount", static_cast<unsigned>(std::clamp(samples, 4, 128)));
@@ -3647,7 +3648,7 @@ namespace
             // procedural level still needs a cubemap named here, because `JsonLevel` only creates
             // the Skybox object -- the thing that draws the atmosphere -- when one is.
             ImGui::EndDisabled();
-            const std::string current = tgt().value("texture", std::string());
+            const std::string current = jsonfield::Value(tgt(), "texture", std::string());
             const std::string currentLabel = current.empty()
                 ? std::string("(none)")
                 : std::filesystem::path(current).filename().string();
@@ -3701,7 +3702,7 @@ namespace
             }
 
             char buf[512];
-            std::snprintf(buf, sizeof(buf), "%s", tgt().value("texture", std::string()).c_str());
+            std::snprintf(buf, sizeof(buf), "%s", jsonfield::Value(tgt(), "texture", std::string()).c_str());
             const float applyButtonWidth = ImGui::CalcTextSize("Apply Texture").x +
                 ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SetNextItemWidth(std::max(120.0f,
@@ -3742,7 +3743,7 @@ namespace
             else
             {
                 // Preset (reference): changing it reloads the sim live.
-                const std::string curPreset = tgt().value("preset", std::string());
+                const std::string curPreset = jsonfield::Value(tgt(), "preset", std::string());
                 const std::string curLabel = std::filesystem::path(curPreset).filename().string();
                 if (ImGui::BeginCombo("Preset", curLabel.empty() ? "(none)" : curLabel.c_str()))
                 {
@@ -4893,7 +4894,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
     bool changed = false;
 
     const char* shapes[] = { "circle", "rect", "spline" };
-    const std::string current = object.properties.value("shape", "circle");
+    const std::string current = jsonfield::Value(object.properties, "shape", "circle");
     int shapeIndex = current == "rect" ? 1 : current == "spline" ? 2 : 0;
     if (ImGui::Combo("Shape", &shapeIndex, shapes, IM_ARRAYSIZE(shapes)))
     {
@@ -4902,8 +4903,8 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         // to a circle. Seed it from the size it already had, so the change is visible.
         if (shapeIndex == 2 && editorzone::LocalPoints(object).size() < 2)
         {
-            const float size = std::max(object.properties.value("radius", 25.0f),
-                object.properties.value("halfX", 25.0f));
+            const float size = std::max(jsonfield::Value(object.properties, "radius", 25.0f),
+                jsonfield::Value(object.properties, "halfX", 25.0f));
             editorzone::StoreLocalPoints(object, {
                 Math::float3(-size, 0.0f, -size * 0.4f),
                 Math::float3(-size * 0.35f, 0.0f, size * 0.45f),
@@ -4917,7 +4918,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
 
     if (shapeIndex == 2)
     {
-        bool closed = object.properties.value("closed", false);
+        bool closed = jsonfield::Value(object.properties, "closed", false);
         if (ImGui::Checkbox("Closed loop", &closed))
         {
             object.properties["closed"] = closed;
@@ -4925,7 +4926,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         }
 
         const char* fills[] = { "along the line", "inside the outline" };
-        int fillIndex = object.properties.value("fill", std::string("along")) == "inside" ? 1 : 0;
+        int fillIndex = jsonfield::Value(object.properties, "fill", std::string("along")) == "inside" ? 1 : 0;
         if (ImGui::Combo("Plant", &fillIndex, fills, IM_ARRAYSIZE(fills)))
         {
             object.properties["fill"] = fillIndex == 1 ? "inside" : "along";
@@ -4945,7 +4946,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
 
         if (fillIndex == 0)
         {
-            float halfWidth = object.properties.value("halfWidth", 8.0f);
+            float halfWidth = jsonfield::Value(object.properties, "halfWidth", 8.0f);
             if (ImGui::DragFloat("Half width", &halfWidth, 0.1f, 0.25f, 500.0f, "%.1f m"))
             {
                 object.properties["halfWidth"] = std::max(0.25f, halfWidth);
@@ -4954,7 +4955,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         }
 
         const char* planes[] = { "XZ (ground plan)", "XY (front)", "ZY (side)" };
-        const std::string planeNow = object.properties.value("plane", std::string("xz"));
+        const std::string planeNow = jsonfield::Value(object.properties, "plane", std::string("xz"));
         int planeIndex = planeNow == "xy" ? 1 : planeNow == "zy" ? 2 : 0;
         if (ImGui::Combo("Measured in", &planeIndex, planes, IM_ARRAYSIZE(planes)))
         {
@@ -4968,7 +4969,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
                 "line up a cliff face is XY.");
         }
 
-        float pointRadius = object.properties.value("pointRadius", 1.5f);
+        float pointRadius = jsonfield::Value(object.properties, "pointRadius", 1.5f);
         if (ImGui::DragFloat("Point size", &pointRadius, 0.05f, 0.05f, 50.0f, "%.2f m"))
         {
             object.properties["pointRadius"] = std::max(0.05f, pointRadius);
@@ -5070,7 +5071,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
     {
         if (shapeIndex == 0)
         {
-            float radius = object.properties.value("radius", 25.0f);
+            float radius = jsonfield::Value(object.properties, "radius", 25.0f);
             if (ImGui::DragFloat("Radius", &radius, 0.1f, 0.1f, 2000.0f, "%.1f m"))
             {
                 object.properties["radius"] = std::max(0.1f, radius);
@@ -5079,8 +5080,8 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
         }
         else
         {
-            float half[2] = { object.properties.value("halfX", 25.0f),
-                object.properties.value("halfZ", 25.0f) };
+            float half[2] = { jsonfield::Value(object.properties, "halfX", 25.0f),
+                jsonfield::Value(object.properties, "halfZ", 25.0f) };
             if (ImGui::DragFloat2("Half extents", half, 0.1f, 0.1f, 2000.0f, "%.1f m"))
             {
                 object.properties["halfX"] = std::max(0.1f, half[0]);

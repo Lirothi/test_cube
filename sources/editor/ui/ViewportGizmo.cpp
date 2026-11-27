@@ -1,5 +1,6 @@
 #include "editor/ui/ViewportGizmo.h"
 #include "ui/ImGuiRenderer.h" // R4.3: renderer.ImGui()
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -157,7 +158,7 @@ namespace
         const auto it = p.find(key);
         if (it != p.end() && it->is_array() && it->size() >= 3u)
         {
-            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            return Math::float3(jsonfield::As((*it)[0], def.x), jsonfield::As((*it)[1], def.y), jsonfield::As((*it)[2], def.z));
         }
         return def;
     }
@@ -776,9 +777,9 @@ void ViewportGizmo::Update(EditorContext& ctx,
 
                 const auto posIt = env.properties.find("position");
                 if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { continue; }
-                const float px = (*posIt)[0].get<float>();
-                const float py = (*posIt)[1].get<float>();
-                const float pz = (*posIt)[2].get<float>();
+                const float px = jsonfield::As((*posIt)[0], 0.0f);
+                const float py = jsonfield::As((*posIt)[1], 0.0f);
+                const float pz = jsonfield::As((*posIt)[2], 0.0f);
 
                 // Tint by the light color (icons are white; RGB carries the tint).
                 ImU32 tint = IM_COL32(255, 255, 255, 255);
@@ -787,7 +788,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 {
                     auto ch = [&](int i)
                     {
-                        float v = (*colIt)[i].get<float>();
+                        float v = jsonfield::As((*colIt)[i], 1.0f);
                         v = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
                         return static_cast<int>(v * 255.0f + 0.5f);
                     };
@@ -876,7 +877,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
             const auto colIt = env.properties.find("color");
             if (colIt != env.properties.end() && colIt->is_array() && colIt->size() >= 3u)
             {
-                col = Math::float4((*colIt)[0].get<float>(), (*colIt)[1].get<float>(), (*colIt)[2].get<float>(), 1.0f);
+                col = Math::float4(jsonfield::As((*colIt)[0], col.x), jsonfield::As((*colIt)[1], col.y), jsonfield::As((*colIt)[2], col.z), 1.0f);
             }
 
             // BEFORE the position lookup, because the Time of Day HAS no position, and the guard
@@ -898,11 +899,11 @@ void ViewportGizmo::Update(EditorContext& ctx,
 
             const auto posIt = env.properties.find("position");
             if (posIt == env.properties.end() || !posIt->is_array() || posIt->size() < 3u) { break; }
-            const Math::float3 pos((*posIt)[0].get<float>(), (*posIt)[1].get<float>(), (*posIt)[2].get<float>());
+            const Math::float3 pos(jsonfield::As((*posIt)[0], 0.0f), jsonfield::As((*posIt)[1], 0.0f), jsonfield::As((*posIt)[2], 0.0f));
 
             if (env.type == "pointLight")
             {
-                const float radius = env.properties.value("radius", 1.0f);
+                const float radius = jsonfield::Value(env.properties, "radius", 1.0f);
                 dd->AddSphere(pos, radius, col, /*wireframe=*/true);
             }
             else if (env.type == "spotLight")
@@ -911,11 +912,11 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 const auto dirIt = env.properties.find("direction");
                 if (dirIt != env.properties.end() && dirIt->is_array() && dirIt->size() >= 3u)
                 {
-                    dir = Math::float3((*dirIt)[0].get<float>(), (*dirIt)[1].get<float>(), (*dirIt)[2].get<float>());
+                    dir = Math::float3(jsonfield::As((*dirIt)[0], dir.x), jsonfield::As((*dirIt)[1], dir.y), jsonfield::As((*dirIt)[2], dir.z));
                 }
                 dir = dir.Normalized();
-                const float range = env.properties.value("range", 10.0f);
-                const float outerDeg = env.properties.value("outerAngleDeg", 25.0f);
+                const float range = jsonfield::Value(env.properties, "range", 10.0f);
+                const float outerDeg = jsonfield::Value(env.properties, "outerAngleDeg", 25.0f);
                 const float coneR = range * std::tan(outerDeg * 0.01745329252f); // deg->rad
                 dd->AddCone(pos, dir, range, coneR, col, /*wireframe=*/true);
             }

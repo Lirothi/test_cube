@@ -1,6 +1,7 @@
 #include "editor/ui/MaterialEditorPanel.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
 #include "core/vfs/Vfs.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
@@ -222,7 +223,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         doc_["useMR"] = !mrAfter.empty();
     }
     const bool hasMRTexture = !mrAfter.empty();
-    bool useMR = hasMRTexture && doc_.value("useMR", true);
+    bool useMR = hasMRTexture && jsonfield::Value(doc_, "useMR", true);
     ImGui::BeginDisabled(!hasMRTexture);
     if (ImGui::Checkbox("Use MR Texture", &useMR)) { doc_["useMR"] = useMR; }
     ImGui::EndDisabled();
@@ -244,7 +245,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         float mr[2]; ReadFloats(doc_, "metalRough", mr, 2, kMrDef);
         if (ImGui::DragFloat2("Metal / Rough", mr, 0.01f, 0.0f, 1.0f)) { WriteFloats(doc_, "metalRough", mr, 2); }
 
-        bool multiplyMR = doc_.value("multiplyMR", false);
+        bool multiplyMR = jsonfield::Value(doc_, "multiplyMR", false);
         ImGui::BeginDisabled(!useMR);
         if (ImGui::Checkbox("Multiply MR texture by values", &multiplyMR)) { doc_["multiplyMR"] = multiplyMR; }
         if (ImGui::IsItemHovered())
@@ -254,7 +255,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         }
         ImGui::EndDisabled();
 
-        float ns = doc_.value("normalStrength", 1.0f);
+        float ns = jsonfield::Value(doc_, "normalStrength", 1.0f);
         if (ImGui::DragFloat("Normal Strength", &ns, 0.01f, 0.0f, 4.0f)) { doc_["normalStrength"] = ns; }
 
         static const float kTosDef[4] = { 0.0f, 0.0f, 1.0f, 1.0f };
@@ -267,7 +268,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         static const float kEmDef[3] = { 0.0f, 0.0f, 0.0f };
         float em[3]; ReadFloats(doc_, "emissiveColor", em, 3, kEmDef);
         if (ImGui::ColorEdit3("Emissive Color", em)) { WriteFloats(doc_, "emissiveColor", em, 3); }
-        float es = doc_.value("emissiveStrength", 0.0f);
+        float es = jsonfield::Value(doc_, "emissiveStrength", 0.0f);
         // P16.7: it is a LUMINANCE in cd/m2 and always was -- the product goes straight into
         // scene colour, which has been in cd/m2 since the lights went to lux. Logarithmic and
         // up to a million because that is the real range: a lit screen is 300, a neon sign
@@ -330,7 +331,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         const bool terrain = shadingModelValid && shadingModel == ShadingModel::Terrain;
         if (foliage) { doc_["twoSided"] = true; }
 
-        bool twoSided = foliage || doc_.value("twoSided", false);
+        bool twoSided = foliage || jsonfield::Value(doc_, "twoSided", false);
         ImGui::BeginDisabled(foliage);
         if (ImGui::Checkbox("Two Sided (render backfaces)", &twoSided))
         {
@@ -356,12 +357,12 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             {
                 WriteFloats(doc_, "subsurfaceColor", subsurface, 3);
             }
-            float transmission = doc_.value("transmissionStrength", 0.0f);
+            float transmission = jsonfield::Value(doc_, "transmissionStrength", 0.0f);
             if (ImGui::DragFloat("Transmission Strength", &transmission, 0.01f, 0.0f, 1.0f))
             {
                 doc_["transmissionStrength"] = transmission;
             }
-            const float serializedAlbedoPower = doc_.value("transmissionAlbedoPower", 0.6f);
+            const float serializedAlbedoPower = jsonfield::Value(doc_, "transmissionAlbedoPower", 0.6f);
             float albedoPower = std::clamp(serializedAlbedoPower, 0.0f, 4.0f);
             if (albedoPower != serializedAlbedoPower)
             {
@@ -377,7 +378,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                 ImGui::SetTooltip("Nonlinear absorption derived from linear albedo (T = albedo^power).\n"
                                   "0 gives uniform transmission; larger values darken stems and veins.");
             }
-            const float serializedNormalWeight = doc_.value("transmissionNormalWeight", 0.35f);
+            const float serializedNormalWeight = jsonfield::Value(doc_, "transmissionNormalWeight", 0.35f);
             float normalWeight = std::clamp(serializedNormalWeight, 0.0f, 1.0f);
             if (normalWeight != serializedNormalWeight)
             {
@@ -399,7 +400,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             ImGui::Spacing();
             ImGui::SeparatorText("Glass");
             // glTF KHR_materials_transmission / _ior; MaterialData::glassTransmission.
-            float transmission = std::clamp(doc_.value("transmission", 1.0f), 0.0f, 1.0f);
+            float transmission = std::clamp(jsonfield::Value(doc_, "transmission", 1.0f), 0.0f, 1.0f);
             if (ImGui::DragFloat("Transmission", &transmission, 0.01f, 0.0f, 1.0f, "%.2f",
                                  ImGuiSliderFlags_AlwaysClamp))
             {
@@ -410,7 +411,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                 ImGui::SetTooltip("The share of light that goes THROUGH, tinted by the base colour;\n"
                                   "the rest is the surface's own diffuse. The transmission map's R multiplies it.");
             }
-            float ior = std::clamp(doc_.value("ior", 1.5f), 1.0f, 3.0f);
+            float ior = std::clamp(jsonfield::Value(doc_, "ior", 1.5f), 1.0f, 3.0f);
             if (ImGui::DragFloat("IOR", &ior, 0.01f, 1.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
                 doc_["ior"] = ior;
@@ -431,15 +432,15 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             }
             if (ownWall)
             {
-                float wall = std::clamp(doc_.value("glassWall", 0.0f), 0.0f, 0.5f);
+                float wall = std::clamp(jsonfield::Value(doc_, "glassWall", 0.0f), 0.0f, 0.5f);
                 if (ImGui::DragFloat("Glass wall (m)", &wall, 0.001f, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp))
                 {
                     doc_["glassWall"] = wall;
                 }
             }
-            const std::string map = doc_.value("transmissionMap", std::string{});
+            const std::string map = jsonfield::Value(doc_, "transmissionMap", std::string{});
             ImGui::TextDisabled("Transmission map: %s", map.empty() ? "none" : map.c_str());
-            ImGui::TextDisabled(doc_.value("alphaTest", false)
+            ImGui::TextDisabled(jsonfield::Value(doc_, "alphaTest", false)
                 ? "Alpha test on: the texels it keeps are opaque, the rest is glass."
                 : "Alpha test off: all of it is glass (no G-buffer, no shadow).");
         }
@@ -448,7 +449,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             ImGui::Spacing();
             ImGui::SeparatorText("Terrain de-tiling");
 
-            float zoneSize = std::clamp(doc_.value("terrainZoneSize", 4.0f), 0.25f, 64.0f);
+            float zoneSize = std::clamp(jsonfield::Value(doc_, "terrainZoneSize", 4.0f), 0.25f, 64.0f);
             if (ImGui::DragFloat("Zone Size (texture repeats)", &zoneSize, 0.05f, 0.25f, 64.0f,
                                  "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -460,7 +461,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                                   "Larger zones preserve longer continuous stretches of the source texture.");
             }
 
-            float rotation = std::clamp(doc_.value("terrainRotation", 180.0f), 0.0f, 180.0f);
+            float rotation = std::clamp(jsonfield::Value(doc_, "terrainRotation", 180.0f), 0.0f, 180.0f);
             if (ImGui::DragFloat("Random Rotation (degrees)", &rotation, 1.0f, 0.0f, 180.0f,
                                  "%.0f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -468,7 +469,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             }
 
             float scaleVariation =
-                std::clamp(doc_.value("terrainScaleVariation", 0.25f), 0.0f, 0.75f);
+                std::clamp(jsonfield::Value(doc_, "terrainScaleVariation", 0.25f), 0.0f, 0.75f);
             if (ImGui::DragFloat("Random Scale Variation", &scaleVariation, 0.01f, 0.0f, 0.75f,
                                  "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -480,7 +481,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                                   "scale in the range 0.75..1.25.");
             }
 
-            float blend = std::clamp(doc_.value("terrainBlend", 0.35f), 0.0f, 1.0f);
+            float blend = std::clamp(jsonfield::Value(doc_, "terrainBlend", 0.35f), 0.0f, 1.0f);
             if (ImGui::DragFloat("Zone Edge Blend", &blend, 0.01f, 0.0f, 1.0f,
                                  "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -493,7 +494,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             }
 
             float edgeBreakup =
-                std::clamp(doc_.value("terrainEdgeBreakup", 0.09f), 0.0f, 0.45f);
+                std::clamp(jsonfield::Value(doc_, "terrainEdgeBreakup", 0.09f), 0.0f, 0.45f);
             if (ImGui::DragFloat("Edge Breakup", &edgeBreakup, 0.005f, 0.0f, 0.45f,
                                  "%.3f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -507,7 +508,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             }
 
             float edgeDetail =
-                std::clamp(doc_.value("terrainEdgeDetail", 3.5f), 0.5f, 12.0f);
+                std::clamp(jsonfield::Value(doc_, "terrainEdgeDetail", 3.5f), 0.5f, 12.0f);
             if (ImGui::DragFloat("Edge Detail", &edgeDetail, 0.05f, 0.5f, 12.0f,
                                  "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
@@ -519,7 +520,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                                   "more ragged notches without changing source texture UVs.");
             }
         }
-        const float serializedIndirectSpecularScale = doc_.value("indirectSpecularScale", 1.0f);
+        const float serializedIndirectSpecularScale = jsonfield::Value(doc_, "indirectSpecularScale", 1.0f);
         float indirectSpecularScale = std::clamp(serializedIndirectSpecularScale, 0.0f, 1.0f);
         if (indirectSpecularScale != serializedIndirectSpecularScale)
         {
@@ -535,20 +536,20 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             ImGui::SetTooltip("Scales only indirect sky/SSR/RT reflections.\n"
                               "Direct specular, diffuse, transmission and emissive are unchanged.");
         }
-        float ambientOcclusion = doc_.value("ambientOcclusion", 1.0f);
+        float ambientOcclusion = jsonfield::Value(doc_, "ambientOcclusion", 1.0f);
         if (ImGui::DragFloat("Ambient Occlusion", &ambientOcclusion, 0.01f, 0.0f, 1.0f))
         {
             doc_["ambientOcclusion"] = ambientOcclusion;
         }
 
-        bool alphaTest = doc_.value("alphaTest", false);
+        bool alphaTest = jsonfield::Value(doc_, "alphaTest", false);
         if (ImGui::Checkbox("Alpha test (masked)", &alphaTest)) { doc_["alphaTest"] = alphaTest; }
         if (alphaTest)
         {
-            float cutoff = doc_.value("alphaCutoff", 0.5f);
+            float cutoff = jsonfield::Value(doc_, "alphaCutoff", 0.5f);
             if (ImGui::DragFloat("Alpha cutoff", &cutoff, 0.01f, 0.0f, 1.0f)) { doc_["alphaCutoff"] = cutoff; }
         }
-        bool normalIsRG = doc_.value("normalIsRG", true);
+        bool normalIsRG = jsonfield::Value(doc_, "normalIsRG", true);
         if (ImGui::Checkbox("Normal map is RG (BC5)", &normalIsRG)) { doc_["normalIsRG"] = normalIsRG; }
         if (ImGui::IsItemHovered())
         {
@@ -560,7 +561,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
     ImGui::SeparatorText("Feature shader (optional)");
     {
         char buf[260] = {};
-        const std::string cur = doc_.value("shader", std::string());
+        const std::string cur = jsonfield::Value(doc_, "shader", std::string());
         std::snprintf(buf, sizeof(buf), "%s", cur.c_str());
         if (ImGui::InputTextWithHint("##shader", "shaders/gbuffer.hlsl (default)", buf, sizeof(buf)))
         {

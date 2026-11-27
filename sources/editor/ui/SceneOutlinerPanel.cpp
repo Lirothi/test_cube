@@ -1,4 +1,5 @@
 #include "editor/ui/SceneOutlinerPanel.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -152,7 +153,7 @@ namespace
     {
         if (environment)
         {
-            return SupportsEnvironmentEnable(object) && object.properties.value("enabled", true);
+            return SupportsEnvironmentEnable(object) && jsonfield::Value(object.properties, "enabled", true);
         }
         return object.enabled;
     }
@@ -1001,7 +1002,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             {
                 if (SupportsEnvironmentEnable(*obj))
                 {
-                    bool enabled = obj->properties.value("enabled", true);
+                    bool enabled = jsonfield::Value(obj->properties, "enabled", true);
                     if (ImGui::Checkbox("##enabled", &enabled))
                     {
                         if (action.type == OutlinerAction::Type::None)

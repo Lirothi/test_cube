@@ -17,6 +17,7 @@
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/meshes/MeshManager.h"
 #include "third_party/json/json.hpp"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 
 namespace lodreport
 {
@@ -66,23 +67,23 @@ inline Report Build(const MeshManager::BinaryInfo& info, const nlohmann::json& d
     const float radius = info.sphereRadius;
     constexpr float kPpu = render::kUeLodPixelsPerUnit;
     constexpr float kMultiple = render::kUeLodScreenMultiple;
-    const float assetDistance = doc.value("lodDistanceScale", 1.0f);
+    const float assetDistance = jsonfield::Value(doc, "lodDistanceScale", 1.0f);
     const float globalDistance = std::max(render::g_lodDistanceScale_game, 1e-3f);
     const float selRadius = radius * assetDistance; // LodSelectionRadius at scale 1
-    const float assetPixelError = doc.value("lodPixelError", 0.0f);
-    const std::string group = doc.value("lodGroup", std::string());
+    const float assetPixelError = jsonfield::Value(doc, "lodPixelError", 0.0f);
+    const std::string group = jsonfield::Value(doc, "lodGroup", std::string());
     const float groupPixelError = render::UeLodGroupPixelError(group);
-    const float pixelErrorScale = doc.value("lodPixelErrorScale", 1.0f);
+    const float pixelErrorScale = jsonfield::Value(doc, "lodPixelErrorScale", 1.0f);
     const float basePixelError = assetPixelError > 0.0f ? assetPixelError
                                : (groupPixelError > 0.0f ? groupPixelError : render::g_lodPixelError_game);
     const float pixelError = basePixelError * pixelErrorScale;
     r.pixelError = pixelError;
     const auto screenIt = doc.find("lodScreenSize");
     const bool authored = screenIt != doc.end() && screenIt->is_array();
-    const bool chunked = doc.value("chunkGrid", 0) > 1;
-    const float ratioScale = doc.value("lodRatioScale", 1.0f);
-    const bool permissive = doc.value("lodPermissive", false);
-    const bool dropSmall = doc.value("lodDropSmallParts", false);
+    const bool chunked = jsonfield::Value(doc, "chunkGrid", 0) > 1;
+    const float ratioScale = jsonfield::Value(doc, "lodRatioScale", 1.0f);
+    const bool permissive = jsonfield::Value(doc, "lodPermissive", false);
+    const bool dropSmall = jsonfield::Value(doc, "lodDropSmallParts", false);
     std::optional<bool> lod3Stated;
     if (const auto la = doc.find("lod3Aggressive"); la != doc.end() && la->is_boolean()) { lod3Stated = la->get<bool>(); }
     std::vector<float> slotFoliage;
@@ -196,7 +197,7 @@ inline Report Build(const MeshManager::BinaryInfo& info, const nlohmann::json& d
             {
                 std::snprintf(fixBuf, sizeof(fixBuf), "LOD3's leaf prune keeps more than LOD2's simplification: lower 'Leaf prune "
                               "keep' (foliagePruneKeep, now %.2f) or 'LOD3 triangle target' (lod3RatioScale).",
-                              static_cast<double>(doc.value("foliagePruneKeep", 0.35f)));
+                              static_cast<double>(jsonfield::Value(doc, "foliagePruneKeep", 0.35f)));
             }
             else if (!permissive)
             {

@@ -1,4 +1,5 @@
 #include "editor/scene/EditorZone.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -109,11 +110,11 @@ namespace editorzone
 
         if (outZone.shape == Shape::Spline)
         {
-            outZone.closed = object.properties.value("closed", false);
+            outZone.closed = jsonfield::Value(object.properties, "closed", false);
             const auto fillIt = object.properties.find("fill");
             outZone.fill = (fillIt != object.properties.end() && fillIt->is_string() &&
                 fillIt->get<std::string>() == "inside") ? Fill::Inside : Fill::Along;
-            const std::string plane = object.properties.value("plane", std::string("xz"));
+            const std::string plane = jsonfield::Value(object.properties, "plane", std::string("xz"));
             outZone.plane = plane == "xy" ? Plane::XY : plane == "zy" ? Plane::ZY : Plane::XZ;
             // The band's width scales with the object too, by the smaller axis: widening a
             // path by stretching it sideways would be surprising, and taking the larger
@@ -686,7 +687,7 @@ namespace editorzone
         {
             return -1;
         }
-        const bool closed = object.properties.value("closed", false);
+        const bool closed = jsonfield::Value(object.properties, "closed", false);
         const int count = static_cast<int>(points.size());
         // Clamped rather than refused: "after the last point" on an open spline means "at
         // the end", which is the commonest way anyone extends a path.

@@ -33,6 +33,7 @@
 #include "core/logging/Log.h"
 #include "core/threading/ThreadRole.h"
 #include "core/vfs/Vfs.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 
 using namespace DirectX;
 
@@ -3951,7 +3952,7 @@ std::vector<float> MeshManager::ComputeUvDensitiesForManifest(const std::string&
         nlohmann::json doc;
         try { f >> doc; } catch (...) { return {}; }
         if (!doc.is_object()) { return {}; }
-        geometry = doc.value("geometry", std::string());
+        geometry = jsonfield::Value(doc, "geometry", std::string());
     }
     if (geometry.empty()) { return {}; }
 

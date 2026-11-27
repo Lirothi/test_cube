@@ -1,4 +1,5 @@
 #include "editor/assets/MeshRestPose.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -328,10 +329,10 @@ bool ApplyToNewObject(nlohmann::json& objectJson, float yawDeg, float groundY)
         if (scaleIt->is_number()) { scale = scaleIt->get<float>(); }
         else if (scaleIt->is_array() && scaleIt->size() == 3)
         {
-            scale = ((*scaleIt)[0].get<float>() + (*scaleIt)[1].get<float>() + (*scaleIt)[2].get<float>()) / 3.0f;
+            scale = (jsonfield::As((*scaleIt)[0], 1.0f) + jsonfield::As((*scaleIt)[1], 1.0f) + jsonfield::As((*scaleIt)[2], 1.0f)) / 3.0f; // R9.6c
         }
     }
-    const float lift = Lift(asset.value("geometry", std::string()), *rest) * scale;
+    const float lift = Lift(jsonfield::Value(asset, "geometry", std::string()), *rest) * scale;
     nlohmann::json& position = objectJson["position"];
     if (position.is_array() && position.size() == 3)
     {

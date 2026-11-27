@@ -1,5 +1,6 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -140,7 +141,7 @@ void DeleteObjectCommand::Undo(EditorContext& ctx)
 
 #ifndef NDEBUG
                     if (object_.type == "staticMesh" &&
-                        o.value("rotateSpeedDeg", 0.0f) != 0.0f)
+                        jsonfield::Value(o, "rotateSpeedDeg", 0.0f) != 0.0f)
                     {
                         const RenderableObjectBase* restored =
                             ctx.scene.FindEditorObject(object_.id.value);

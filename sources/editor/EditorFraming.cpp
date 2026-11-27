@@ -1,4 +1,5 @@
 #include "editor/EditorFraming.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -129,11 +130,11 @@ namespace editorframing
 
             if (env.type == "pointLight")
             {
-                outRadius = std::max(env.properties.value("radius", 1.0f), 1.0f);
+                outRadius = std::max(jsonfield::Value(env.properties, "radius", 1.0f), 1.0f);
             }
             else if (env.type == "spotLight")
             {
-                outRadius = std::max(env.properties.value("range", 4.0f) * 0.25f, 1.0f);
+                outRadius = std::max(jsonfield::Value(env.properties, "range", 4.0f) * 0.25f, 1.0f);
             }
             else
             {

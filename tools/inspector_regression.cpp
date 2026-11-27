@@ -4,9 +4,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <crtdbg.h> // main: no CRT window on an assert
+#include <cstdlib>
+#include <filesystem>
 #include <memory>
+#include <set>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
@@ -502,9 +508,140 @@ void TestOutlinerGroupToggle(EditorContext& ctx)
     std::puts("PASS: ImGui click -> outliner category box -> every row of the group, one undo, selection untouched");
 }
 
+// Architecture plan R9.6c: the Inspector reads the document it draws, in the frame -- a level edited by hand (or merged
+// in git) can hold any field of another type, and a throw there is std::terminate with the unsaved level in it. Every
+// environment object and one object of each kind (by type and mesh) of the levels in data/levels is drawn with each of
+// its fields down to depth 2, one at a time, holding values of other types; every collapsing section open.
+void CollectInspectorFields(const Json& value, const Json::json_pointer& at, int depth, std::vector<Json::json_pointer>& out)
+{
+    if (depth > 2) { return; }
+    if (value.is_object())
+    {
+        for (auto it = value.begin(); it != value.end(); ++it)
+        {
+            out.push_back(at / it.key());
+            CollectInspectorFields(it.value(), at / it.key(), depth + 1, out);
+        }
+    }
+    else if (value.is_array() && depth > 0)
+    {
+        for (std::size_t i = 0; i < value.size() && i < 4; ++i)
+        {
+            out.push_back(at / i);
+            CollectInspectorFields(value[i], at / i, depth + 1, out);
+        }
+    }
+}
+
+void TestTheInspectorDrawsFieldsOfAnotherType(Renderer& renderer, Scene& scene, LevelManager& levels)
+{
+    const Json wrong[] = { Json("x"), Json(true), Json::array({ 1, "y" }), Json() };
+    const char* sections[] = { "Camera Exposure", "Color Pipeline", "Ambient Occlusion (GTAO)", "Exponential Height Fog",
+        "Bloom", "Refraction and volume", "Subsurface scattering", "Wind shading", "Foam", "Caustics", "Absorption gradient" };
+    InspectorPanel panel;
+    EditorCommandStack history;
+    AssetRegistry registry;
+    EditorExtensionRegistry extensions;
+    bool open = true;
+    ImGui::GetIO().ConfigErrorRecoveryEnableAssert = false; // a throw below is recovered from and reported, not asserted
+    int draws = 0;
+    int targets = 0;
+    int environment = 0;
+    std::string thrown;
+    std::set<std::string> seen;
+    for (const auto& entry : std::filesystem::directory_iterator("data/levels"))
+    {
+        if (entry.path().extension() != ".json" || !thrown.empty()) { continue; }
+        EditorSceneDocument doc;
+        if (!doc.LoadFromLevelFile(entry.path().string())) { continue; }
+        EditorSelection selection;
+        EditorContext ctx{ renderer, scene, levels, doc, selection };
+        std::vector<EditorObjectId> ids;
+        for (const EditorObject& env : doc.Environment())
+        {
+            // The ocean's panel draws the live simulation (Systems::GetOceanSimulation, which this tool does not make:
+            // an assert), not the document's fields.
+            if (env.type == "ocean") { continue; }
+            // One per type AND set of fields: the levels write different keys into the same kind of object.
+            std::vector<Json::json_pointer> fields;
+            CollectInspectorFields(env.properties, Json::json_pointer(), 0, fields);
+            std::string signature = "env|" + env.type;
+            for (const Json::json_pointer& field : fields) { signature += "|" + field.to_string(); }
+            if (seen.insert(signature).second) { ids.push_back(env.id); }
+        }
+        for (const EditorObject& object : doc.Objects())
+        {
+            const Json& p = object.properties;
+            const std::string identity = object.type + "|" +
+                (p.contains("mesh") && p["mesh"].is_string() ? p["mesh"].get<std::string>()
+                 : p.contains("model") && p["model"].is_string() ? p["model"].get<std::string>() : std::string());
+            if (seen.insert(identity).second) { ids.push_back(object.id); }
+        }
+        for (const EditorObjectId id : ids)
+        {
+            EditorObject* target = doc.Find(id); // objects only: an environment object is in its own list
+            for (EditorObject& env : doc.Environment())
+            {
+                if (!target && env.id.value == id.value) { target = &env; }
+            }
+            if (!target || !thrown.empty()) { continue; }
+            ++targets;
+            environment += doc.Find(id) ? 0 : 1;
+            const Json original = target->properties;
+            std::vector<Json::json_pointer> fields;
+            CollectInspectorFields(original, Json::json_pointer(), 0, fields);
+            selection.Replace(id);
+            for (const Json::json_pointer& field : fields)
+            {
+                for (const Json& value : wrong)
+                {
+                    if (!thrown.empty()) { break; }
+                    target->properties = original;
+                    target->properties[field] = value;
+                    for (int frame = 0; frame < 2 && thrown.empty(); ++frame)
+                    {
+                        ImGui::NewFrame();
+                        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+                        ImGui::SetNextWindowSize(ImVec2(1300, 6000), ImGuiCond_Always);
+                        ImGui::Begin("Inspector");
+                        for (const char* section : sections) { ImGui::GetStateStorage()->SetInt(ImGui::GetID(section), 1); }
+                        ImGui::End();
+                        ImGuiErrorRecoveryState state;
+                        ImGui::ErrorRecoveryStoreState(&state);
+                        try
+                        {
+                            panel.Draw(ctx, history, registry, extensions, &open);
+                            ++draws;
+                        }
+                        catch (const std::exception& e)
+                        {
+                            ImGui::ErrorRecoveryTryToRecoverState(&state);
+                            thrown = entry.path().stem().string() + " " + target->type + " '" + target->name + "' " +
+                                     field.to_string() + " = " + value.dump() + ": " + e.what();
+                        }
+                        ImGui::Render();
+                    }
+                }
+            }
+            target->properties = original;
+        }
+    }
+    std::printf("  R9.6c: the Inspector drew %d objects (%d environment) %d times with a field of another type\n", targets,
+                environment, draws);
+    Check(thrown.empty(), ("the Inspector draws a field of another type without throwing -- " + thrown).c_str());
+    Check(targets >= 100 && environment >= 20 && draws >= 4000, "the levels' objects and environment objects were drawn");
+}
+
 int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    // A Debug assert or abort() is a line on stderr and exit 3, never the CRT's "Debug Error!" window (intent_regression
+    // put one on the owner's screen, 2026-11-27).
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
     std::puts("Inspector regression: component deltas");
     try
     {
@@ -538,6 +675,7 @@ int main()
         TestMouseGesture(ctx);
         TestOutlinerGroupToggle(ctx);
         TestCollisionTab();
+        TestTheInspectorDrawsFieldsOfAnotherType(*renderer, *scene, levels); // R9.6c
         selection.Replace(post->id);
 #if INSPECTOR_BASELINE
         std::printf("Post Process BEFORE: %.3f ms/draw (Debug, 5 expanded categories)\n",

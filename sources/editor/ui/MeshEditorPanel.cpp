@@ -1,5 +1,6 @@
 #include "editor/ui/MeshEditorPanel.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include "editor/assets/AssetRegistry.h"
@@ -505,12 +506,12 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
 
     // Auto-size the material slots to the geometry's submesh count, then seed each from the file:
     // the `materials` array wins per-slot; else the scalar `material` seeds slot 0; rest default auto.
-    const std::string geometry = doc_.value("geometry", std::string());
+    const std::string geometry = jsonfield::Value(doc_, "geometry", std::string());
     // A CHUNKED mesh's submeshes are spatial tiles that all carry material slot 0 by construction
     // (ChunkifyLod0 inherits it), so auto-sizing the material list to the submesh count would put
     // one useless picker per tile — 46 of them on the island, 800+ on a fine grid. Collapse to the
     // single real slot and describe the tiles separately instead.
-    chunkGrid_ = doc_.value("chunkGrid", 0);
+    chunkGrid_ = jsonfield::Value(doc_, "chunkGrid", 0);
     hoveredChunk_ = -1;
     // The bin's numbers for every mesh (the LODs' deviation, Tessy's clusters and DAG), not only a chunked one's: it was
     // read for a chunked mesh alone, and "Baked deviation from LOD0" below never showed for any other.
@@ -657,7 +658,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     {
         buoyancy::Settings settings;
         if (const auto block = doc_.find("buoyancy"); block != doc_.end()) { buoyancy::ReadSettings(*block, settings); }
-        pontoonOverlay = buoyancy::Resolve(settings, doc_.value("geometry", std::string()));
+        pontoonOverlay = buoyancy::Resolve(settings, jsonfield::Value(doc_, "geometry", std::string()));
     }
     DrawMeshPreview(ctx,
         registry,
@@ -667,7 +668,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         previewMode_,
         previewLod_,
         path_,
-        doc_.value("geometry", std::string()),
+        jsonfield::Value(doc_, "geometry", std::string()),
         slots_,
         recomputeNormalSlots_,
         hasTexOffsScale ? &texOffsScale : nullptr,
@@ -688,7 +689,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         true);
     ImGui::TextUnformatted(fs::path(path_).filename().string().c_str());
     ImGui::TextDisabled("Geometry: %s",
-        doc_.value("geometry", std::string("(none)")).c_str());
+        jsonfield::Value(doc_, "geometry", std::string("(none)")).c_str());
     ImGui::Spacing();
 
     int hoveredSlotThisFrame = -1;
@@ -770,7 +771,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
 
     const std::vector<std::string> presets = CollectPresets(registry);
-    const std::string geometry = doc_.value("geometry", std::string());
+    const std::string geometry = jsonfield::Value(doc_, "geometry", std::string());
     // W7.1b moved geometry to our baked `.mesh.bin` and left the glTF in import_staging/, so the
     // material source is `source`, NOT `geometry` — reading `geometry` here made IsGltfGeometry
     // false for every migrated asset and the promote button vanished entirely. Fall back to
@@ -999,7 +1000,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
     {
         static const char* kLayers[] = { "(default)", "Terrain", "Transparent", "Sky" };
-        const std::string cur = doc_.value("renderLayer", std::string());
+        const std::string cur = jsonfield::Value(doc_, "renderLayer", std::string());
         const std::string curLabel = cur.empty() ? "(default)" : cur;
         if (ImGui::BeginCombo("Render Layer", curLabel.c_str()))
         {
@@ -1019,7 +1020,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
 
     // Spawn scale (default placement scale written into new level entries).
     {
-        float scale = doc_.value("spawnScale", 1.0f);
+        float scale = jsonfield::Value(doc_, "spawnScale", 1.0f);
         if (ImGui::DragFloat("Spawn Scale", &scale, 0.001f, 0.0001f, 10000.0f, "%.4f"))
         {
             doc_["spawnScale"] = scale;
@@ -1037,7 +1038,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Wind"))
     {
-        float strength = doc_.value("windStrength", 0.0f);
+        float strength = jsonfield::Value(doc_, "windStrength", 0.0f);
         if (ImGui::SliderFloat("Wind Strength", &strength, 0.0f, 1.0f, "%.2f"))
         {
             if (strength <= 0.0f) { doc_.erase("windStrength"); } // absent == rigid
@@ -1049,7 +1050,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "from the file, so the asset is byte-identical to a pre-wind one).");
         }
 
-        float stiffness = doc_.value("windTrunkStiffness", 1.0f);
+        float stiffness = jsonfield::Value(doc_, "windTrunkStiffness", 1.0f);
         if (ImGui::SliderFloat("Trunk Stiffness", &stiffness, 0.1f, 4.0f, "%.2f"))
         {
             if (std::abs(stiffness - 1.0f) < 1.0e-4f) { doc_.erase("windTrunkStiffness"); }
@@ -1125,7 +1126,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Water"))
     {
-        bool mask = doc_.value("waterMask", false);
+        bool mask = jsonfield::Value(doc_, "waterMask", false);
         if (ImGui::Checkbox("Keeps the water out", &mask))
         {
             if (mask) { doc_["waterMask"] = true; }
@@ -1147,7 +1148,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Ray tracing"))
     {
-        float opacity = doc_.value("rtCutoutOpacity", 1.0f);
+        float opacity = jsonfield::Value(doc_, "rtCutoutOpacity", 1.0f);
         if (ImGui::SliderFloat("Cutout opacity", &opacity, 0.0f, 1.0f, "%.2f"))
         {
             if (opacity >= 0.995f) { doc_.erase("rtCutoutOpacity"); } // absent == solid
@@ -1262,7 +1263,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         };
         // Read from the DOC, not from chunkGrid_: that member is zeroed when the .bin on disk is
         // not chunked yet, and the warning is about the intent the manifest already states.
-        const int docChunkGrid = doc_.value("chunkGrid", 0);
+        const int docChunkGrid = jsonfield::Value(doc_, "chunkGrid", 0);
         // LOD3's harshness when the manifest does not say: aggressive only for an asset with a foliage slot
         // (Lod3AggressiveOf, 2026-11-11).
         bool foliageAsset = false;
@@ -1291,7 +1292,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             "per-component LOD factor. Applies live - no re-import.");
         // UE's LOD group (mesh.json "lodGroup", render::kUeLodGroups): its PixelError, unless "lodPixelError" says one.
         {
-            const std::string group = doc_.value("lodGroup", std::string());
+            const std::string group = jsonfield::Value(doc_, "lodGroup", std::string());
             ImGui::SetNextItemWidth(150.0f);
             if (ImGui::BeginCombo("LOD group (UE)", group.empty() ? "None (lod.pixelError)" : group.c_str()))
             {
@@ -1327,7 +1328,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             bool foliage = false;
             for (size_t s = 0; s < slots_.size(); ++s) { foliage = foliage || WindFoliageForSlot(s) > 0.0f; }
             float pixelError = render::g_lodPixelError_game;
-            if (const float g = render::UeLodGroupPixelError(doc_.value("lodGroup", std::string())); g > 0.0f) { pixelError = g; }
+            if (const float g = render::UeLodGroupPixelError(jsonfield::Value(doc_, "lodGroup", std::string())); g > 0.0f) { pixelError = g; }
             if (const auto it = doc_.find("lodPixelError"); it != doc_.end() && it->is_number() && it->get<float>() > 0.0f)
             {
                 pixelError = it->get<float>();
@@ -1487,7 +1488,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                                       : "Leaf prune - LOD3 only");
         lodFloat("Foliage prune keep", "foliagePruneKeep", 0.35f, 0.0f, 1.0f, "%.2f",
             "LOD3 foliage: fraction of whole leaves KEPT. 0 or 1 = no prune.");
-        const float pruneKeep = doc_.value("foliagePruneKeep", 0.35f);
+        const float pruneKeep = jsonfield::Value(doc_, "foliagePruneKeep", 0.35f);
         ImGui::BeginDisabled(!(pruneKeep > 0.0f && pruneKeep < 1.0f));
         lodFloat("Leaf inner target", "foliageInnerRatio", 0.5f, 0.05f, 1.0f, "%.2f",
             "LOD3: fraction of the KEPT leaves' triangles surviving the interior decimation\n"
@@ -1542,7 +1543,7 @@ int MeshEditorPanel::ApplyToScene(EditorContext& ctx) const
     for (const EditorObject& obj : ctx.document.Objects())
     {
         if (obj.type != "staticMesh") { continue; }
-        const std::string m = NormalizeSlashes(obj.properties.value("mesh", std::string()));
+        const std::string m = NormalizeSlashes(jsonfield::Value(obj.properties, "mesh", std::string()));
         if (!m.empty() && m == wantMesh) { targets.push_back(obj.id); }
     }
     if (targets.empty()) { return 0; }
@@ -1592,7 +1593,7 @@ void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)
 {
     buoyancy::Settings settings;
     if (const auto block = doc_.find("buoyancy"); block != doc_.end()) { buoyancy::ReadSettings(*block, settings); }
-    const std::string geometry = doc_.value("geometry", std::string());
+    const std::string geometry = jsonfield::Value(doc_, "geometry", std::string());
     const buoyancy::Layout layout = buoyancy::Resolve(settings, geometry);
     bool changed = false;
 
@@ -2003,20 +2004,20 @@ void MeshEditorPanel::DrawTessySection()
     size_t foliageSlots = 0;
     for (size_t s = 0; s < slots_.size(); ++s) { foliageSlots += WindFoliageForSlot(s) > 0.0f ? 1u : 0u; }
     ImGui::TextDisabled("Shaped by: normal weight %.2f, leaf UV weight %.2f (%zu foliage slot(s)) -- LOD generation below;",
-                        static_cast<double>(doc_.value("lodNormalWeight", 0.0f)),
-                        static_cast<double>(doc_.value("foliageUvWeight", 0.0f)), foliageSlots);
+                        static_cast<double>(jsonfield::Value(doc_, "lodNormalWeight", 0.0f)),
+                        static_cast<double>(jsonfield::Value(doc_, "foliageUvWeight", 0.0f)), foliageSlots);
     ImGui::TextDisabled("leaf prune %s, double-sided fold %s (this process: --tessy-lod-prune / --tessy-lod-fold).",
                         tessy::g_lodPrune_game ? "on" : "off", tessy::g_lodFold_game ? "on" : "off");
     ImGui::TextDisabled("Drawn: tessy.lod %s, DAG pixel error %.2f px x this asset's scale %.2f (LOD generation below).",
                         tessy::g_lod_game ? "ON" : "off", static_cast<double>(tessy::g_lodPixelError_game),
-                        static_cast<double>(doc_.value("lodPixelErrorScale", 1.0f)));
+                        static_cast<double>(jsonfield::Value(doc_, "lodPixelErrorScale", 1.0f)));
 }
 
 void MeshEditorPanel::DrawRestPoseSection()
 {
-    const std::string geometry = doc_.value("geometry", std::string());
+    const std::string geometry = jsonfield::Value(doc_, "geometry", std::string());
     const std::optional<Math::float3> rest = restpose::Read(doc_);
-    bool pivotAtBase = doc_.value("pivot", std::string()) == "base";
+    bool pivotAtBase = jsonfield::Value(doc_, "pivot", std::string()) == "base";
     if (ImGui::Checkbox("Pivot at the base (re-bakes on Save)", &pivotAtBase))
     {
         if (pivotAtBase) { doc_["pivot"] = "base"; }
@@ -2451,8 +2452,8 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     // so nudging 0.6 -> 0.8 costs nothing here (BinaryNeedsRebake only sees the zero/non-zero pattern).
     bool rebaked = false, rebakeFailed = false;
     {
-        const std::string src = doc_.value("source", std::string());
-        const std::string geom = doc_.value("geometry", std::string());
+        const std::string src = jsonfield::Value(doc_, "source", std::string());
+        const std::string geom = jsonfield::Value(doc_, "geometry", std::string());
         const bool isBaked = geom.size() > 9 && geom.rfind(".mesh.bin") == geom.size() - 9;
         if (!src.empty() && isBaked)
         {
@@ -2474,8 +2475,8 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             if (lrs != doc_.end() && lrs->is_number()) { opt.lodRatioScale = lrs->get<float>(); }
             const auto les = doc_.find("lodErrorScale");
             if (les != doc_.end() && les->is_number()) { opt.lodErrorScale = les->get<float>(); }
-            if (doc_.value("lodPermissive", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPermissive; }
-            if (doc_.value("lodDropSmallParts", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPrune; }
+            if (jsonfield::Value(doc_, "lodPermissive", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPermissive; }
+            if (jsonfield::Value(doc_, "lodDropSmallParts", false)) { opt.lodSimplifyOptions |= meshopt_SimplifyPrune; }
             // Optional per-asset override of the LOD3 foliage prune (default 0.35, 0 = off).
             const auto pk = doc_.find("foliagePruneKeep");
             if (pk != doc_.end() && pk->is_number()) { opt.foliagePruneKeep = pk->get<float>(); }
@@ -2513,7 +2514,7 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
             const auto bs = doc_.find("bakeScale");
             if (bs != doc_.end() && bs->is_number()) { opt.bakeScale = bs->get<float>(); }
             // The pivot move is folded into the vertices the same way.
-            opt.pivotToBase = doc_.value("pivot", std::string()) == "base";
+            opt.pivotToBase = jsonfield::Value(doc_, "pivot", std::string()) == "base";
             // Mesh chunking is a bake input too: omitting it here would re-bake a chunked
             // terrain into one giant caster while mesh.json keeps claiming chunks.
             const auto cg = doc_.find("chunkGrid");
@@ -2547,10 +2548,10 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     if (rebaked)
     {
         if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
-        buoyancy::ForgetGeometry(doc_.value("geometry", std::string()));
+        buoyancy::ForgetGeometry(jsonfield::Value(doc_, "geometry", std::string()));
         // The bake's own numbers (deviation, clusters, DAG) for the sections that show them.
         MeshManager::BinaryInfo fresh;
-        if (MeshManager::DescribeMeshBinary(doc_.value("geometry", std::string()), fresh)) { binInfo_ = std::move(fresh); }
+        if (MeshManager::DescribeMeshBinary(jsonfield::Value(doc_, "geometry", std::string()), fresh)) { binInfo_ = std::move(fresh); }
     }
 
     // Live-apply to placed instances (must happen AFTER the file is written AND after any re-bake —

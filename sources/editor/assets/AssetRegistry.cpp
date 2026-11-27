@@ -1,4 +1,5 @@
 #include "editor/assets/AssetRegistry.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -527,7 +528,7 @@ namespace
 
         nlohmann::json manifest = nlohmann::json::parse(file, nullptr, false, true);
         if (manifest.is_discarded() || !manifest.is_object() ||
-            manifest.value("version", 0) != 1 ||
+            jsonfield::Value(manifest, "version", 0) != 1 ||
             !manifest.contains("sources") || !manifest["sources"].is_array() ||
             !manifest.contains("outputs") || !manifest["outputs"].is_array())
         {
@@ -538,7 +539,7 @@ namespace
         std::error_code ec;
         const bool sourceIsFile = fs::is_regular_file(source, ec);
         const bool projectIsFile = fs::is_regular_file(project, ec);
-        const uint64_t recordedRootWriteTime = manifest.value("sourceRootWriteTime", 0ull);
+        const uint64_t recordedRootWriteTime = jsonfield::Value(manifest, "sourceRootWriteTime", 0ull);
         const bool rootWriteTimeChanged = WriteTimeOf(source) != recordedRootWriteTime;
 
         std::set<std::string> recordedSources;
@@ -565,12 +566,12 @@ namespace
                 return true;
             }
 
-            const uint64_t recordedSize = entry.value("size", 0ull);
-            const uint64_t recordedWriteTime = entry.value("writeTime", 0ull);
+            const uint64_t recordedSize = jsonfield::Value(entry, "size", 0ull);
+            const uint64_t recordedWriteTime = jsonfield::Value(entry, "writeTime", 0ull);
             if (rootWriteTimeChanged || ImportFileSize(current) != recordedSize ||
                 WriteTimeOf(current) != recordedWriteTime)
             {
-                if (HashImportFile(current) != entry.value("hash", 0ull))
+                if (HashImportFile(current) != jsonfield::Value(entry, "hash", 0ull))
                 {
                     statusOut = EditorAssetImportStatus::SourceNewer;
                     return true;
@@ -578,7 +579,7 @@ namespace
             }
         }
 
-        if (manifest.value("trackAllSources", false))
+        if (jsonfield::Value(manifest, "trackAllSources", false))
         {
             std::set<std::string> currentSources;
             if (sourceIsFile)
@@ -765,7 +766,7 @@ namespace
             nlohmann::json manifest = nlohmann::json::parse(
                 manifestFile, nullptr, false, true);
             if (manifest.is_discarded() || !manifest.is_object() ||
-                manifest.value("version", 0) != 1 ||
+                jsonfield::Value(manifest, "version", 0) != 1 ||
                 !manifest.contains("sources") || !manifest["sources"].is_array() ||
                 !manifest.contains("outputs") || !manifest["outputs"].is_array())
             {
@@ -788,9 +789,9 @@ namespace
                 }
                 const std::string key = NormalizeImportRelativePath(relative);
                 ctx.recorded[key] = {
-                    entry.value("size", 0ull),
-                    entry.value("writeTime", 0ull),
-                    entry.value("hash", 0ull)
+                    jsonfield::Value(entry, "size", 0ull),
+                    jsonfield::Value(entry, "writeTime", 0ull),
+                    jsonfield::Value(entry, "hash", 0ull)
                 };
                 ctx.sourceCandidates.push_back(relative);
             }

@@ -4899,7 +4899,45 @@ Debug, реестр настроек и таблица графики, вкла�
   эталон-после 0.22 / 0.0008 % — в коридоре пола, кадры bath просмотрены. Три конфигурации, `check_*.py` 0,
   `settings_names` 0, CRLF, обе регрессии PASS; `check_gate.py` PASS (все четыре плеча; Cook собран из дерева, где
   уже лежали несобранные правки R9.6c в `MeshManager` / `LodSwitchReport`). Не покрыто: панели и прочие читатели
-  редактора в кадре — R9.6c.
+  редактора в кадре — R9.6c. Коммит `644d183c`.
+
+  **Сделано R9.6c (2026-11-27).** Читатели документа и ассетов в кадре редактора — через `jsonfield::Value` / `As` /
+  `Find`. Замена `value()` скриптом с разбором выражения-получателя (`tgt().value`, `obj->properties.value`,
+  `doc_.value`; `r96_value2.py` рабочей папки): 192 вызова в 21 файле — Inspector 56, Mesh Editor 30, Material Editor
+  25, Import 16, `AssetRegistry` 10, `LodSwitchReport` 9, `EditorController` 8, `EnvironmentRuntime` 8,
+  `EditorExtensionRegistry` 6, зоны 3, гизмо 3, команды 6, `EditorFraming`, `EditorSceneDocument`, `CollisionEditorTab`,
+  Outliner по 2, `MeshRestPose`, `MeshManager` по 1. Непроверенные `get<T>()` (опись `r96_get.py`, каждое место
+  прочитано): элементы массивов после проверки только `is_array` / размера — `JsonFloat3` Inspector и
+  `EditorExtensionRegistry`, `ReadFloat3` / позиции / цвета / направление света в гизмо (рисуется КАЖДЫЙ кадр:
+  `"position": [1, "x", 2]` у света ронял бы редактор на каждом кадре), `ToFloat3` документа, `JF3`
+  `EnvironmentRuntime`, оттенки ядра bloom в Inspector, масштаб `MeshRestPose`; `InspectorMultiEdit` применяет к
+  объекту «эффективный» JSON (документ поверх `mesh.json`), и отмена может вернуть значение чужого типа из файла —
+  числа, флаги и массивы там теперь берутся, только если они того типа (иначе ключ не трогается). Остальные
+  найденные `get<>` охранены `is_*` (зоны, Outliner, `EditorController`, `PasteObjectCommand` под `try`).
+  `SceneOutlinerPanel.cpp` был в рабочей копии LF — скрипт вставки include положил строку в конец файла; найдено
+  проверкой, исправлено, файл переведён в CRLF (правило «тронутый исходник — CRLF»). Гейты: (1)
+  `inspector_regression` `TestTheInspectorDrawsFieldsOfAnotherType` — Inspector рисует (все секции раскрыты) каждую
+  сущность окружения (по типу и набору полей) и каждый различный объект 16 уровней, каждое поле до глубины 2 по
+  очереди — `"x"`, `true`, `[1, "y"]`, `null`: 151 цель (37 — окружение), 11 584 отрисовки без броска; океан не
+  рисуется (его панель показывает живую симуляцию через `Systems`, которых в инструменте нет). (2)
+  `intent_regression` `TestTheEditorAppliesFieldsOfAnotherType` — `EnvironmentRuntime::Apply` (правка Inspector,
+  MCP `setEnvironment`), перечисление `setEnvironment`, `ObjectFromJson` и `editorzone::FromObject` по тем же
+  мутациям глубины 3: 124 цели, 15 372 применения и чтения; `Apply` океана и ветра не зовётся (дергает
+  `Systems::GetOceanSimulation`), их поля читаются через `JF` (число или умолчание) и `OceanRenderConfigJson`
+  (гейт R9.6b). Контроль (два места сразу): Inspector снова читает `autoExposure` через `value()`, небо —
+  `texture` — FAIL «... atoll postProcess 'Post Process' /cameraExposure/autoExposure = "x": ...» и FAIL «... atoll
+  skybox/texture = true: ...»; файлы возвращены байт в байт. По пути найдено и исправлено две ошибки самого гейта:
+  `doc.Find(id)` ищет только объекты, и первая версия молча пропускала все сущности окружения (контроль на Inspector
+  тогда НЕ упал — так это и нашлось); и первая версия гейта применения дернула `Systems::Get` — assert, и окно CRT
+  «abort() has been called» встало на экране владельца. Поэтому оба инструмента теперь в начале `main` ставят
+  `_set_abort_behavior(0, ...)` и отчёты CRT в stderr (assert — строка и код 3, без окна), а прогон регрессий идёт
+  на отдельном рабочем столе (`run_hidden.py`). Проверено: обе регрессии PASS (скрытый стол); три конфигурации,
+  `check_*.py` 0, `settings_names` 0, CRLF; цикл сохранения 16 из 16 байт в байт равны эталону R9.0 (`imgui.ini`,
+  `editor_state.json` на месте); дампы реестра 16 уровней — 0 отличий; `check_gate.py` PASS (четыре плеча). Кадр
+  не снимал: рантайм-читатели не менялись (в `MeshManager` тронут только инструментальный
+  `ComputeUvDensitiesForManifest`), дампы — 0. Не покрыто: гизмо, Mesh Editor, Material Editor, Import живьём не
+  рисовались с полями чужого типа — только чтением кода (их места переведены те же); панель океана с живой
+  симуляцией.
 - **R6. `Scene` → `World` + `RenderScene`** (`Scene.cpp` — 4080 строк). **R6.1**: `ShadowViewPlanner` в
   `rendering/shadows` (каскады, клипмап, SDSM-кэш, ёмкость локальных видов). **R6.2**: игровое из `Scene` —
   `RaceRef()` (24 вызова в 5 файлах), `SyncRaceBoats`, камеры судна и зрителя — в `game::`, владеет сессия.

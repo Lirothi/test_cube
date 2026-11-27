@@ -1,5 +1,6 @@
 #include "editor/commands/SpawnMeshCommand.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <memory>
@@ -17,7 +18,7 @@ namespace
 {
     std::unique_ptr<RenderableObjectBase> CreateRuntime(EditorContext& ctx, const nlohmann::json& objectJson)
     {
-        const std::string type = objectJson.value("type", std::string());
+        const std::string type = jsonfield::Value(objectJson, "type", std::string());
         if (type == "transparentMesh")
         {
             return SceneObjectFactory::CreateTransparentMeshFromJson(ctx.scene, objectJson);

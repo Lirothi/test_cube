@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <crtdbg.h> // main: no CRT window on an assert
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -3746,6 +3747,77 @@ void TestALevelKeyOfAnotherTypeDoesNotEndTheEditor(Scene& scene)
     Check(strictThrows > reads / 20, "and inside the level loader's scope it still throws, as value() did");
 }
 
+// Architecture plan R9.6c: the editor's own readers of its document, in the frame -- the environment runtime's apply (an
+// Inspector edit, MCP setEnvironment), setEnvironment's list of keys, the document's object and zone reads -- take a
+// field of another type without throwing. Every environment object (one per type) and every distinct object of the
+// levels in data/levels, each field down to depth 3 given values of other types, one at a time.
+void TestTheEditorAppliesFieldsOfAnotherType(Renderer& renderer, Scene& scene, LevelManager& levels)
+{
+    const Json wrong[] = { Json("x"), Json(true), Json(7), Json::array({ 1, "y" }), Json{ { "k", 1 } }, Json() };
+    int reads = 0;
+    int targets = 0;
+    std::string thrown;
+    std::set<std::string> seen;
+    for (const auto& entry : std::filesystem::directory_iterator("data/levels"))
+    {
+        if (entry.path().extension() != ".json") { continue; }
+        EditorSceneDocument doc;
+        if (!doc.LoadFromLevelFile(entry.path().string())) { continue; }
+        EditorSelection selection;
+        EditorContext ctx{ renderer, scene, levels, doc, selection };
+        const std::string name = entry.path().stem().string();
+        const auto mutateAll = [&](const std::string& where, const Json& original, const auto& read)
+        {
+            ++targets;
+            std::vector<Json::json_pointer> fields;
+            CollectFieldPointers(original, Json::json_pointer(), 0, fields);
+            for (const Json::json_pointer& field : fields)
+            {
+                for (const Json& value : wrong)
+                {
+                    Json mutated = original;
+                    mutated[field] = value;
+                    ++reads;
+                    try { read(mutated); }
+                    catch (const std::exception& e)
+                    {
+                        if (thrown.empty()) { thrown = where + field.to_string() + " = " + value.dump() + ": " + e.what(); }
+                    }
+                }
+            }
+        };
+        for (EditorObject& env : doc.Environment())
+        {
+            if (!seen.insert("env|" + env.type).second) { continue; }
+            const Json original = env.properties;
+            // The ocean's and the wind's apply reach Systems::GetOceanSimulation(), which this tool does not make (an
+            // assert); their fields go through JF (a number or the default) and OceanRenderConfigJson (R9.6b's gate).
+            const bool applies = env.type != "ocean" && env.type != "wind";
+            mutateAll(name + " " + env.type, original, [&](const Json& m) {
+                env.properties = m;
+                if (applies) { EnvironmentRuntime::Apply(ctx, env); }
+                (void)envsettings::Enumerate(doc);
+            });
+            env.properties = original;
+        }
+        for (const EditorObject& object : doc.Objects())
+        {
+            const Json o = EditorSceneDocument::ObjectToJson(object);
+            const std::string identity = object.type + "|" + jsonfield::Value(o, "mesh", jsonfield::Value(o, "model", ""));
+            if (!seen.insert(identity).second) { continue; }
+            mutateAll(name + " object " + identity, o, [&](const Json& m) {
+                const EditorObject read = EditorSceneDocument::ObjectFromJson(EditorObjectId{ 1 }, m);
+                editorzone::Zone zone;
+                (void)editorzone::FromObject(read, zone);
+            });
+        }
+    }
+    std::printf("  R9.6c: %d environment objects and objects, %d applies and reads with a field of another type\n",
+                targets, reads);
+    Check(targets >= 20 && reads >= 5000, "the levels' environment and objects were read");
+    Check(thrown.empty(), "the editor applies and reads a field of another type without throwing -- " + thrown);
+}
+
 void TestJsonFieldsAreReadWithoutThrowing()
 {
     const Json h = Json::parse(R"({"build": 4, "zip": null, "version": 1.5, "published": 1, "levels": "a.json",
@@ -6779,6 +6851,13 @@ void TestWholeObjectMaterial(const EditorActionContext& actionCtx)
 int main(int argc, char** argv)
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
+    // A Debug assert or abort() is a line on stderr and exit 3, never the CRT's "Debug Error!" window: this tool runs
+    // unattended, and that window landed on the owner's screen (2026-11-27, an assert in a new test).
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
     if (argc == 5 && std::string(argv[1]) == "--dump")
     {
         return DumpForLevel(argv[2], argv[3], argv[4]);
@@ -6970,6 +7049,10 @@ int main(int argc, char** argv)
         TestThePromptNamesTheLoadedModel(document, assets);
         TestEverySearchableRootIsReachableAndAdvertised();
         TestCodeOutranksContentInABroadSearch();
+        {
+            auto applyScene = std::make_unique<Scene>(); // its own: the applies below leave their values in it
+            TestTheEditorAppliesFieldsOfAnotherType(*renderer, *applyScene, levels); // R9.6c
+        }
         std::puts("PASS: intent layer parses, previews, places, undoes, and the model contract holds");
         return 0;
     }

@@ -1,5 +1,6 @@
 #include "editor/ui/InspectorMultiEdit.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -294,30 +295,40 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
         {
             return values.contains(key) && Member(previous.effective, key) != values[key];
         };
+        // R9.6c: the values are the objects' effective JSON (the document over the mesh.json): an undo can bring back a
+        // value of another type the file had. Such a key is left alone -- a number, a flag, or an array short of numbers
+        // -- instead of throwing out of the frame.
+        const auto number = [&](const char* key) -> std::optional<float> { return changed(key) ? jsonfield::Find<float>(values, key) : std::nullopt; };
+        const auto flag = [&](const char* key) -> std::optional<bool> { return changed(key) ? jsonfield::Find<bool>(values, key) : std::nullopt; };
+        const auto numbers = [&](const char* key, std::size_t count) -> const Json* {
+            if (!changed(key)) { return nullptr; }
+            const Json& a = values[key];
+            if (!a.is_array() || a.size() < count) { return nullptr; }
+            for (std::size_t i = 0; i < count; ++i) { if (!a[i].is_number()) { return nullptr; } }
+            return &a;
+        };
         if (auto* gb = runtime->AsGBufferRenderable())
         {
             // Every surface key reaches all of the object's material slots (GBufferRenderable::SetObject*).
-            if (changed("texOffsScale")) { gb->SetObjectTexOffsScale(Float4(values["texOffsScale"])); }
-            if (changed("normalStrength")) { gb->SetObjectNormalStrength(values["normalStrength"].get<float>()); }
-            if (changed("windStrength")) { gb->SetWindStrength(values["windStrength"].get<float>()); }
-            if (changed("useMR")) { gb->SetObjectUseMR(values["useMR"].get<bool>()); }
+            if (const Json* v = numbers("texOffsScale", 4)) { gb->SetObjectTexOffsScale(Float4(*v)); }
+            if (const auto v = number("normalStrength")) { gb->SetObjectNormalStrength(*v); }
+            if (const auto v = number("windStrength")) { gb->SetWindStrength(*v); }
+            if (const auto v = flag("useMR")) { gb->SetObjectUseMR(*v); }
             // The albedo texture off (a flat colour) -- or back on, but only where the material has one.
-            if (changed("useAlbedo"))
+            if (const auto v = flag("useAlbedo"))
             {
-                gb->SetObjectUseAlbedo(values["useAlbedo"].get<bool>());
+                gb->SetObjectUseAlbedo(*v);
                 gb->MarkMaterialParamOverride(GBufferRenderable::MaterialParamField::UseAlbedo);
             }
-            if (changed("metalRough"))
+            if (const Json* v = numbers("metalRough", 2))
             {
-                gb->SetObjectMetalRough(Math::float2(
-                    values["metalRough"][0].get<float>(), values["metalRough"][1].get<float>()));
+                gb->SetObjectMetalRough(Math::float2((*v)[0].get<float>(), (*v)[1].get<float>()));
             }
             // The tint. Alpha is left as the material set it: painting something red is
             // about its colour, and quietly making it transparent would be a surprise.
-            if (changed("baseColor"))
+            if (const Json* v = numbers("baseColor", 3))
             {
-                gb->SetObjectBaseColorRgb(Math::float3(values["baseColor"][0].get<float>(),
-                    values["baseColor"][1].get<float>(), values["baseColor"][2].get<float>()));
+                gb->SetObjectBaseColorRgb(Float3(*v));
                 gb->MarkMaterialParamOverride(
                     GBufferRenderable::MaterialParamField::BaseColor);
             }
@@ -332,42 +343,48 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
         }
         if (auto* glass = runtime->AsTransparentStaticMesh())
         {
-            if (changed("tint")) { glass->SetTint(Float3(values["tint"])); }
-            if (changed("absorption")) { glass->SetAbsorption(Float3(values["absorption"])); }
-            if (changed("thickness")) { glass->SetThickness(values["thickness"].get<float>()); }
-            if (changed("reflectionStrength")) { glass->SetReflectionStrength(values["reflectionStrength"].get<float>()); }
-            if (changed("refractionDistortion")) { glass->SetRefractionDistortion(values["refractionDistortion"].get<float>()); }
-            if (changed("roughness")) { glass->SetRoughness(values["roughness"].get<float>()); }
-            if (changed("ior")) { glass->SetIor(values["ior"].get<float>()); }
+            if (const Json* v = numbers("tint", 3)) { glass->SetTint(Float3(*v)); }
+            if (const Json* v = numbers("absorption", 3)) { glass->SetAbsorption(Float3(*v)); }
+            if (const auto v = number("thickness")) { glass->SetThickness(*v); }
+            if (const auto v = number("reflectionStrength")) { glass->SetReflectionStrength(*v); }
+            if (const auto v = number("refractionDistortion")) { glass->SetRefractionDistortion(*v); }
+            if (const auto v = number("roughness")) { glass->SetRoughness(*v); }
+            if (const auto v = number("ior")) { glass->SetIor(*v); }
         }
         if (auto* emitter = runtime->AsParticleEmitter())
         {
             auto& d = emitter->DescRef();
-            if (changed("spawnRate")) { d.spawnRate = values["spawnRate"].get<float>(); }
-            if (changed("lifetime"))
+            if (const auto v = number("spawnRate")) { d.spawnRate = *v; }
+            if (const Json* v = numbers("lifetime", 2))
             {
-                d.lifetimeMin = values["lifetime"][0].get<float>();
-                d.lifetimeMax = values["lifetime"][1].get<float>();
+                d.lifetimeMin = (*v)[0].get<float>();
+                d.lifetimeMax = (*v)[1].get<float>();
             }
-            if (changed("speed"))
+            if (const Json* v = numbers("speed", 2))
             {
-                d.speedMin = values["speed"][0].get<float>();
-                d.speedMax = values["speed"][1].get<float>();
+                d.speedMin = (*v)[0].get<float>();
+                d.speedMax = (*v)[1].get<float>();
             }
-            if (changed("gravity")) { d.gravity = values["gravity"].get<float>(); }
-            if (changed("drag")) { d.drag = values["drag"].get<float>(); }
-            if (changed("windInfluence")) { d.windInfluence = values["windInfluence"].get<float>(); }
-            if (changed("coneAngleDeg")) { d.coneAngleDeg = values["coneAngleDeg"].get<float>(); }
-            if (changed("coneDir")) { d.coneDir = Float3(values["coneDir"]); }
-            if (changed("size"))
+            if (const auto v = number("gravity")) { d.gravity = *v; }
+            if (const auto v = number("drag")) { d.drag = *v; }
+            if (const auto v = number("windInfluence")) { d.windInfluence = *v; }
+            if (const auto v = number("coneAngleDeg")) { d.coneAngleDeg = *v; }
+            if (const Json* v = numbers("coneDir", 3)) { d.coneDir = Float3(*v); }
+            if (const Json* v = numbers("size", 2))
             {
-                d.sizeStart = values["size"][0].get<float>();
-                d.sizeEnd = values["size"][1].get<float>();
+                d.sizeStart = (*v)[0].get<float>();
+                d.sizeEnd = (*v)[1].get<float>();
             }
-            if (changed("softFade")) { d.softFade = values["softFade"].get<float>(); }
-            if (changed("colorKeys"))
+            if (const auto v = number("softFade")) { d.softFade = *v; }
+            if (changed("colorKeys") && values["colorKeys"].is_array() && values["colorKeys"].size() >= 4)
             {
-                for (size_t i = 0; i < 4; ++i) { d.colorKeys[i] = Float4(values["colorKeys"][i]); }
+                for (size_t i = 0; i < 4; ++i)
+                {
+                    const Json& key = values["colorKeys"][i];
+                    const bool four = key.is_array() && key.size() >= 4 && key[0].is_number() && key[1].is_number() &&
+                                      key[2].is_number() && key[3].is_number();
+                    if (four) { d.colorKeys[i] = Float4(key); }
+                }
             }
         }
     }

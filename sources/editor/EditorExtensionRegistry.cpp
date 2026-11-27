@@ -1,6 +1,7 @@
 #include "editor/commands/EditObjectPropertiesCommand.h"
 #include "editor/scene/EditorPlayerStart.h"
 #include "editor/EditorExtensionRegistry.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -236,7 +237,7 @@ namespace
         const auto it = p.find(key);
         if (it != p.end() && it->is_array() && it->size() >= 3)
         {
-            return Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            return Math::float3(jsonfield::As((*it)[0], def.x), jsonfield::As((*it)[1], def.y), jsonfield::As((*it)[2], def.z));
         }
         return def;
     }
@@ -299,7 +300,7 @@ namespace
         }
 
         const nlohmann::json effective = SceneObjectFactory::ResolveMeshAsset(object.properties);
-        return effective.value("renderLayer", std::string("Default"));
+        return jsonfield::Value(effective, "renderLayer", std::string("Default"));
     }
 
     // H-importer spawn-scale normalizer: a mesh import can record a default spawn scale in
@@ -317,7 +318,7 @@ namespace
         if (!file) { return 0.0f; }
         const nlohmann::json manifest = nlohmann::json::parse(file, nullptr, false, true);
         if (manifest.is_discarded() || !manifest.is_object()) { return 0.0f; }
-        return manifest.value("spawnScale", 0.0f);
+        return jsonfield::Value(manifest, "spawnScale", 0.0f);
     }
 
     // J1: a `models/<name>/<name>.mesh.json` record is spawned as a compact reference (the mesh asset
@@ -336,7 +337,7 @@ namespace
         if (!file) { return 0.0f; }
         const nlohmann::json asset = nlohmann::json::parse(file, nullptr, false, true);
         if (asset.is_discarded() || !asset.is_object()) { return 0.0f; }
-        return asset.value("spawnScale", 0.0f);
+        return jsonfield::Value(asset, "spawnScale", 0.0f);
     }
 
     class StaticMeshObjectFactory final : public IEditorObjectFactory
@@ -510,7 +511,7 @@ namespace
                 // the multi-slot branch — a mesh-asset-level material won't appear in obj JSON.
                 const std::string current = gbMat && slotCount == 1
                     ? gbMat->SlotPreset(0)
-                    : obj.properties.value("material", std::string());
+                    : jsonfield::Value(obj.properties, "material", std::string());
                 std::string selectedMaterial;
                 if (MaterialCombo("Material", current, registry, /*allowAuto=*/false, selectedMaterial))
                 {
@@ -1222,7 +1223,7 @@ namespace
                 ctx.document.SetDirty(true);
             }
 
-            const std::string normalMap = obj.properties.value("normalMap", std::string());
+            const std::string normalMap = jsonfield::Value(obj.properties, "normalMap", std::string());
             ImGui::Text("Normal Map: %s", normalMap.empty() ? "(none)" : normalMap.c_str());
         }
     };
@@ -1248,7 +1249,7 @@ namespace
                 return;
             }
 
-            const std::string selectedPreset = obj.properties.value("preset", std::string());
+            const std::string selectedPreset = jsonfield::Value(obj.properties, "preset", std::string());
             const std::vector<std::string> presetPaths = ListParticlePresetPaths();
             bool assignedPreset = false;
             if (ImGui::BeginCombo("Preset", selectedPreset.empty() ? "(inline emitter)" : selectedPreset.c_str()))
@@ -1420,7 +1421,7 @@ namespace
             const physics::PlayerSettings defaults;
             for (const game::PlayerKey& key : game::PlayerKeys())
             {
-                float value = obj.properties.value(key.key, defaults.*(key.member));
+                float value = jsonfield::Value(obj.properties, key.key, defaults.*(key.member));
                 const bool edited = ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, key.format);
                 if (ImGui::IsItemActivated()) { before_ = obj.properties; }
                 if (edited) { obj.properties[key.key] = value; }

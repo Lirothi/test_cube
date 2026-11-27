@@ -8,6 +8,7 @@
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -495,7 +496,7 @@ namespace
         for (const EditorObject& obj : ctx.document.Objects())
         {
             if (obj.type != "staticMesh") { continue; }
-            const std::string m = normalize(obj.properties.value("mesh", std::string()));
+            const std::string m = normalize(jsonfield::Value(obj.properties, "mesh", std::string()));
             if (!m.empty() && m.rfind(want, 0) == 0) { targets.push_back(obj.id); }
         }
         return targets;
@@ -1877,7 +1878,7 @@ namespace
 
         const auto lastCameraIt = levelEditorIt->find("lastLevelCamera");
         if (lastCameraIt != levelEditorIt->end() && lastCameraIt->is_object() &&
-            NormalizeLevelPath(lastCameraIt->value("level", std::string())) == normalizedPath)
+            NormalizeLevelPath(jsonfield::Value(*lastCameraIt, "level", std::string())) == normalizedPath)
         {
             return TryReadLevelCameraState(*lastCameraIt, out);
         }
@@ -2213,7 +2214,7 @@ namespace
             }
             // The path inside the file is authoritative -- the NAME is a flattening of it
             // and cannot be turned back into a path.
-            const std::string level = root.value("level", std::string{});
+            const std::string level = jsonfield::Value(root, "level", std::string{});
             const auto stored = root.find("turns");
             if (level.empty() || stored == root.end() || !stored->is_array())
             {
@@ -2227,8 +2228,8 @@ namespace
                     continue;
                 }
                 IntentTurn turn;
-                turn.user = entry.value("u", std::string{});
-                turn.assistant = entry.value("a", std::string{});
+                turn.user = jsonfield::Value(entry, "u", std::string{});
+                turn.assistant = jsonfield::Value(entry, "a", std::string{});
                 if (!turn.user.empty() || !turn.assistant.empty())
                 {
                     turns.push_back(std::move(turn));
@@ -2501,8 +2502,8 @@ namespace
 
         std::vector<nlohmann::json> objects;
         if (clipboardJson.is_object() &&
-            clipboardJson.value("editorClipboard", std::string()) == "objectSelection" &&
-            clipboardJson.value("version", 0) == 1)
+            jsonfield::Value(clipboardJson, "editorClipboard", std::string()) == "objectSelection" &&
+            jsonfield::Value(clipboardJson, "version", 0) == 1)
         {
             const auto objectsIt = clipboardJson.find("objects");
             if (objectsIt == clipboardJson.end() || !objectsIt->is_array() || objectsIt->empty())
@@ -2555,7 +2556,7 @@ namespace
 
         editorClipboard = std::move(clipboardText);
         outStatus = objects.size() == 1 ?
-            "Pasted " + objects.front().value("type", std::string("object")) :
+            "Pasted " + jsonfield::Value(objects.front(), "type", std::string("object")) :
             "Pasted " + std::to_string(objects.size()) + " objects";
         return true;
     }

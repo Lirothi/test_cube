@@ -1,4 +1,5 @@
 #include "editor/ui/CollisionEditorTab.h"
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -183,7 +184,7 @@ void CollisionEditorTab::DrawPrimitives(physics::CollisionSettings& settings, co
     ImGui::SeparatorText("Shapes");
     const auto add = [&](physics::PrimitiveKind kind, bool fit)
     {
-        const std::string geometry = doc.value("geometry", std::string());
+        const std::string geometry = jsonfield::Value(doc, "geometry", std::string());
         std::vector<int> exclude = settings.excludeSlots;
         if (fitSlot_ >= 0)
         {
@@ -408,7 +409,7 @@ void CollisionEditorTab::Draw(nlohmann::json& doc, const std::vector<std::string
 
     ImGui::SeparatorText("Result");
     ImGui::Checkbox("Preview as a dynamic copy", &previewAsDynamic_);
-    const std::string geometry = doc.value("geometry", std::string());
+    const std::string geometry = jsonfield::Value(doc, "geometry", std::string());
     // Only what moves the lines: a drag of Friction must not rebuild a room's triangles every frame.
     physics::CollisionSettings shapeOnly = settings;
     shapeOnly.density = physics::CollisionSettings{}.density;

@@ -1,5 +1,6 @@
 #include "editor/commands/SetMaterialSlotCommand.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -98,8 +99,8 @@ bool SetMaterialSlotCommand::Apply(EditorContext& ctx, const std::string& materi
         return &(*it)[index];
     };
     const std::string slot0Default = obj->properties.contains("material")
-        ? obj->properties.value("material", std::string("auto"))
-        : effective.value("material", std::string("auto"));
+        ? jsonfield::Value(obj->properties, "material", std::string("auto"))
+        : jsonfield::Value(effective, "material", std::string("auto"));
 
     nlohmann::json materials = nlohmann::json::array();
     for (size_t i = 0; i < slotCount; ++i)

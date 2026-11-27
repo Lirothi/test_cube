@@ -1,5 +1,6 @@
 #include "editor/commands/PasteObjectCommand.h"
 #include "core/threading/ThreadRole.h" // R16.10: a park instead of a GPU idle
+#include "core/JsonField.h" // R9.6: jsonfield::Value -- value()'s conversions, no throw outside the loader
 #if WITH_EDITOR
 
 #include <exception>
@@ -209,8 +210,8 @@ bool PasteObjectCommand::Execute(EditorContext& ctx)
             if (IsEnvironmentLight(type))
             {
                 object_.type = type;
-                object_.name = CopyName(objectJson_.value("name", std::string()), type);
-                object_.enabled = objectJson_.value("enabled", true);
+                object_.name = CopyName(jsonfield::Value(objectJson_, "name", std::string()), type);
+                object_.enabled = jsonfield::Value(objectJson_, "enabled", true);
                 object_.properties = objectJson_;
                 object_.properties.erase("id");
                 object_.properties.erase("name");
