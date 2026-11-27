@@ -16,6 +16,7 @@
 
 #include "core/logging/Log.h"
 #include "core/JsonField.h" // R9.6d: Value for the document's fields
+#include "app/game/RaceCourse.h" // game::TrackDisplayName (came through Scene.h before R6.2b)
 #include "rendering/view/Camera.h"
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"

@@ -366,7 +366,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
             const bool hasStart = !request.fromCamera && editorController_.FindPlayerStart(start);
             game::RaceCourse course;
             editorController_.FindRaceCourse(course);
-            course.level = std::string(scene.LevelRaceCourse().level); // the document has no file of its own: the loaded level's
+            course.level = std::string(playSession_.World().levelRaceCourse.level); // the document has no file of its own: the loaded level's
             editorOpenBeforePlay_ = editorController_.IsOpen();
             editorController_.SetOpen(false);
             playSession_.Begin(renderer, scene, input, hasStart ? &start : nullptr, &course, request.takeMouse, !fromBoot);
@@ -401,13 +401,13 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     {
         if (Boot().editor.play || (eject && !detecting))
         {
-            const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+            const std::optional<game::PlayerStart>& start = playSession_.World().levelPlayerStart;
             const bool fromCamera = Boot().editor.play && Boot().frame.camOverride;
             // Shipping's level rule: a level without a Player Start keeps the free camera (F8 still walks from it).
             const bool freeByRule = Boot().editor.play && !eject && Boot().dist.playByLevelRule && !start;
             if (!freeByRule)
             {
-                playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &scene.LevelRaceCourse(), eject, false);
+                playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &playSession_.World().levelRaceCourse, eject, false);
             }
             Boot().editor.play = false;
         }
@@ -490,11 +490,11 @@ void AppController::DrawGameMenu(Renderer& renderer, Scene& scene, LevelManager&
         ImGui::SeparatorText(menu_text::kDeveloper);
         if (!playSession_.Playing())
         {
-            const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+            const std::optional<game::PlayerStart>& start = playSession_.World().levelPlayerStart;
             if (ImGui::Button(start ? menu_text::kPlayFromStart : menu_text::kPlayFromCamera, button))
             {
                 gameMenuOpen_ = false;
-                playSession_.Begin(renderer, scene, input, start ? &*start : nullptr, &scene.LevelRaceCourse(), true, false);
+                playSession_.Begin(renderer, scene, input, start ? &*start : nullptr, &playSession_.World().levelRaceCourse, true, false);
             }
         }
         else if (ImGui::Button(menu_text::kStopPlay, button))
@@ -587,14 +587,14 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
     const bool hasStart = editorController_.FindPlayerStart(start);
     game::RaceCourse course;
     editorController_.FindRaceCourse(course);
-    course.level = std::string(scene.LevelRaceCourse().level);
+    course.level = std::string(playSession_.World().levelRaceCourse.level);
     if (!playSession_.OnLevelLoaded(renderer, scene, input, hasStart ? &start : nullptr, &course))
     {
         editorController_.SetOpen(editorOpenBeforePlay_);
         editorController_.SetPlaying(false);
     }
 #else
-    const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+    const std::optional<game::PlayerStart>& start = playSession_.World().levelPlayerStart;
     if (Boot().dist.playByLevelRule)
     {
         // Shipping (owner, 2026-11-13): each level by its own rule -- its Player Start: first person from it; none: the
@@ -607,11 +607,11 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
         }
         if (!playSession_.Playing())
         {
-            playSession_.Begin(renderer, scene, input, &*start, &scene.LevelRaceCourse(), true, false);
+            playSession_.Begin(renderer, scene, input, &*start, &playSession_.World().levelRaceCourse, true, false);
             return;
         }
     }
-    playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr, &scene.LevelRaceCourse());
+    playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr, &playSession_.World().levelRaceCourse);
 #endif
 }
 

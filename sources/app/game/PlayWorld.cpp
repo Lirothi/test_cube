@@ -7,6 +7,8 @@
 #include <utility>
 #include <vector>
 
+#include "app/game/PlayerStartJson.h" // R6.2b: ReadPlayerKeys, kPlayerStartType
+#include "app/game/RaceCourseJson.h"  // ReadRaceKeys
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
 #include "core/logging/Log.h"
@@ -57,6 +59,44 @@ void PlayWorld::HandOver(Scene& scene, Renderer* renderer)
         }
     }
     else { spectated = nullptr; }
+}
+
+void PlayWorld::BeginLevel(const std::string& path)
+{
+    // R6.2b: was JsonLevel's -- the Player Start reset on every load, the course built anew.
+    levelPlayerStart.reset();
+    loadingCourse_ = RaceCourse{};
+    loadingPath_ = path;
+}
+
+void PlayWorld::LevelObject(const nlohmann::json& o, bool enabled)
+{
+    // R6.2b: the loader's own reads of these keys, moved verbatim (under its StrictScope, value() still throws and the
+    // load stops with the file named). The race: a mark of a gate ("raceGate"), a boat a bot helms ("raceBot") --
+    // whatever the object is.
+    const auto toFloat3 = [](const nlohmann::json& j) {
+        if (!j.is_array() || j.size() < 3) { return Math::float3(0.0f, 0.0f, 0.0f); }
+        return Math::float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+    };
+    if (enabled) { ReadRaceKeys(o, toFloat3(o.value("position", nlohmann::json::array())), loadingCourse_); }
+    // The Player Start: the first enabled one of the level.
+    if (enabled && o.value("type", std::string{}) == kPlayerStartType && !levelPlayerStart)
+    {
+        const Math::float3 rotationDeg = toFloat3(o.value("rotationDeg", nlohmann::json::array()));
+        PlayerStart start;
+        start.feet = toFloat3(o.value("position", nlohmann::json::array()));
+        start.pitchRad = rotationDeg.x * Math::DEG2RAD;
+        start.yawRad = rotationDeg.y * Math::DEG2RAD;
+        ReadPlayerKeys(o, start);
+        levelPlayerStart = std::move(start);
+    }
+}
+
+void PlayWorld::EndLevel()
+{
+    loadingCourse_.level = loadingPath_;
+    levelRaceCourse = std::move(loadingCourse_);
+    loadingCourse_ = RaceCourse{};
 }
 
 void PlayWorld::Forget()

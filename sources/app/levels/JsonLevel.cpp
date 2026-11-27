@@ -1,7 +1,6 @@
-#include "app/game/PlayerStartJson.h"
-#include "app/game/RaceCourseJson.h"
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelEnvironment.h" // R9.4: the environment's one road
+#include "app/levels/LevelGameSink.h" // R6.2b: the game's part of a level
 
 #include "core/diagnostics/BootProfile.h"
 #include "core/JsonField.h" // R9.6: StrictScope
@@ -60,6 +59,10 @@ using nlohmann::json;
 
 namespace
 {
+// The level format's object type of the Player Start (game::kPlayerStartType): a place the play session starts from,
+// no runtime object -- the editor's document holds it, the game reads it (R6.2b).
+constexpr const char* kPlayerStartType = "playerStart";
+
 std::wstring Widen(const std::string& s)
 {
     return vfs::Widen(s);
@@ -409,8 +412,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
         levelenv::ApplyColorPipeline(scene, PostProcessGroup(j, "colorPipeline")); // R9.4
     }
 
-    ctx.scene.SetLevelPlayerStart(std::nullopt);
-    game::RaceCourse raceCourse;
+    if (ctx.game) { ctx.game->BeginLevel(sourcePath_); } // R6.2b: the Player Start and the race course are the game's
     std::optional<json> freeCameraStart;
     if (j.contains("objects") && j["objects"].is_array())
     {
@@ -429,8 +431,9 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             }
 #endif
             const std::string type = o.value("type", std::string{});
-            // The race: a mark of a gate ("raceGate"), a boat a bot helms ("raceBot") -- whatever the object is.
-            if (enabled) { game::ReadRaceKeys(o, ToFloat3(o.value("position", json::array()), float3(0.0f, 0.0f, 0.0f)), raceCourse); }
+            // R6.2b: the game reads its own of every object -- a mark of a gate ("raceGate"), a boat a bot helms ("raceBot"),
+            // the Player Start (game::PlayWorld).
+            if (ctx.game) { ctx.game->LevelObject(o, enabled); }
             if (IsFreeCameraStart(o))
             {
 #if WITH_EDITOR
@@ -451,7 +454,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             }
 
             // The Player Start: no runtime object either, a place the play session starts from. The editor's document holds it, and a build without the editor takes it from the Scene.
-            if (type == game::kPlayerStartType)
+            if (type == kPlayerStartType)
             {
 #if WITH_EDITOR
                 if (ctx.editorDocument)
@@ -460,16 +463,6 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
                     ctx.editorDocument->AddLevelObject(startId, o);
                 }
 #endif
-                if (enabled && !ctx.scene.LevelPlayerStart())
-                {
-                    const float3 rotationDeg = ToFloat3(o.value("rotationDeg", json::array()), float3(0.0f, 0.0f, 0.0f));
-                    game::PlayerStart start;
-                    start.feet = ToFloat3(o.value("position", json::array()), float3(0.0f, 0.0f, 0.0f));
-                    start.pitchRad = rotationDeg.x * DEG2RAD;
-                    start.yawRad = rotationDeg.y * DEG2RAD;
-                    game::ReadPlayerKeys(o, start);
-                    ctx.scene.SetLevelPlayerStart(std::move(start));
-                }
                 continue;
             }
 
@@ -531,8 +524,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 
     }
 
-    raceCourse.level = sourcePath_;
-    ctx.scene.SetLevelRaceCourse(std::move(raceCourse));
+    if (ctx.game) { ctx.game->EndLevel(); } // R6.2b
 
 #if WITH_EDITOR
     if (ctx.editorDocument)

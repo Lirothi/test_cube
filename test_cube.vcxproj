@@ -825,6 +825,7 @@
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelDocumentSink.h" />
     <ClInclude Include="sources/app/levels/LevelEnvironment.h" />
+    <ClInclude Include="sources/app/levels/LevelGameSink.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/levels/LevelMigration.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />

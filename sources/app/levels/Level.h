@@ -6,6 +6,7 @@
 class Renderer;
 class Scene;
 class UploadBatch;
+class LevelGameSink;
 #if WITH_EDITOR
 class LevelDocumentSink;
 #endif
@@ -19,6 +20,7 @@ struct LevelLoadContext
     UploadBatch& uploads;
     Renderer& renderer;
     Scene& scene;
+    LevelGameSink* game = nullptr; // R6.2b: the game's part of a level (game::PlayWorld), or null in a tool without one
 #if WITH_EDITOR
     LevelDocumentSink* editorDocument = nullptr; // the editor's document (EditorSceneDocument), or null
 #endif

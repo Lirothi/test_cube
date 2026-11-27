@@ -856,6 +856,7 @@ void App::InitScene()
     }
 
     LevelLoadContext loadCtx{ uploadBatch, renderer, scene };
+    loadCtx.game = game::ActivePlayWorld(); // R6.2b: the Player Start and the race course are the game's
 
     if (!levelManager.HasLevel(JsonLevel::kName))
     {
@@ -1780,7 +1781,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 UploadBatch levelBatch;
                 if (levelBatch.Begin(&renderer))
                 {
-                    LevelLoadContext levelCtx{ levelBatch, renderer, scene
+                    LevelLoadContext levelCtx{ levelBatch, renderer, scene, game::ActivePlayWorld() // R6.2b
 #if WITH_EDITOR
                         , pendingLevel->options.editorDocument
 #endif

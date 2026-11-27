@@ -1517,6 +1517,9 @@
     <ClInclude Include="sources/app/levels/LevelEnvironment.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/levels/LevelGameSink.h">
+      <Filter>sources\app\levels</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/levels/LevelManager.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
