@@ -152,6 +152,7 @@ bool Frame::HandOverSubmitsGoNow() const
 void Frame::ExecuteOrDefer(ID3D12CommandList* list)
 {
     if (!list) { return; }
+    NoteWork(); // R8.1: handed out now, whether it goes at once or at the hand-over
     if (HandOverSubmitsGoNow())
     {
         FlushHandOverSubmits(); // keep the queue order: anything deferred before this goes first

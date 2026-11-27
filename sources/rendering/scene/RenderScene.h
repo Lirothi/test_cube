@@ -28,6 +28,7 @@
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 
 class Renderer;
+class GpuIdlePoint; // R8.1: rendering/core/GpuIdlePoint.h
 class Skybox;
 class OceanRenderable;
 class OceanSimulation;
@@ -100,9 +101,10 @@ public:
     void ApplyStaticSet(std::uint32_t staticSetVersion);
     std::uint32_t StaticSetVersion() const { return renderStaticSetVersion_; }
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
-    // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
+    // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU through `idle` (R8.1: once with whatever
+    // else of the frame needs it), so call sparingly.
     // `sameGeometry`: only the shadow view capacity changed (ShadowGpuData::Rebuild keeps the local shadow cache).
-    void RebuildShadowCasters(Renderer& renderer, bool sameGeometry = false);
+    void RebuildShadowCasters(Renderer& renderer, GpuIdlePoint& idle, bool sameGeometry = false);
 
     // The frame's render half (Scene::Render calls it after the hand-over).
     void Render(Renderer* renderer);
@@ -126,7 +128,7 @@ private:
     const std::unique_ptr<Skybox>& skyBox_;
     OceanSimulation* oceanSimulation_ = nullptr; // R6.4a: the ocean's simulation (Systems), handed over at Sync
 
-    void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM<->SDSM resource switch
+    void ReconcileShadowMode(Renderer* renderer, GpuIdlePoint& idle); // Step 24b: GPU-idle Legacy<->VSM<->SDSM resource switch
     // Plan S's fallback without RT: wanted this frame (the setting on, the RT trace not), and its textures' size / freeing
     // at the GPU-idle point before PrepareViews (skyVis.fallbackResolution).
     bool SkyOcclusionWanted(const Renderer* renderer) const;
@@ -136,7 +138,7 @@ private:
     // The mega VB/IB alone, after ShadowGpuData::UpdateForFrame rebuilt a changed caster set (it waited for the GPU).
     void RebuildShadowMegaBuffer(Renderer& renderer);
     // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.
-    void ReconcileShadowLodCurve(Renderer* renderer);
+    void ReconcileShadowLodCurve(Renderer* renderer, GpuIdlePoint& idle);
     // Occlusion plan S0: which render::VisibilityStats slot a view writes (camera 0, cascades
     // 1..4), or -1 for the views that have none (local lights, clipmap levels).
     int VisibilitySlotFor(const SceneView& view) const;
@@ -194,7 +196,7 @@ private:
     std::atomic<bool> staticCasterMoved_{ false };
     // S9e: grows the view capacity to what the last selection wanted (doubling, up to the ceiling) -- ReconcileShadowMode,
     // at its GPU-idle point. Returns whether it grew (everything sized by views has then been re-created).
-    bool ReconcileShadowCapacity(Renderer* renderer);
+    bool ReconcileShadowCapacity(Renderer* renderer, GpuIdlePoint& idle);
     // S9e: sets the capacity and re-makes what is sized by it (scene views, VSM, SDSM) -- GPU idle; the caller rebuilds
     // the casters. ReconcileShadowCapacity grows through it, FinishLevelLoad resets to the initial capacity.
     void ApplyShadowCapacity(Renderer* renderer, unsigned spots, unsigned points);

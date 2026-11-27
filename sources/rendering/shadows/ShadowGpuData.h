@@ -22,6 +22,7 @@
 #include "shaders/shared/camera_hzb.h" // CameraHzbParams's fields, once (R5.3)
 
 class Renderer;
+class GpuIdlePoint; // R8.1: rendering/core/GpuIdlePoint.h
 struct RenderGraphPassContext;
 class RenderableObjectBase;
 class Frustum;
@@ -65,9 +66,10 @@ public:
 
     // Per-frame per-caster CPU update. Recomputes instance + bounds, writes only changed
     // entries into this frame's ring region, returns the number re-uploaded (0 on a static
-    // scene after warmup). Falls back to a full Rebuild if the caster set changed.
+    // scene after warmup). Falls back to a full Rebuild if the caster set changed -- mid-session through the frame's
+    // GPU-idle point (R8.1, `idle`: one wait with the frame's reconciles).
     std::uint32_t UpdateForFrame(Renderer* renderer,
-                                 const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+                                 const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, GpuIdlePoint& idle);
 
     // Per-frame upload of the active shadow views' frustum planes into this frame's region.
     // `frustums[i]` may be null (inactive view slot → reject-all sentinel so the cull emits

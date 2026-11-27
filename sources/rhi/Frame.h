@@ -3,6 +3,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <source_location>
@@ -45,7 +46,17 @@ public:
     // G10b: the newest frame's submission op and the one before it. BeginFrame waits for the one before: the RHI
     // thread at most one frame behind the recording (UE's GTSyncType 0), and that frame's slot (kFrameCount - 1 back,
     // or less) long submitted.
-    void NoteSubmission(RhiQueue::Ticket ticket) { prevSubmit_ = lastSubmit_; lastSubmit_ = ticket; }
+    void NoteSubmission(RhiQueue::Ticket ticket)
+    {
+        prevSubmit_ = lastSubmit_;
+        lastSubmit_ = ticket;
+        NoteWork(); // R8.1: a frame's lists are on their way to the queues
+    }
+    // Architecture plan R8.1: the GPU work handed out so far (a count: the frame's submission, every ExecuteOrDefer),
+    // taken where it is handed out -- before the RHI thread runs it. A GPU-idle point that waited (GpuIdlePoint) finds the
+    // GPU idle again while this has not moved since its wait.
+    std::uint64_t WorkHandedOut() const { return workHandedOut_.load(std::memory_order_acquire); }
+    void NoteWork() { workHandedOut_.fetch_add(1, std::memory_order_acq_rel); }
     void WaitForSubmissionBeforeLast() { rhi_.WaitFor(prevSubmit_); }
 
     // Full synchronization: from the game half it parks the render half, sends the hand-over submits, waits for the RHI
@@ -69,6 +80,7 @@ private:
     RhiQueue rhi_;
     RhiQueue::Ticket lastSubmit_ = 0;
     RhiQueue::Ticket prevSubmit_ = 0;
+    std::atomic<std::uint64_t> workHandedOut_{ 0 }; // R8.1: WorkHandedOut
     // G7: the game half's deferred queue work (ExecuteOrDefer / SignalOrDefer), in submission order.
     struct HandOverOp
     {

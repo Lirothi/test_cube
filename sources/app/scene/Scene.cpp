@@ -18,6 +18,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h" // g_cleanCapture
 #include "rendering/core/UploadBatch.h"
+#include "rendering/core/GpuIdlePoint.h" // R8.1: the editor's caster refresh waits once
 #include "rendering/renderables/RuntimeObjects.h" // R13.1: the hand-over's road for objects made and taken out
 #include "ocean/BuoyancyLayout.h" // the boats' hull footprints, for their wake
 #include "ocean/OceanSimulation.h"
@@ -73,13 +74,15 @@ void Scene::RefreshShadowGpuForEditor(Renderer& renderer)
     // binding: 1024 pool pages × mesh-groups × (bind VB/IB + ExecuteIndirect) → ~10ms CPU, forever.
     // Game thread plan G4b': park the render half first, then hand it the edit this refresh is for (an object shown,
     // hidden or switched out of the shadows) -- the rebuild reads the render half's switches.
-    renderer.WaitForPreviousFrame();
+    // R8.1: one GPU-idle point for both (the park here and the rebuild's wait were two waits in a row).
+    GpuIdlePoint idle(renderer);
+    idle.Ensure();
     for (const std::unique_ptr<RenderableObjectBase>& obj : objects_)
     {
         if (obj) { obj->SyncSwitchesToRender(); }
     }
     if (render_.StaticSetVersion() != staticSetVersion_) { render_.ApplyStaticSet(staticSetVersion_); }
-    render_.RebuildShadowCasters(renderer);
+    render_.RebuildShadowCasters(renderer, idle);
 }
 #endif
 

@@ -19,6 +19,7 @@
 #include "core/math/Frustum.h"
 #include "materials/MaterialData.h" // C2: per-slot alphaMask/alphaCutoff/albedo for masked shadows
 #include "rendering/core/Renderer.h"
+#include "rendering/core/GpuIdlePoint.h" // R8.1: UpdateForFrame's rebuild waits through the frame's one idle point
 #include "rendering/core/RenderGraph.h" // PrepareCullPass takes a RenderGraphPassContext&
 #include "rendering/core/ComputeDispatch.h"
 #include "rhi/CommandListBindState.h" // A6: the merged draws bypass the bind cache
@@ -2719,7 +2720,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
 }
 
 std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
-    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
+    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, GpuIdlePoint& idle)
 {
     if (!renderer) { return 0; }
     CPU_SCOPE(ProfilerScopes::kShadowGpuUpdate);
@@ -2765,7 +2766,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // after this call (TakeMegaRebuildRequest). Until 2026-10-30 nothing did -- after the owner's "Lamps" switch-on
         // the local views lost their compaction and Tessy's atlas path for 13 s, until some full rebuild came along.
         const bool midSession = instances_.Valid() || bounds_.Valid();
-        if (midSession) { renderer->WaitForPreviousFrame(); }
+        if (midSession) { idle.Ensure(); } // R8.1: the frame's one GPU-idle point (the reconciles may have waited already)
         Rebuild(renderer, objects);
         megaRebuildRequest_ = midSession;
         forceContentRefresh_ = false; // this frame's mover signal already covers the rebuild

@@ -5464,6 +5464,27 @@ Debug, реестр настроек и таблица графики, вкла�
   - **R8.3–R8.5** — разрез `ShadowGpuData`, `VirtualShadowMap`, `RenderTargetManager::Create` по ответственности.
   - **R4.5e1–3** — после R8.1 (тот же `BeginFrame`).
   - Полный `--scene-stress-gbv` в конце (разрешение владельца на R8).
+
+  **Сделано R8.1 (2026-11-27).** `rendering/core/GpuIdlePoint.h`: точка простоя — первая нужда ждёт
+  (`WaitForPreviousFrame`, счётчик видит место точки), следующие находят GPU свободным, пока с её ожидания не отдано ни
+  одной работы (`rhi::Frame::WorkHandedOut`: считается там, где работу отдают, — `NoteSubmission` кадра и каждый
+  `ExecuteOrDefer`, до потока RHI); `NoteIdle` — простой сделал другой (`UploadBatch::SubmitAndWait` ждёт всё отданное,
+  своё тоже). Одна точка на `RenderScene::Render`: через неё — `ReconcileShadowMode` (пулы VSM, атласы, кэш), его
+  `ReconcileShadowCapacity`, `ReconcileShadowLodCurve` и пересборка кастеров после перезагрузки шейдера
+  (`RebuildShadowCasters(renderer, idle, ...)`), рост набора кастеров в `ShadowGpuData::UpdateForFrame` (ожидание
+  `midSession`). Правило «освобождать и пересоздавать — только в простое» стало параметром этих функций: без точки их не
+  позвать. Редактор (`Scene::RefreshShadowGpuForEditor`) — своя точка, одно ожидание вместо двух подряд (парковка и
+  пересборка). Проверено: Debug, Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS;
+  виды (эталон / после по очереди: lagoon пол 0.0012 / 0.012 %, эталон-после 0.0001 / 0.013 %; bath 0.068 / 0.006 % и
+  0.007 / 0.066 %; море 0.354 / 0.067 % и 0.062 / 0.360 % — в шуме); Release `--scene-stress=150 --rt-audit` CLEAN, PASS,
+  простоев GPU за сессию 586 (604 у всех шагов до R8.1); на одном потоке CLEAN, PASS; Debug `--scene-stress=12` CLEAN,
+  ошибок 0. Замер (свой редактор, MCP на 8173, `r81_waits.py` рабочей папки: wind_test, четыре раза туда и обратно одним
+  `set_settings` — `csm.atlasRes` и `vsm.shadowLodBias` в одном кадре; эталон = Release_Editor на R7.3, по очереди A B A
+  B): эталон — 21 простой в обоих прогонах (по 7: `RenderScene.cpp:1340` режим теней, `:231` пересборка кастеров, `:236`
+  её загрузка), после — 14 в обоих (7 — точка, `:1470`; 7 — загрузка, `:237`). Контроль: точка ждёт при каждой нужде —
+  снова 21 (14 на точке, 7 загрузка); файл возвращён побайтно, Release_Editor пересобран. По времени выигрыш мал:
+  повторное ожидание при пустом GPU — один круг забора; смысл шага — одно место и правило в API. Не покрыто: рост ёмкости
+  локальных теней живьём (лампы «Lamps») — та же точка, на ней же ждёт.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →
   реестр панелей с `Draw`. **R10.2** (**В10**): отрисовка панели под `try` с восстановлением стека ImGui
   (`ImGui::ErrorRecoveryStoreState` / `TryToRecoverState`, ImGui 1.92): исключение — Error, панель закрыта,

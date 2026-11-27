@@ -14,6 +14,7 @@
 #include "rendering/view/Camera.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/GpuIdlePoint.h" // R8.1: the frame's one GPU-idle point
 #include "rendering/core/RenderConstants.h" // g_cleanCapture
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
@@ -221,19 +222,20 @@ void RenderScene::ApplyStaticSet(std::uint32_t staticSetVersion)
     for (SceneView& view : shadowViews_.PointViews()) { view.queue.Clear(); }
 }
 
-void RenderScene::RebuildShadowCasters(Renderer& renderer, bool sameGeometry)
+void RenderScene::RebuildShadowCasters(Renderer& renderer, GpuIdlePoint& idle, bool sameGeometry)
 {
     // Rebuild the caster data + consolidated mega VB/IB on a fresh GPU-idle upload batch (the meshes'
     // buffers have decayed to COMMON, so EnsureMegaBuffer's implicit-promotion copies are valid).
     // Mirrors FinalizeLevelLoad. The Rebuild pre-empts the per-frame UpdateForFrame rebuild (counts
     // already match), so there is no double work. Used by the editor caster-set refresh and the
     // shadow-LOD-bias change — both need the mega buffer (only ever built here) regenerated.
-    renderer.WaitForPreviousFrame(); // no in-flight frame references the old mega buffers before we free them
+    idle.Ensure(); // R8.1: no in-flight frame references the old mega buffers before we free them (the frame's one wait)
     UploadBatch uploads;
     if (!uploads.Begin(&renderer)) { return; }
     shadowGpu_.Rebuild(&renderer, objects_, sameGeometry);
     shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
     uploads.SubmitAndWait(&renderer);
+    idle.NoteIdle(); // its wait covered everything handed out: the next need of the frame finds the GPU idle
     // Content (materials/geometry) may have changed without a transform change. Keep the next VSM
     // frame from reusing cached pages rendered with the previous descriptors / previous LOD.
     shadowGpu_.ForceContentRefreshNextFrame();
@@ -270,7 +272,7 @@ void RenderScene::ReconcileSkyOcclusion(Renderer* renderer)
     skyOcclusion_.Resize(renderer, want);
 }
 
-void RenderScene::ReconcileShadowLodCurve(Renderer* renderer)
+void RenderScene::ReconcileShadowLodCurve(Renderer* renderer, GpuIdlePoint& idle)
 {
     // The shadow LOD bias and tier stride pick the caster LOD rasterized into each shadow view.
     // The geometry lives in the consolidated mega buffer built at load, so a curve change needs a
@@ -283,7 +285,7 @@ void RenderScene::ReconcileShadowLodCurve(Renderer* renderer)
         shadowGpu_.BuiltShadowLodTierStride() == render::ShadowLodTierStride() &&
         shadowGpu_.BuiltShadowLodBiasNearTier() == render::g_shadowLodBiasNearTier &&
         shadowGpu_.BuiltClipmapTierShift() == ShadowGpuData::ClipmapTierShift()) { return; }
-    RebuildShadowCasters(*renderer);
+    RebuildShadowCasters(*renderer, idle);
 }
 
 void RenderScene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
@@ -1199,7 +1201,7 @@ ShadowPlanInputs RenderScene::ShadowInputs(const Camera& camera)
     return in;
 }
 
-bool RenderScene::ReconcileShadowCapacity(Renderer* renderer)
+bool RenderScene::ReconcileShadowCapacity(Renderer* renderer, GpuIdlePoint& idle)
 {
     // Local-light plan S9e: UE shadows every visible movable light that passes its fade (ShadowSetup.cpp:6411-6482) --
     // no count. Ours are a CAPACITY of view slots: when the last selection (LightManager::SelectShadowedSpots / Points)
@@ -1219,9 +1221,9 @@ bool RenderScene::ReconcileShadowCapacity(Renderer* renderer)
     }
     if (spots == render::g_shadowSpotCapacity && points == render::g_shadowPointCapacity) { return false; }
 
-    renderer->WaitForPreviousFrame(); // nothing in flight reads a buffer re-made below
+    idle.Ensure(); // R8.1: nothing in flight reads a buffer re-made below (the frame's one wait)
     ApplyShadowCapacity(renderer, spots, points);
-    RebuildShadowCasters(*renderer, /*sameGeometry=*/true);
+    RebuildShadowCasters(*renderer, idle, /*sameGeometry=*/true);
     return true;
 }
 
@@ -1256,7 +1258,7 @@ void RenderScene::ApplyShadowCapacity(Renderer* renderer, unsigned spots, unsign
              render::MaxShadowViews(), oldViews);
 }
 
-void RenderScene::ReconcileShadowMode(Renderer* renderer)
+void RenderScene::ReconcileShadowMode(Renderer* renderer, GpuIdlePoint& idle)
 {
     // Step 24b: make the VSM resource state match the active shadow mode. The common path is a cheap
     // bool compare; only when they disagree (a Ctrl+V toggle since last frame) do we stall to GPU idle
@@ -1287,7 +1289,7 @@ void RenderScene::ReconcileShadowMode(Renderer* renderer)
         }
     }
     // Plan S9e: the shadow view capacity first -- what it re-creates, the residency below then settles as usual.
-    ReconcileShadowCapacity(renderer);
+    ReconcileShadowCapacity(renderer, idle);
     const bool wantVsm = render::VsmActive();
     const bool wantAtlasFull = !wantVsm; // legacy spot/point atlases full-res only in Legacy mode
     // S15: the SDSM buffers follow the same residency rule -- resident only in the mode that uses
@@ -1337,7 +1339,7 @@ void RenderScene::ReconcileShadowMode(Renderer* renderer)
                          (wantCachePages == 0u || localShadowCache_.PageSize() == wantLocalRes);
     if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk && pagesOk && cacheOk) { return; } // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
-    renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
+    idle.Ensure(); // R8.1: GPU idle before freeing/allocating shadow resources (the frame's one wait)
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
     if (!atlasOk) { renderer->SetLocalShadowResidency(wantAtlasFull); }
     // Plan S9: one atlas page of each pool in MB (R16): a spot page res^2, a point page 3 x 2 faces of res / 2.
@@ -1462,8 +1464,12 @@ void RenderScene::Render(Renderer* renderer) {
     syncedThisFrame_ = false;
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
-    ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
-    ReconcileShadowLodCurve(renderer); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
+    // R8.1: the frame's one GPU-idle point (GpuIdlePoint.h) -- every reconcile below that frees or re-makes what the frames
+    // in flight read, and the caster set's growth in UpdateForFrame, wait through it: the first need waits, the rest find
+    // the GPU idle while nothing was handed out since.
+    GpuIdlePoint idle(*renderer);
+    ReconcileShadowMode(renderer, idle); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
+    ReconcileShadowLodCurve(renderer, idle); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
     ReconcileSkyOcclusion(renderer);   // the sky-from-above map's size, or freeing it (render::deferred)
     // The GI probe volumes a graphics level (or a knob) turned off give their memory back (GPU idle).
     sceneRenderer_.ReleaseUnwantedGi(renderer, frameData_.settings.giEnabled && renderer->IsRaytracingSupported(),
@@ -1495,7 +1501,7 @@ void RenderScene::Render(Renderer* renderer) {
         //
         // The ForceContentRefreshNextFrame inside is not incidental either: the cached VSM pages
         // were rasterised with the shaders that just changed.
-        RebuildShadowCasters(*renderer);
+        RebuildShadowCasters(*renderer, idle);
     }
 
     {
@@ -1508,7 +1514,7 @@ void RenderScene::Render(Renderer* renderer) {
     // Rung 0 / Steps 1-2: refresh the persistent per-caster shadow buffers (instance + bounds),
     // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into
     // mapped upload memory; no consumer yet.
-    shadowGpu_.UpdateForFrame(renderer, objects_);
+    shadowGpu_.UpdateForFrame(renderer, objects_, idle);
     // A caster-set change mid-session (the editor's setEnabled / spawn) was just rebuilt, and that drops the mega VB/IB:
     // without it the local views lose their compaction and the Tessy atlas path, VSM its single-draw page render.
     if (shadowGpu_.TakeMegaRebuildRequest()) { RebuildShadowMegaBuffer(*renderer); }

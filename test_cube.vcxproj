@@ -976,6 +976,7 @@
     <ClInclude Include="sources/rhi/RhiQueue.h" />
     <ClInclude Include="sources/rhi/SwapchainManager.h" />
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
+    <ClInclude Include="sources/rendering/core/GpuIdlePoint.h" />
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h" />
     <ClInclude Include="sources/rendering/rt/BindlessTable.h" />
     <ClInclude Include="sources/rendering/rt/RtSceneAs.h" />
