@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cassert>
+#include <cstddef> // offsetof: ObjectRenderState's field table (R7.1)
 #include <cstdint>
 #include <vector>
 #include <d3d12.h>
@@ -94,6 +95,38 @@ struct RenderBatchKey
         return materialData < o.materialData;
     }
 };
+
+// Architecture plan R7.1: what the render half reads of an object, in one place -- written only at the hand-over
+// (SyncSwitchesToRender, SyncSceneState: Scene::Sync) or with the render half parked. The game's copies -- the
+// visibility (gameVisible_), RenderableObject's position (pos_) and shadow switch (gameCastsShadow_) -- are what the
+// editor, the buoyancy and the game write at any time; --rt-audit hashes every field here (kObjectRenderStateFields).
+struct ObjectRenderState
+{
+    Math::mat4 model;        // as the frame draws it: the authored S*R*T with the render offset (RenderableObject)
+    Math::mat4 prevModel;    // last frame's: the motion vectors
+    Math::float3 position{}; // the position as the hand-over took it (RenderableObject::GetRenderPosition)
+    bool visible = true;     // IsVisible: the queues, the casters, RT
+    bool castsShadow = true; // RenderableObject's shadow switch (CastsShadow)
+    bool moved = false;      // the model matrix moved this frame (RenderableObject::MovedThisFrame, Step 7)
+};
+
+// R7.1: ObjectRenderState's fields by name -- what --rt-audit hashes one by one (Scene::HashFrozenState) and its
+// self-test writes in turn (RenderableObjectBase::ScribbleRenderStateForAudit). A field added above comes here too.
+struct ObjectRenderStateField
+{
+    const char* name;
+    std::size_t offset;
+    std::size_t size;
+};
+inline constexpr ObjectRenderStateField kObjectRenderStateFields[] = {
+    { "model matrix", offsetof(ObjectRenderState, model), sizeof(Math::mat4) },
+    { "previous model matrix", offsetof(ObjectRenderState, prevModel), sizeof(Math::mat4) },
+    { "render position", offsetof(ObjectRenderState, position), sizeof(Math::float3) },
+    { "visibility", offsetof(ObjectRenderState, visible), sizeof(bool) },
+    { "cast shadow", offsetof(ObjectRenderState, castsShadow), sizeof(bool) },
+    { "moved this frame", offsetof(ObjectRenderState, moved), sizeof(bool) },
+};
+inline constexpr std::size_t kObjectRenderStateFieldCount = sizeof(kObjectRenderStateFields) / sizeof(kObjectRenderStateFields[0]);
 
 class RenderableObjectBase
 {
@@ -309,6 +342,24 @@ public:
 #endif
     }
 
+    // R7.1: the render half's copy of this object, whole (ObjectRenderState).
+    const ObjectRenderState& RenderState() const { return render_; }
+    // --rt-audit-selftest (R7.1): a game-half write into field `field` of the frozen copy (kObjectRenderStateFields)
+    // while the render thread draws -- what the audit must report by its name. A flag flips; a matrix or the position
+    // moves a millimetre up. The next hand-over writes the field again.
+    void ScribbleRenderStateForAudit(std::size_t field)
+    {
+        switch (field % kObjectRenderStateFieldCount)
+        {
+        case 0: render_.model.m._42 += 0.001f; break;
+        case 1: render_.prevModel.m._42 += 0.001f; break;
+        case 2: render_.position.y += 0.001f; break;
+        case 3: render_.visible = !render_.visible; break;
+        case 4: render_.castsShadow = !render_.castsShadow; break;
+        default: render_.moved = !render_.moved; break;
+        }
+    }
+
     // Visibility: hidden objects are skipped during bucketization (not drawn in
     // any view) but stay in the scene. Default visible. Used by the editor's
     // "enabled" toggle.
@@ -317,17 +368,17 @@ public:
     // half's (IsVisible: the queues, the casters, RT), which takes the game's at the hand-over (SyncSwitchesToRender,
     // Scene::Sync) -- and at once while the render half is parked or at the hand-over, so a parked caster rebuild sees
     // the edit it was parked for.
-    bool IsVisible() const { return visible_; }
+    bool IsVisible() const { return render_.visible; }
     bool IsVisibleGame() const { return gameVisible_; }
     void SetVisible(bool visible)
     {
         const bool changed = gameVisible_ != visible;
         gameVisible_ = visible;
-        if (threading::GameParkedOrSync()) { visible_ = visible; }
+        if (threading::GameParkedOrSync()) { render_.visible = visible; }
         if (changed && physicsRegistered_) { physics::NotifyChanged(this); } // a hidden object has no body
     }
     // The game's switches (visibility, a mesh's shadow switch) into the render half's copies.
-    virtual void SyncSwitchesToRender() { visible_ = gameVisible_; }
+    virtual void SyncSwitchesToRender() { render_.visible = gameVisible_; }
     // The game's view of the shadow switch (the editor's commands); types that never cast say false in both.
     virtual bool CastsShadowGame() const { return CastsShadow(); }
 
@@ -360,7 +411,7 @@ protected:
     std::uint64_t editorObjectId_ = 0;
 #endif
     std::uint64_t cameraVisibleFrame_ = ~0ull;
-    bool visible_ = true;     // the render half's (G4)
+    ObjectRenderState render_; // R7.1: the render half's copy (RenderState)
     bool physicsRegistered_ = false; // the world knows this object (RenderableObject::SetPhysicsMotion)
     bool gameVisible_ = true; // the game's
     bool gbufferIndirect_ = false;

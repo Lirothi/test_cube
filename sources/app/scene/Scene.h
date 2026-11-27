@@ -51,9 +51,10 @@ public:
     void Render(Renderer* renderer);
 
     // Plan G9, --rt-audit (app/diagnostics/RtAudit.h): what the hand-over froze for the render half, hashed -- per object
-    // its model matrix, last frame's, position, visibility and shadow switch (kFrozenObjectFields), then one hash a
-    // point light and a spot light (their render descs). Render half (or the hand-over).
-    static constexpr std::size_t kFrozenObjectFields = 5;
+    // every field of its render state (R7.1, ObjectRenderState: the matrices, the position, the visibility, the shadow
+    // switch, the move flag), then one hash a point light and a spot light (their render descs). Render half (or the
+    // hand-over).
+    static constexpr std::size_t kFrozenObjectFields = kObjectRenderStateFieldCount; // R7.1: ObjectRenderState's fields
     struct FrozenStateHash
     {
         std::vector<std::uint64_t> hashes;
@@ -63,8 +64,8 @@ public:
     };
     void HashFrozenState(FrozenStateHash& out) const;
     std::string FrozenFieldName(const FrozenStateHash& layout, std::size_t index) const;
-    // --rt-audit-selftest: writes one object's model matrix from the game half while the render thread draws -- what
-    // the audit must report. False when the scene has no object to write.
+    // --rt-audit-selftest: writes a field of one object's render state from the game half while the render thread draws,
+    // each field in turn (R7.1) -- what the audit must report, by name. False when the scene has no object to write.
     bool ScribbleFrozenStateForAudit();
 
     // Both halves: the render half's pointers into the objects first, then the world (World::Clear).
@@ -86,6 +87,7 @@ private:
     void SyncObjectsForRender(SceneObjectSyncReason reason);
 
     std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
+    std::size_t auditScribbleField_ = 0; // R7.1: --rt-audit-selftest writes the render state's fields in turn
     // R13.3: the session's journal -- what the running session made (crossed out as it goes), what a closed one left to
     // take out at the next hand-over.
     std::vector<const RenderableObjectBase*> sessionSpawned_;

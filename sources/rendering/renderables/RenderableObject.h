@@ -79,17 +79,17 @@ public:
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform
-    const Math::mat4& GetModelMatrix() const { return modelMatrix_; }
-    const Math::mat4& GetPreviousModelMatrix() const { return prevModelMatrix_; }
+    const Math::mat4& GetModelMatrix() const { return render_.model; }
+    const Math::mat4& GetPreviousModelMatrix() const { return render_.prevModel; }
 
     // Rung 0 (Step 7 / Rung 1 Step 11): did this object's model matrix change during this
     // frame's SyncSceneState? Snapshotted before modelMatrixChangedThisTick_ is cleared, so it
     // survives to render time. Lets the GPU shadow path re-upload only movers (skip static
     // casters entirely) instead of re-checking every caster each frame.
-    bool MovedThisFrame() const { return movedThisFrame_; }
+    bool MovedThisFrame() const { return render_.moved; }
     void ResetMotionHistory()
     {
-        prevModelMatrix_ = modelMatrix_;
+        render_.prevModel = render_.model;
         prevModelMatrixValid_ = true;
         modelMatrixChangedThisTick_ = false;
     }
@@ -97,14 +97,14 @@ public:
     {
         if (prevModelMatrixValid_)
         {
-            prevModelMatrix_ = modelMatrix_;
+            render_.prevModel = render_.model;
         }
         else
         {
-            prevModelMatrix_ = m;
+            render_.prevModel = m;
             prevModelMatrixValid_ = true;
         }
-        modelMatrix_ = m;
+        render_.model = m;
         transformDirty_ = false;
         modelMatrixChangedThisTick_ = true;
         MarkWorldBoundsDirty();
@@ -118,7 +118,7 @@ public:
     Math::float3 GetPosition() const { return pos_; }
     // Game thread plan G4: the position as the hand-over took it (SyncSceneState) -- what the render half reads (the
     // wind's distance fade, an emitter's origin, the water's level); pos_ above is the game's, moved at any time.
-    const Math::float3& GetRenderPosition() const { return renderPos_; }
+    const Math::float3& GetRenderPosition() const { return render_.position; }
     Math::float3 GetScale() const { return scale_; }
     Math::float3 GetRotationEulerRad() const { return rotEuler_; }
     Math::mat4 GetOrientationMatrix() const { return Math::mat4::RotationFromEulerXYZRad(rotEuler_); }
@@ -126,7 +126,7 @@ public:
     // --- Render offset -----------------------------------------------------------------------
     // A WORLD-space pose correction composed after the authored S*R*T: the ocean's buoyancy
     // (ocean/OceanBuoyancy) heaves, pitches and rolls a boat through it every frame. Only
-    // modelMatrix_ sees it -- and through it everything drawn: motion vectors, shadows, the RT
+    // render_.model sees it -- and through it everything drawn: motion vectors, shadows, the RT
     // instance, culling bounds. pos_/rotEuler_/scale_, what GetPosition() and friends return,
     // what the editor document holds and what a save writes, never do.
     void SetRenderOffset(const Math::mat4& worldOffset);
@@ -296,7 +296,7 @@ public:
 
     virtual bool IsTransparent() const;
 
-    bool CastsShadow() const override { return castsShadow_; }
+    bool CastsShadow() const override { return render_.castsShadow; }
     // Take an object OUT of the shadow-caster set without touching its visibility. One moving caster
     // is enough to set VSM's `forceAll` (ShadowGpuData::MoverCount() > 0), which marks EVERY resident
     // page dirty and re-renders the whole pool -- measured at ~195 ms per frame in Debug against a
@@ -307,18 +307,18 @@ public:
     void SetCastsShadow(bool v)
     {
         gameCastsShadow_ = v;
-        if (threading::GameParkedOrSync()) { castsShadow_ = v; }
+        if (threading::GameParkedOrSync()) { render_.castsShadow = v; }
     }
     bool CastsShadowGame() const override { return gameCastsShadow_; }
     void SyncSwitchesToRender() override
     {
         RenderableObjectBase::SyncSwitchesToRender();
-        castsShadow_ = gameCastsShadow_;
+        render_.castsShadow = gameCastsShadow_;
     }
     // The per-object switch is what says no (the level's "castShadow": false, the Inspector) -- not a type that never
     // casts (the ocean, particles: their CastsShadow() override is false with the switch left on). Such an object
     // keeps its shadow PSOs and its place in the GPU-driven table (ShadowGpuData::IsCaster) so the switch can go back.
-    bool ShadowSwitchedOff() const { return !castsShadow_; }
+    bool ShadowSwitchedOff() const { return !render_.castsShadow; }
     // How much of the light this mesh's cutouts (alpha-tested slots: a leaf card, a frond) stop for the VISIBILITY rays
     // -- the sky visibility, the GI's probe/shadow/sky rays, the fog's sky and sun: a ray that hits one carries 1 - this
     // on and goes no further (rt_geometry.hlsli RtVisibilityTransmittance). The asset's mesh.json "rtCutoutOpacity" (the
@@ -342,7 +342,7 @@ public:
             return false;
         }
         out.mesh = mesh_.get();
-        out.world = modelMatrix_;
+        out.world = render_.model;
         out.castsShadow = CastsShadow();
         return true;
     }
@@ -374,7 +374,6 @@ protected:
 
     void MarkTransformDirty();
 
-    bool castsShadow_ = true; // see SetCastsShadow; the render half's (G4)
     bool gameCastsShadow_ = true;
     float rtCutoutOpacity_ = 1.0f; // see SetRtCutoutOpacity
     float lodPixelErrorScale_ = 0.0f; // see SetLodPixelErrorScale; 0 = the object never said
@@ -411,8 +410,6 @@ protected:
     std::shared_ptr<Material>     shadowMaterial_;
 
     std::shared_ptr<Mesh> mesh_;
-    Math::mat4 modelMatrix_;
-    Math::mat4 prevModelMatrix_;
 
     // CB (upload, per-object)
     bool allowWireframe_ = true;
@@ -459,7 +456,6 @@ private:
     std::vector<std::uint8_t> chunkVisCamera_; // S1: per-chunk camera frustum mask (see ChunkCameraVisible)
 
     Math::float3 pos_{};
-    Math::float3 renderPos_{}; // G4: pos_ as SyncSceneState took it
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
     Math::float3 rotEuler_{};
     Math::mat4 renderOffset_;
@@ -477,5 +473,4 @@ private:
     bool transformDirty_ = true;
     bool prevModelMatrixValid_ = false;
     bool modelMatrixChangedThisTick_ = false;
-    bool movedThisFrame_ = false; // render-visible snapshot of modelMatrixChangedThisTick_ (Step 7)
 };

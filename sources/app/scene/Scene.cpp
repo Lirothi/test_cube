@@ -105,12 +105,13 @@ void Scene::HashFrozenState(FrozenStateHash& out) const
     out.hashes.reserve(out.objects * kFrozenObjectFields + out.pointLights + out.spotLights);
     for (const auto& obj : objects_)
     {
-        const RenderableObject* r = obj ? obj->AsRenderableObject() : nullptr;
-        out.hashes.push_back(r ? FrozenHashBytes(&r->GetModelMatrix(), sizeof(Math::mat4)) : 0u);
-        out.hashes.push_back(r ? FrozenHashBytes(&r->GetPreviousModelMatrix(), sizeof(Math::mat4)) : 0u);
-        out.hashes.push_back(r ? FrozenHashBytes(&r->GetRenderPosition(), sizeof(Math::float3)) : 0u);
-        out.hashes.push_back(obj && obj->IsVisible() ? 1u : 0u);
-        out.hashes.push_back(obj && obj->CastsShadow() ? 1u : 0u);
+        // R7.1: the object's render state whole, field by field (kObjectRenderStateFields) -- the move flag too, which the
+        // five hashes before it left out.
+        const unsigned char* state = obj ? reinterpret_cast<const unsigned char*>(&obj->RenderState()) : nullptr;
+        for (const ObjectRenderStateField& field : kObjectRenderStateFields)
+        {
+            out.hashes.push_back(state ? FrozenHashBytes(state + field.offset, field.size) : 0u);
+        }
     }
     for (const PointLight& light : lightManager_.PointLights())
     {
@@ -133,8 +134,6 @@ void Scene::HashFrozenState(FrozenStateHash& out) const
 
 std::string Scene::FrozenFieldName(const FrozenStateHash& layout, std::size_t index) const
 {
-    static const char* const kObjectFields[kFrozenObjectFields] = {
-        "model matrix", "previous model matrix", "render position", "visibility", "cast shadow" };
     const std::size_t objectHashes = layout.objects * kFrozenObjectFields;
     if (index < objectHashes)
     {
@@ -146,7 +145,7 @@ std::string Scene::FrozenFieldName(const FrozenStateHash& layout, std::size_t in
             name += " (editor id " + std::to_string(objectIds_[object]) + ")";
         }
 #endif
-        return name + " " + kObjectFields[index % kFrozenObjectFields];
+        return name + " " + kObjectRenderStateFields[index % kFrozenObjectFields].name; // R7.1
     }
     index -= objectHashes;
     if (index < layout.pointLights)
@@ -163,9 +162,9 @@ bool Scene::ScribbleFrozenStateForAudit()
         RenderableObject* r = obj ? obj->AsRenderableObject() : nullptr;
         if (r)
         {
-            Math::mat4 m = r->GetModelMatrix();
-            m.m._42 += 0.001f; // a millimetre up (row-vector translation): a game-half write into the frozen copy
-            r->SetModelMatrix(m);
+            // R7.1: every field of the frozen copy in turn (ObjectRenderState), not the model matrix alone -- the audit
+            // must name each one it sees moved.
+            r->ScribbleRenderStateForAudit(auditScribbleField_++);
             return true;
         }
     }

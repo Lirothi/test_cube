@@ -162,7 +162,7 @@ void RenderableObject::Init(Renderer* renderer,
     Material::GraphicsDesc graphicsDesc = BuildGraphicsDesc(renderer);
     graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc);
 
-    // Built for an object the level's "castShadow": false switched off too (!castsShadow_): the Inspector can switch it
+    // Built for an object the level's "castShadow": false switched off too (!render_.castsShadow): the Inspector can switch it
     // back on, and a caster without its PSO draws nothing on the CPU path -- nor does an instanced run it leads.
     if (CastsShadow() || ShadowSwitchedOff())
     {
@@ -592,7 +592,7 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     // Game thread plan G4: the hand-over (Scene::Sync every frame; a load or a spawn with the render half parked)
     // is the ONLY writer of what the render half reads here -- the model matrices, the bounds, the move flag.
     TC_CHECK_GAME_PARKED_OR_SYNC("RenderableObject::SyncSceneState");
-    renderPos_ = pos_;
+    render_.position = pos_;
     const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame || resetMotionOnSync_;
     // A body put back by Stop: a cut, no motion vector, but it DID move, and the cull's cross-check and the caster table must hear of it. A load or a spawn does not: Rebuild does the full upload then.
     const bool putBack = reason == SceneObjectSyncReason::Frame && resetMotionOnSync_;
@@ -600,7 +600,7 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
 
     if (!prevModelMatrixValid_)
     {
-        prevModelMatrix_ = modelMatrix_;
+        render_.prevModel = render_.model;
         prevModelMatrixValid_ = true;
     }
 
@@ -608,7 +608,7 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     {
         if (!resetMotionHistory)
         {
-            prevModelMatrix_ = modelMatrix_;
+            render_.prevModel = render_.model;
         }
         RebuildModelMatrix();
         transformDirty_ = false;
@@ -623,7 +623,7 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     }
     else if (!modelMatrixChangedThisTick_)
     {
-        prevModelMatrix_ = modelMatrix_;
+        render_.prevModel = render_.model;
     }
 
     if (worldBoundsDirty_)
@@ -634,7 +634,7 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     // Step 7: snapshot the move signal so it survives to render time (the GPU shadow path reads
     // it after Tick to re-upload only movers). LevelLoad/spawn already reset it via
     // ResetMotionHistory above, so those frames read false — Rebuild does the full upload then.
-    movedThisFrame_ = modelMatrixChangedThisTick_;
+    render_.moved = modelMatrixChangedThisTick_;
     modelMatrixChangedThisTick_ = false;
 }
 
@@ -683,7 +683,7 @@ void RenderableObject::UpdateWorldBoundsCache() const
         const AABB& localBounds = currentMesh->GetBoundingBox();
         if (localBounds.IsValid())
         {
-            worldBoundsCache_ = localBounds.Transform(modelMatrix_);
+            worldBoundsCache_ = localBounds.Transform(render_.model);
         }
         else
         {

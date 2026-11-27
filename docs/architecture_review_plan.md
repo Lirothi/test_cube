@@ -5364,6 +5364,41 @@ Debug, реестр настроек и таблица графики, вкла�
   `HashFrozenState`, `--rt-audit-selftest` падает и на нём. **R7.2**: `RenderableObject.h:17-18` перестаёт включать
   `ocean/` и `physics/`: маска воды → плавучесть → физика → судно, по таблице в своём модуле. **R7.3**: 80
   даункастов `As*()` в 25 файлах (`ShadowGpuData.cpp` — 21, `Scene.cpp` — 14) → запрос способности.
+
+  **Подшаги R7 (2026-11-27).** Сверено по коду после R6 и R13: `HashFrozenState` — теперь `Scene.cpp:99-130` (те же пять
+  полей объекта); пары «игра / рендер» у объекта — три: видимость (`gameVisible_` / `visible_`,
+  `RenderableObjectBase.h:363-365`), выключатель тени (`gameCastsShadow_` / `castsShadow_`, `RenderableObject.h:377-378`),
+  позиция (`pos_` / `renderPos_`, `:461-462`); ещё три поля рендерная половина читает, а пишет только передача: матрица,
+  прежняя матрица (`:414-415`) и флаг движения (`movedThisFrame_`, `:480`, ставится `SyncSceneState`,
+  `RenderableObject.cpp:637`). Трогают их четыре файла. Включения `RenderableObject.h:17-18` на месте. `As*()` — 107
+  упоминаний в 39 файлах вместе с объявлениями (`ShadowGpuData.cpp` — 21); точный список вызовов — в начале R7.3.
+  - **R7.1**: `ObjectRenderState` (`RenderableObjectBase.h`) — все шесть полей рендерной половины в одном месте, у
+    базового класса; таблица полей с именами — одна на хэш аудита и его самопроверку; самопроверка пишет каждое поле по
+    очереди и проходит, только если аудит назвал все; тест передачи — в `intent_regression`.
+  - **R7.2**: как в плане выше.
+  - **R7.3**: как в плане выше, по списку, снятому в начале шага.
+
+  **Сделано R7.1 (2026-11-27).** `ObjectRenderState` (`RenderableObjectBase.h`): матрица, прежняя матрица, позиция,
+  видимость, выключатель тени, флаг движения — член `render_` базового класса, `RenderState()` читает его целиком;
+  поля переименованы на месте (`RenderableObject.h/.cpp`, `RenderableObjectBase.h`), игровые копии (`gameVisible_`,
+  `pos_`, `gameCastsShadow_`) остались, где были. `kObjectRenderStateFields` — таблица полей с именами (смещение,
+  размер): `Scene::HashFrozenState` хэширует по ней каждое поле (шесть вместо пяти: флаг движения раньше не хэшировался),
+  `FrozenFieldName` берёт оттуда имена. `--rt-audit-selftest` пишет поля по очереди
+  (`RenderableObjectBase::ScribbleRenderStateForAudit`: флаг переворачивается, матрица и позиция сдвигаются на мм) и
+  проходит, только если аудит назвал все (иначе — «the audit did not see the writes into ...», код 1). Тест передачи —
+  `intent_regression` `TestRenderStateHandOver`: запись игры (роль Game, рендер не припаркован) не трогает рендерную копию;
+  передача (роль Sync: `SyncSwitchesToRender`, `SyncSceneState`) копирует видимость, тень, позицию, строит матрицу в новой
+  позиции, прежняя — где стоял, флаг движения поднят; кадр без движения — прежняя матрица догнала, флаг опущен; обратное
+  включение доходит на следующей передаче. Проверено: Debug, Release_Editor, Release; `check_*.py` и
+  `settings_names.py` 0; CRLF; обе регрессии PASS. Картинка (эталон / после по очереди): lagoon пол 0.013 / 0.453 %,
+  эталон-после 0.482 / 0.067 % (первый прогон новой сборки — другая фаза ветра: карта отличий — края теней пальм и дальняя
+  листва, тот же exe дважды даёт те же 0.45 %); bath 0.048 / 0.037 % и 0.033 / 0.054 %; море 0.028 / 0.178 % и 0.198 / 0.048
+  % — в шуме. Release `--scene-stress=150 --rt-audit` CLEAN, PASS (455 кадров, 74 объекта), 604 простоя GPU; на одном
+  потоке CLEAN, PASS; самопроверка аудита — «6 fields moved: object #0 cast shadow x14, model matrix x14, render position
+  x14, visibility x14, moved this frame x13, previous model matrix x13», код 0; Debug `--scene-stress=12` на скрытом столе
+  CLEAN, ошибок 0. Контроли: передача без копии выключателя тени — регрессия FAIL «render state cast shadow: the hand-over
+  copies the game's»; аудит без хэша флага движения — самопроверка называет пять полей и «did not see the writes into moved
+  this frame», код 1; оба файла возвращены побайтно, Debug и Release пересобраны.
 - **R8. Фичи графа и одна точка простоя** (после R4, R6, R16). `SceneRenderer_Graph.cpp` — 3125 строк;
   `ShadowGpuData.cpp` — 5808; `VirtualShadowMap.cpp` — 3410.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →

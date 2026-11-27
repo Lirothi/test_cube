@@ -6,12 +6,13 @@
 //
 // Runs with the render thread on (frame.renderThread 1 whatever the settings say). Random 0-2 ms pauses where the two
 // halves meet make every frame overlap differently; the render thread hashes what the hand-over froze for it (every
-// object's matrices, position, visibility and shadow switch, every light's render desc) at the start of its frame and
-// again at the end -- a hash that moved means the game half wrote it while the frame was drawn, and the log names the
-// field. The verdict is one line in the session log, `rt audit: PASS ...` / `rt audit: FAIL ...`, and the process's
-// exit code is the number of fields that moved. The self-test writes one object's model matrix from the game half while
-// the render thread draws, one such frame in twenty: the audit must FAIL naming it, or its silence proves nothing (exit
-// 0 when it does, 1 when it does not). With --scene-stress it rides the harness's churn (levels, spawns, resizes) and
+// object's render state -- R7.1, ObjectRenderState: matrices, position, visibility, shadow switch, move flag -- and
+// every light's render desc) at the start of its frame and again at the end -- a hash that moved means the game half
+// wrote it while the frame was drawn, and the log names the field. The verdict is one line in the session log, `rt
+// audit: PASS ...` / `rt audit: FAIL ...`, and the process's exit code is the number of fields that moved. The self-test
+// writes a field of one object's render state from the game half while the render thread draws, one such frame in
+// twenty, each field in turn: the audit must FAIL naming them, or its silence proves nothing (exit 0 when it does, 1
+// when it does not). With --scene-stress it rides the harness's churn (levels, spawns, resizes) and
 // gives its verdict at the harness's end.
 
 class Scene;

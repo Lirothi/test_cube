@@ -78,6 +78,8 @@
 #include "rendering/lighting/NightLamps.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
+#include "rendering/meshes/StaticMesh.h"          // TestRenderStateHandOver (R7.1)
+#include "core/threading/ThreadRole.h"            // TestRenderStateHandOver: the game's write, the hand-over
 #include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
 #include "text/FontAtlas.h"                        // TestAFontTgaIsSizedByItsBytesNotItsHeader (LoadFontTga8)
 #include "core/vfs/Vfs.h"                          // TestAMaterialMapNamedInCyrillicKeepsItsName (vfs::Widen)
@@ -1912,6 +1914,55 @@ void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
 // Cast Shadow (UE) is a per-object flag the other way round: ABSENT while the mesh casts (the default -- a level that
 // never switched a shadow off saves byte-identical), "castShadow": false while it does not; one undo entry for the
 // group, and undo takes the key away again.
+// Architecture plan R7.1: every field of an object's render state (ObjectRenderState) comes from the hand-over -- a write
+// of the game's waits for Sync while the render half runs, and Sync copies it. A field the copy forgets is named here by
+// its field's name (the control: one copy left out of SyncSwitchesToRender / SyncSceneState).
+void TestRenderStateHandOver()
+{
+    StaticMesh mesh("", "", "", L"");
+    const ObjectRenderState& state = mesh.RenderState();
+    const ObjectRenderState before = state;
+    const bool wasParked = threading::RenderParked(); // put back at the end: the tests after this one see it as it was
+    {
+        threading::RoleScope game(threading::ThreadRole::Game);
+        threading::ClearRenderParked(); // the render half runs: what the game writes waits for the hand-over
+        mesh.SetVisible(false);
+        mesh.SetCastsShadow(false);
+        mesh.SetPosition(Math::float3(1.0f, 2.0f, 3.0f));
+    }
+    Check(state.visible == before.visible, "render state visibility: a game write waits for the hand-over");
+    Check(state.castsShadow == before.castsShadow, "render state cast shadow: a game write waits for the hand-over");
+    Check(Near(state.position.x, before.position.x) && Near(state.position.y, before.position.y),
+          "render state render position: a game write waits for the hand-over");
+    const auto handOver = [&mesh]() {
+        threading::RoleScope sync(threading::ThreadRole::Sync);
+        mesh.SyncSwitchesToRender();
+        mesh.SyncSceneState(SceneObjectSyncReason::Frame);
+    };
+    handOver();
+    Check(!state.visible, "render state visibility: the hand-over copies the game's");
+    Check(!state.castsShadow, "render state cast shadow: the hand-over copies the game's");
+    Check(Near(state.position.x, 1.0f) && Near(state.position.y, 2.0f) && Near(state.position.z, 3.0f),
+          "render state render position: the hand-over copies the game's");
+    Check(Near(state.model.m._41, 1.0f) && Near(state.model.m._42, 2.0f) && Near(state.model.m._43, 3.0f),
+          "render state model matrix: the hand-over builds it at the game's position");
+    Check(Near(state.prevModel.m._41, before.model.m._41) && Near(state.prevModel.m._42, before.model.m._42),
+          "render state previous model matrix: last frame's (where it stood before the move)");
+    Check(state.moved, "render state moved this frame: the hand-over says the matrix moved");
+    handOver(); // a frame with no move
+    Check(Near(state.prevModel.m._41, 1.0f) && Near(state.prevModel.m._42, 2.0f),
+          "render state previous model matrix: the next hand-over takes this frame's");
+    Check(!state.moved, "render state moved this frame: a frame with no move says so");
+    {
+        threading::RoleScope game(threading::ThreadRole::Game);
+        mesh.SetVisible(true);
+        mesh.SetCastsShadow(true);
+    }
+    handOver();
+    Check(state.visible && state.castsShadow, "render state visibility / cast shadow: back on at the next hand-over");
+    if (wasParked) { threading::NoteRenderParked(); }
+}
+
 void TestCastShadowIsAFlagThatUndoes(const EditorActionContext& actionCtx)
 {
     EditorContext& ctx = actionCtx.editor;
@@ -6972,6 +7023,7 @@ int main(int argc, char** argv)
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestCastShadowIsAFlagThatUndoes(actionCtx);
+        TestRenderStateHandOver(); // R7.1
         TestEditorRaceTracks(actionCtx);
         TestRaceCourseAndBot(actionCtx);
         TestNightLampsSwitch();

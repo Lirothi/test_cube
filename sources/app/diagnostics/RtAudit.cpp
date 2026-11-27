@@ -119,8 +119,9 @@ void GameHalf(Scene& scene)
         if (g_selfTestWrites++ == 0u)
         {
             LOG_INFO(logging::LogCategory::Core,
-                     "rt audit self-test: wrote object #0's model matrix from the game half during the render thread's "
-                     "frame (one frame in twenty while it draws); the audit must FAIL naming it");
+                     "rt audit self-test: writes object #0's render state from the game half during the render thread's "
+                     "frame (one frame in twenty while it draws), a field at a time (R7.1); the audit must FAIL naming "
+                     "every one");
         }
     }
 }
@@ -164,7 +165,28 @@ bool Finished(double nowSeconds, bool now)
     LOG_ERROR(logging::LogCategory::Core, "rt audit: FAIL -- {} fields moved during the render thread's frame in {} "
               "frames: {}{}", moved.size(), g_framesAudited, list,
               g_selfTest ? " (self-test: this FAIL is the expected answer)" : "");
-    // The self-test's FAIL is its pass (the audit sees a write): exit 0 there, 1 when it saw nothing (above).
+    if (g_selfTest)
+    {
+        // R7.1: the self-test wrote every field of the render state in turn (ObjectRenderState): the audit must have
+        // named each -- a field it hashes not, or not apart, would pass every run of it unseen.
+        std::string missed;
+        for (const ObjectRenderStateField& field : kObjectRenderStateFields)
+        {
+            const std::string suffix = std::string(" ") + field.name;
+            const bool seen = std::any_of(moved.begin(), moved.end(), [&suffix](const auto& m) {
+                return m.first.size() >= suffix.size() &&
+                       m.first.compare(m.first.size() - suffix.size(), suffix.size(), suffix) == 0;
+            });
+            if (!seen) { missed += (missed.empty() ? "" : ", ") + std::string(field.name); }
+        }
+        if (!missed.empty())
+        {
+            LOG_ERROR(logging::LogCategory::Core, "rt audit self-test: the audit did not see the writes into {}", missed);
+            g_exitCode = 1;
+            return true;
+        }
+    }
+    // The self-test's FAIL is its pass (the audit sees every write): exit 0 there, 1 when it missed one or saw nothing.
     g_exitCode = g_selfTest ? 0 : static_cast<int>(std::min<std::size_t>(moved.size(), 255u));
     return true;
 }
