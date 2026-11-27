@@ -651,6 +651,9 @@
     <ClCompile Include="sources/app/scene/Scene.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/World.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -1530,6 +1533,9 @@
       <Filter>sources\app\levels</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/Scene.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/World.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h">

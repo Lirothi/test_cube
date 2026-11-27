@@ -495,6 +495,7 @@
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/levels/LevelMigration.cpp" />
     <ClCompile Include="sources/app/scene/Scene.cpp" />
+    <ClCompile Include="sources/app/scene/World.cpp" />
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
@@ -830,6 +831,7 @@
     <ClInclude Include="sources/app/levels/LevelManager.h" />
     <ClInclude Include="sources/app/levels/LevelMigration.h" />
     <ClInclude Include="sources/app/scene/Scene.h" />
+    <ClInclude Include="sources/app/scene/World.h" />
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h" />
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h" />
     <ClInclude Include="sources/rendering/scene/SceneFrameData.h" />

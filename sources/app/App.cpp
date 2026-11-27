@@ -1763,7 +1763,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         const auto tickScene = [&]()
         {
             MEM_SCOPE(MemTag::Scene);
-            scene.Tick(deltaTime);
+            scene.Tick(deltaTime, renderer); // R6.4b: World::Tick reads no Systems
             levelManager.Tick(deltaTime);
         };
         const auto loadPendingLevel = [&]()
