@@ -276,16 +276,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     DrawGameMenu(renderer, scene, levelManager, input);
     DrawAutodetectScreen();
 #endif
-    // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
-    if (playSession_.Playing())
-    {
-        playSession_.World().race.DrawResults();
-        playSession_.World().race.DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
-        playSession_.World().race.DrawBotCards(scene.CameraRef()); // bot.debug: what each bot decides and why
-        playSession_.DrawBoatCard(scene); // on foot beside a boat: what it does
-        playSession_.DrawSpectatorPanel(scene); // the camera on a bot's boat: which boat, its view, the bots' vision
-    }
-    const bool raceResults = playSession_.Playing() && playSession_.World().race.ResultsOpen();
+    // R13.2: the game's systems' windows and labels in Play (a race's results -- the mouse and Enter its own while it is
+    // up --, who is who on the grid, bot.debug's cards, the spectator's window) and the boat card.
+    playSession_.DrawUi(scene);
+    const bool raceResults = playSession_.SystemsWantCursor(); // a window of a game system's takes the mouse
     // The forced auto-detect measures the boot's view: nobody walks or looks away until it is done.
     const bool detecting = settings::TheScalability().AutodetectForced();
 
@@ -313,7 +307,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (playSession_.Playing())
     {
         playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_ || detecting, uiCapturingMouse);
-        if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { playSession_.World().race.DebugDraw(*draw); } // bot.debug
+        if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { playSession_.DebugDraw(*draw); } // R13.2: the systems' (bot.debug)
     }
     else
     {
@@ -384,7 +378,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
         if (freeMouse) { playSession_.ToggleFreeMouse(); }
         if (!typing && input.TakeActionPress(actions::kKeepSimulation))
         {
-            playSession_.SetStatus(editorController_.KeepSimulation(renderer, scene, levelManager), ImGui::GetTime() + 4.0);
+            playSession_.SetStatus(editorController_.KeepSimulation(renderer, scene, levelManager), 4.0);
         }
     }
     editorController_.SetPlaying(playSession_.Playing());
@@ -438,13 +432,13 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
         playSession_.SetMouseFree(true);
     }
 #endif
-    hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
+    hudPlayLine_ = playSession_.HudLine(scene);
 #if !WITH_EDITOR
     if (!playSession_.Playing()) { hudPlayLine_ = L"FREE CAMERA: right mouse look, WASD, wheel speed   F8 walk from here   Esc menu"; }
     if (detecting) { hudPlayLine_ = L"SETTING UP THE GRAPHICS: the keys wait until the measurement is done"; }
 #endif
-    hudRaceLine_ = playSession_.RaceHudLine(scene);
-    hudBigText_ = playSession_.Playing() ? playSession_.World().race.BigText() : std::wstring{};
+    hudRaceLine_ = playSession_.SystemsHudLine(); // R13.2: the game's systems' lines (the race's laps)
+    hudBigText_ = playSession_.SystemsBigText();  // ... and their big centre text (the race's countdown)
 }
 
 void AppController::DrawGameMenu(Renderer& renderer, Scene& scene, LevelManager& levelManager, InputManager& input)

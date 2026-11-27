@@ -807,6 +807,7 @@
     <ClInclude Include="sources/app/game/PlayerController.h" />
     <ClInclude Include="sources/app/game/PlaySession.h" />
     <ClInclude Include="sources/app/game/PlayWorld.h" />
+    <ClInclude Include="sources/app/game/GameSystem.h" />
     <ClInclude Include="sources/app/game/Race.h" />
     <ClInclude Include="sources/app/dist/Cook.h" />
     <ClInclude Include="sources/app/game/BotMemory.h" />

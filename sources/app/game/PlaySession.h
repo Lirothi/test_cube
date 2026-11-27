@@ -8,6 +8,7 @@
 #include "app/game/RaceCourse.h"
 #include "app/game/VesselCamera.h" // ScriptCameraHold
 
+class DebugDrawSystem;
 class InputManager;
 class Renderer;
 class Scene;
@@ -50,17 +51,22 @@ public:
     // After a level load, the session ends where the new level put the camera (nothing put back: the old level's pose
     // means nothing here) -- the editor's session, or Shipping's level rule on a level without a Player Start.
     void StopForLevel(Scene& scene, InputManager& input);
-    void SetStatus(std::string status, double untilSeconds);
+    // A status after the HUD's line for `forSeconds` (R13.2: on the session's own clock, a steady one -- ImGui's before).
+    void SetStatus(std::string status, double forSeconds);
     // The HUD's line.
-    std::wstring HudLine(const Scene& scene, double nowSeconds) const;
-    // And the race's under it: the player's laps at a helm, else the bot's. Empty without a course.
-    std::wstring RaceHudLine(const Scene& scene) const;
+    std::wstring HudLine(const Scene& scene) const;
+    // R13.2: the game's systems (game::PlayWorld::Systems), in Play -- their lines under the HUD's (the race's: the player's
+    // laps at a helm, else the bot's), their big centre text (a countdown), whether a window of theirs takes the mouse
+    // (a race's results), their windows and labels (then the boat card), their debug lines. Empty / false / nothing
+    // outside Play.
+    std::wstring SystemsHudLine() const;
+    std::wstring SystemsBigText() const;
+    bool SystemsWantCursor() const;
+    void DrawUi(Scene& scene);
+    void DebugDraw(DebugDrawSystem& draw) const;
     // A boat's card (ImGui, the frame's): on foot within a few metres of a boat, what it does -- its top speed, how fast
     // it gets there, the circle it turns in, its weight and engine -- drawn over it. Takes no mouse and no key.
     void DrawBoatCard(Scene& scene);
-    // On foot with the camera on a bot's boat (race.watch): a small window -- which boat (the racers in their places), the
-    // view (behind, cockpit, cinema), the bots' vision (bot.debug). The mouse is free meanwhile.
-    void DrawSpectatorPanel(Scene& scene);
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);
@@ -80,7 +86,7 @@ private:
     float cameraPitch_ = 0.0f;
     float cameraRoll_ = 0.0f;
     std::string status_;
-    double statusUntil_ = 0.0;
+    double statusUntil_ = 0.0; // on the session's clock (PlaySession.cpp: a steady clock's seconds)
     bool playing_ = false;
     bool possessed_ = false;
     bool mouseFree_ = false;

@@ -7,7 +7,10 @@
 #include <utility>
 #include <vector>
 
+#include "imgui.h" // R13.2: the spectator's window (PlaySession::DrawSpectatorPanel before)
+
 #include "app/game/PlayerStartJson.h" // R6.2b: ReadPlayerKeys, kPlayerStartType
+#include "app/game/RaceBot.h"         // R13.2: the spectator's window switches the bots' vision (BotSettingsRef)
 #include "app/game/RaceCourseJson.h"  // ReadRaceKeys
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectRegistry.h"
@@ -29,15 +32,27 @@ void SetActivePlayWorld(PlayWorld* world) { g_activePlayWorld = world; }
 
 void PlayWorld::HandOver(Scene& scene, Renderer* renderer, RuntimeObjects& objects)
 {
-    SyncRaceBoats(scene, renderer, objects);
+    // R13.2: every system's part, in the list's order -- the race's boats first, then the helm's camera, else the
+    // spectator's (R6.2a's bodies, moved verbatim into them).
+    for (GameSystem* system : Systems()) { system->OnHandOver(scene, renderer, objects); }
+}
+
+bool HelmCameraSystem::Applies() const { return camera_.Active() && !game::ScriptCamera().free; }
+
+void HelmCameraSystem::OnHandOver(Scene& scene, Renderer* /*renderer*/, RuntimeObjects& /*objects*/)
+{
+    if (!Applies()) { return; }
+    // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
     Camera& camera = scene.CameraRef();
-    if (vesselCamera.Active() && !game::ScriptCamera().free)
-    {
-        // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
-        const OceanRenderable* ocean = scene.FindOceanRenderable();
-        vesselCamera.Apply(camera, game::PoseOf(scene.Physics().GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
-    }
-    else if (RenderableObject* watched = !game::ScriptCamera().free ? race.WatchedVessel() : nullptr)
+    const OceanRenderable* ocean = scene.FindOceanRenderable();
+    camera_.Apply(camera, game::PoseOf(scene.Physics().GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
+}
+
+void SpectatorSystem::OnHandOver(Scene& scene, Renderer* /*renderer*/, RuntimeObjects& /*objects*/)
+{
+    if (helm_.Applies()) { return; } // the helm's camera has the frame (the spectator's boat stays as it was)
+    Camera& camera = scene.CameraRef();
+    if (RenderableObject* watched = !game::ScriptCamera().free ? race_.WatchedVessel() : nullptr)
     {
         // race.watch: a bot's boat, from the pose this frame draws it at -- the helm's chase camera, on another hull. Another
         // boat is a cut.
@@ -46,20 +61,101 @@ void PlayWorld::HandOver(Scene& scene, Renderer* renderer, RuntimeObjects& objec
         for (const physics::VesselHull& hull : hulls)
         {
             if (hull.object != watched || !hull.settings) { continue; }
-            if (spectated != watched)
+            if (spectated_ != watched)
             {
-                spectatorCamera.Begin();
+                camera_.Begin();
                 camera.ResetHistory();
-                spectated = watched;
+                spectated_ = watched;
             }
-            spectatorCamera.Tick(0.0f, 0.0f, hull.speed, 0.0f, 0.0f, race.LastDeltaTime());
+            camera_.Tick(0.0f, 0.0f, hull.speed, 0.0f, 0.0f, race_.LastDeltaTime());
             const OceanRenderable* ocean = scene.FindOceanRenderable();
-            spectatorCamera.Apply(camera, game::PoseOf(hull), ocean ? ocean->GetWaterLevel() : -1.0e6f);
+            camera_.Apply(camera, game::PoseOf(hull), ocean ? ocean->GetWaterLevel() : -1.0e6f);
             break;
         }
     }
-    else { spectated = nullptr; }
+    else { spectated_ = nullptr; }
 }
+
+void SpectatorSystem::OnDrawUi(const SessionFrame& frame)
+{
+    // PlaySession::DrawSpectatorPanel, moved verbatim (R13.2): only in Play, so `playing_` is gone from the test.
+    game::Race& race = race_;
+    if (frame.atHelm || !race.WatchedVessel()) { return; }
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16.0f, 96.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.72f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    if (!ImGui::Begin("Watching a boat", nullptr, flags))
+    {
+        ImGui::End();
+        return;
+    }
+    // Which boat: the racers in their places (the bot boats outside a race).
+    // A radio row each (four at the most on a grid): no popup, which a frame of Play could take the focus from.
+    const std::vector<std::string> names = race.WatchNames();
+    const int index = race.WatchIndex();
+    for (std::size_t i = 0; i < names.size(); ++i)
+    {
+        ImGui::PushID(static_cast<int>(i));
+        if (ImGui::RadioButton(names[i].c_str(), static_cast<int>(i) + 1 == index)) { race.SetWatch(static_cast<int>(i) + 1); }
+        ImGui::PopID();
+    }
+    if (ImGui::Button("My camera")) { race.SetWatch(0); }
+    ImGui::Separator();
+
+    // The view: behind it, from its cockpit, a director's shots.
+    game::VesselCamera& view = camera_;
+    const game::VesselCamera::View views[] = { game::VesselCamera::View::Chase, game::VesselCamera::View::Helm, game::VesselCamera::View::Cinema };
+    const char* labels[] = { "Behind", "Cockpit", "Cinema" };
+    for (int i = 0; i < 3; ++i)
+    {
+        if (i > 0) { ImGui::SameLine(); }
+        if (ImGui::RadioButton(labels[i], view.GetView() == views[i]) && view.GetView() != views[i])
+        {
+            view.SetView(views[i]);
+            frame.scene.CameraRef().ResetHistory();
+        }
+    }
+    bool vision = game::BotSettingsRef().debug >= 0.5f;
+    if (ImGui::Checkbox("Bots' vision", &vision)) { game::BotSettingsRef().debug = vision ? 1.0f : 0.0f; }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("bot.debug: each bot's plan coloured by its speed limit, the buoys and boats it plans round, its aim, and a\n"
+                          "card over it with its speed, target, throttle and rudder and why.");
+    }
+    ImGui::TextDisabled("Tab: the next boat   V: the next view   Esc: stop");
+    ImGui::End();
+}
+
+void RaceSystem::OnSessionBegin(Scene& /*scene*/, const RaceCourse& course) { race_.Begin(course); }
+void RaceSystem::OnSessionEnd(Scene& scene) { race_.End(scene.Physics()); }
+
+void RaceSystem::OnFrame(Scene& scene, float deltaTime)
+{
+    race_.Tick(scene.Physics(), deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
+    if (race_.TakeCameraCut()) { scene.CameraRef().ResetHistory(); } // the boats were put on the grid: a jump, not a pan
+}
+
+void RaceSystem::OnLevelGone()
+{
+    race_.Forget();       // its boats are
+    race_.DropSpawned();  // and the race's own boats, made or asked for
+}
+
+void RaceSystem::OnDrawUi(const SessionFrame& frame)
+{
+    // A race's results (a window of this frame's, the mouse and Enter its own while it is up); on the grid who is who, a
+    // bot's level over its boat; bot.debug: what each bot decides and why.
+    race_.DrawResults();
+    race_.DrawLabels(frame.scene.CameraRef());
+    race_.DrawBotCards(frame.scene.CameraRef());
+}
+
+void RaceSystem::OnDebugDraw(DebugDrawSystem& draw) const { race_.DebugDraw(draw); } // bot.debug
+std::wstring RaceSystem::HudLine() const { return race_.HudLine(); }
+std::wstring RaceSystem::BigText() const { return race_.BigText(); }
+bool RaceSystem::WantsCursor() const { return race_.ResultsOpen(); }
 
 void PlayWorld::BeginLevel(const std::string& path)
 {
@@ -101,12 +197,13 @@ void PlayWorld::EndLevel()
 
 void PlayWorld::Forget()
 {
-    race.Forget();       // its boats are
-    race.DropSpawned();  // and the race's own boats, made or asked for
+    for (GameSystem* system : Systems()) { system->OnLevelGone(); } // R13.2: the race's boats were among them
 }
 
-void PlayWorld::SyncRaceBoats(Scene& scene, Renderer* renderer, RuntimeObjects& objects)
+void RaceSystem::OnHandOver(Scene& scene, Renderer* renderer, RuntimeObjects& objects)
 {
+    // PlayWorld::SyncRaceBoats until R13.2, moved verbatim (`race` is the system's race_).
+    Race& race = race_;
     std::vector<const RenderableObjectBase*> gone = race.TakeDespawns();
     std::vector<game::RaceSpawn> spawns = race.TakeSpawns();
     if (!renderer)

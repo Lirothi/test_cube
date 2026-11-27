@@ -1463,6 +1463,9 @@
     <ClInclude Include="sources/app/game/PlayWorld.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
+    <ClInclude Include="sources/app/game/GameSystem.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/game/Race.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>

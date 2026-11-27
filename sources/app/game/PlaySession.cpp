@@ -1,6 +1,7 @@
 #include "app/game/PlaySession.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cwchar>
@@ -21,6 +22,16 @@
 #include "input/InputManager.h"
 #include "input/InputActions.h"
 #include "rendering/core/Renderer.h"
+
+namespace
+{
+// R13.2: the session's clock for its status lines -- a steady clock's seconds, what ImGui::GetTime() was read for (the
+// wall's time, not the world's: frame.timeScale does not shorten a status).
+double SessionClock()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
 
 void PlaySession::AttachTo(Scene& scene)
 {
@@ -68,7 +79,8 @@ void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, c
     status_.clear();
     if (input.IsMouseCaptured()) { input.SetMouseCapture(false); }
     PlaceAtStart(renderer, scene, start);
-    world_.race.Begin(course ? *course : game::RaceCourse{});
+    const game::RaceCourse none{};
+    for (game::GameSystem* system : world_.Systems()) { system->OnSessionBegin(scene, course ? *course : none); } // R13.2
 }
 
 void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
@@ -77,7 +89,7 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     playing_ = false;
     possessed_ = false;
     LeaveHelm(scene, false);
-    world_.race.End(scene.Physics());
+    for (game::GameSystem* system : world_.Systems()) { system->OnSessionEnd(scene); } // R13.2: the race's pilots off, its boats to go
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
     game::ScriptCamera() = scriptCameraBefore_;
@@ -149,8 +161,8 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     game::Race& race = world_.race;
     if (input.TakeActionPress(actions::kAutopilot))
     {
-        if (!race.HasTrack()) { SetStatus("No race course in this level", ImGui::GetTime() + 3.0); }
-        else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", ImGui::GetTime() + 3.0); }
+        if (!race.HasTrack()) { SetStatus("No race course in this level", 3.0); }
+        else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", 3.0); }
     }
     if (race.Autopilot()) { order = race.HelmOrder(); }
     if (race.HoldsHelm()) { order = physics::VesselInput{}; } // on the grid, the countdown running
@@ -163,13 +175,13 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         // V: behind -> the cockpit -> cinema -> behind.
         view.NextView();
         camera.ResetHistory();
-        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", ImGui::GetTime() + 3.0);
+        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", 3.0);
     }
     // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
     if (input.TakeActionPress(actions::kAnchor))
     {
         const bool down = world.ToggleAnchor(helm.object);
-        SetStatus(down ? "Anchor down" : "Anchor up", ImGui::GetTime() + 3.0);
+        SetStatus(down ? "Anchor down" : "Anchor up", 3.0);
     }
     if (input.TakeActionPress(actions::kInteract)) { LeaveHelm(scene, true); }
 }
@@ -188,7 +200,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     if (mouseTaken_ && !input.IsMouseCaptured()) { mouseFree_ = true; }
     if (mouseFree_ && !uiWantsCursor && !uiCapturingMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) { mouseFree_ = false; }
     const bool controls = !mouseFree_ && !uiWantsCursor;
-    // On foot with the camera on a bot's boat the mouse stays free: it is the spectator panel's (DrawSpectatorPanel).
+    // On foot with the camera on a bot's boat the mouse stays free: it is the spectator panel's (game::SpectatorSystem::OnDrawUi).
     const bool watching = !atHelm_ && world_.race.WatchedVessel() != nullptr;
     const bool take = controls && !watching && input.WindowIsForeground(); // the mouse is the desktop's: a window in the background keeps the keys and leaves it alone
     if (take != input.IsMouseCaptured()) { input.SetMouseCapture(take); }
@@ -198,8 +210,9 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
 
     Camera& camera = scene.CameraRef();
     physics::World& world = scene.Physics();
-    world_.race.Tick(world, deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
-    if (world_.race.TakeCameraCut()) { camera.ResetHistory(); } // the boats were put on the grid: a jump, not a pan
+    // R13.2: the systems' frame (the race: the bots' orders, and the helm's on autopilot -- before the helm reads its keys;
+    // the boats put on the grid are a cut).
+    for (game::GameSystem* system : world_.Systems()) { system->OnFrame(scene, deltaTime); }
     if (atHelm_)
     {
         TickHelm(input, scene, controls, deltaTime);
@@ -209,7 +222,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     if (input.TakeActionPress(actions::kWatchNext))
     {
         const std::string on = world_.race.WatchNext();
-        SetStatus(on.empty() ? std::string("Camera: yours") : "Camera: " + on + " (Tab: the next)", ImGui::GetTime() + 3.0);
+        SetStatus(on.empty() ? std::string("Camera: yours") : "Camera: " + on + " (Tab: the next)", 3.0);
     }
     // And V its view: behind -> the cockpit -> cinema.
     if (watching && input.TakeActionPress(actions::kToggleView))
@@ -217,7 +230,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
         game::VesselCamera& view = world_.spectatorCamera;
         view.NextView();
         camera.ResetHistory();
-        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", ImGui::GetTime() + 3.0);
+        SetStatus(std::string("Camera: ") + game::VesselCamera::ViewName(view.GetView()) + " (V: the next)", 3.0);
     }
     // The way aboard: within a few metres of a hull, the key takes the helm.
     constexpr float kHelmReach = 3.0f;
@@ -264,7 +277,8 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
     }
     PlaceAtStart(renderer, scene, start);
     input.ClearInjected(); // the player starts again: a script's keys are let go, as PlaceAtStart reset its test* fields
-    world_.race.Begin(course ? *course : game::RaceCourse{});
+    const game::RaceCourse none{};
+    for (game::GameSystem* system : world_.Systems()) { system->OnSessionBegin(scene, course ? *course : none); } // R13.2
     return true;
 }
 
@@ -285,63 +299,59 @@ void PlaySession::StopForLevel(Scene& scene, InputManager& input)
     LOG_INFO(logging::LogCategory::App, "play: stopped, another level");
 }
 
-void PlaySession::SetStatus(std::string status, double untilSeconds)
+void PlaySession::SetStatus(std::string status, double forSeconds)
 {
     status_ = std::move(status);
-    statusUntil_ = untilSeconds;
+    statusUntil_ = SessionClock() + forSeconds;
 }
 
-std::wstring PlaySession::RaceHudLine(const Scene& scene) const { return playing_ ? world_.race.HudLine() : std::wstring{}; }
-
-void PlaySession::DrawSpectatorPanel(Scene& scene)
+std::wstring PlaySession::SystemsHudLine() const
 {
-    game::Race& race = world_.race;
-    if (!playing_ || atHelm_ || !race.WatchedVessel()) { return; }
-    const ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16.0f, 96.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.72f);
-    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
-    if (!ImGui::Begin("Watching a boat", nullptr, flags))
+    if (!playing_) { return {}; }
+    std::wstring text;
+    for (const game::GameSystem* system : world_.Systems())
     {
-        ImGui::End();
-        return;
+        const std::wstring line = system->HudLine();
+        if (line.empty()) { continue; }
+        if (!text.empty()) { text += L"   "; }
+        text += line;
     }
-    // Which boat: the racers in their places (the bot boats outside a race).
-    // A radio row each (four at the most on a grid): no popup, which a frame of Play could take the focus from.
-    const std::vector<std::string> names = race.WatchNames();
-    const int index = race.WatchIndex();
-    for (std::size_t i = 0; i < names.size(); ++i)
-    {
-        ImGui::PushID(static_cast<int>(i));
-        if (ImGui::RadioButton(names[i].c_str(), static_cast<int>(i) + 1 == index)) { race.SetWatch(static_cast<int>(i) + 1); }
-        ImGui::PopID();
-    }
-    if (ImGui::Button("My camera")) { race.SetWatch(0); }
-    ImGui::Separator();
+    return text;
+}
 
-    // The view: behind it, from its cockpit, a director's shots.
-    game::VesselCamera& view = world_.spectatorCamera;
-    const game::VesselCamera::View views[] = { game::VesselCamera::View::Chase, game::VesselCamera::View::Helm, game::VesselCamera::View::Cinema };
-    const char* labels[] = { "Behind", "Cockpit", "Cinema" };
-    for (int i = 0; i < 3; ++i)
+std::wstring PlaySession::SystemsBigText() const
+{
+    if (!playing_) { return {}; }
+    for (const game::GameSystem* system : world_.Systems())
     {
-        if (i > 0) { ImGui::SameLine(); }
-        if (ImGui::RadioButton(labels[i], view.GetView() == views[i]) && view.GetView() != views[i])
-        {
-            view.SetView(views[i]);
-            scene.CameraRef().ResetHistory();
-        }
+        std::wstring text = system->BigText();
+        if (!text.empty()) { return text; }
     }
-    bool vision = game::BotSettingsRef().debug >= 0.5f;
-    if (ImGui::Checkbox("Bots' vision", &vision)) { game::BotSettingsRef().debug = vision ? 1.0f : 0.0f; }
-    if (ImGui::IsItemHovered())
+    return {};
+}
+
+bool PlaySession::SystemsWantCursor() const
+{
+    if (!playing_) { return false; }
+    for (const game::GameSystem* system : world_.Systems())
     {
-        ImGui::SetTooltip("bot.debug: each bot's plan coloured by its speed limit, the buoys and boats it plans round, its aim, and a\n"
-                          "card over it with its speed, target, throttle and rudder and why.");
+        if (system->WantsCursor()) { return true; }
     }
-    ImGui::TextDisabled("Tab: the next boat   V: the next view   Esc: stop");
-    ImGui::End();
+    return false;
+}
+
+void PlaySession::DrawUi(Scene& scene)
+{
+    if (!playing_) { return; }
+    const game::SessionFrame frame{ scene, atHelm_, possessed_ };
+    for (game::GameSystem* system : world_.Systems()) { system->OnDrawUi(frame); } // the race's windows and labels, the spectator's
+    DrawBoatCard(scene); // on foot beside a boat: what it does
+}
+
+void PlaySession::DebugDraw(DebugDrawSystem& draw) const
+{
+    if (!playing_) { return; }
+    for (const game::GameSystem* system : world_.Systems()) { system->OnDebugDraw(draw); } // bot.debug
 }
 
 void PlaySession::DrawBoatCard(Scene& scene)
@@ -440,9 +450,10 @@ void PlaySession::DrawBoatCard(Scene& scene)
     }
 }
 
-std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
+std::wstring PlaySession::HudLine(const Scene& scene) const
 {
     if (!playing_) { return {}; }
+    const double nowSeconds = SessionClock(); // R13.2: the session's clock (the caller's ImGui::GetTime() before)
     wchar_t line[256];
     const physics::PlayerState state = scene.Physics().GetPlayerState();
     if (atHelm_)
