@@ -159,11 +159,12 @@ namespace watermask
     // Is a point (the model's space) inside a basin of the lid: under its cap, over its floor? The camera's: the surface's
     // count of the lid crossings in front of its point starts from it.
     bool InsideLid(const WaterMaskField& field, const Math::float3& modelPos);
-    // RenderableObject::SetWaterMask: the registry the frame reads, never a scene walk. Collect finds the field of an object
-    // the first time it meets it -- one per geometry and key, kept for the process: the bake when it matches, else built on a
-    // worker (THE BAKE, above).
-    void Register(RenderableObject* object);
-    void Unregister(RenderableObject* object);
+    // mesh.json "waterMask" on an object (the factory): the registry the frame reads, never a scene walk. Collect finds the
+    // field of an object the first time it meets it -- one per geometry and key, kept for the process: the bake when it
+    // matches, else built on a worker (THE BAKE, above). Architecture plan R7.2: the switch is this module's, not the
+    // object's -- the object carries a bit of its world links (ObjectWorldLinks.h) and goes out of the registry when it
+    // leaves the world.
+    void Set(RenderableObject& object, bool mask);
     // At Scene::Sync, after the physics poses: every registered object that is visible and has a field, with the matrix the
     // frame draws it at and its inverse.
     void Collect(std::vector<WaterMaskInstance>& out);

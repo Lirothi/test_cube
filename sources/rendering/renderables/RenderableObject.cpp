@@ -7,8 +7,10 @@
 #include <cstring>
 
 #include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
-#include "ocean/WaterMask.h" // SetWaterMask registers the hulls the water stays out of
 #include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
+#include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the modules that keep something of the object (the water mask)
+
+#include <utility>
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
@@ -83,7 +85,7 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
 RenderableObject::~RenderableObject()
 {
     if (buoyant_) { OceanBuoyancy::Unregister(this); }
-    if (waterMask_) { ocean::watermask::Unregister(this); }
+    if (worldLinks_) { worldlinks::Detached(*this, worldLinks_); } // R7.2: the water mask
     if (physicsRegistered_) { physics::Unregister(this); }
 }
 
@@ -91,16 +93,8 @@ void RenderableObject::DetachFromWorld()
 {
     // As the destructor, now; the flags cleared so it does not again.
     if (buoyant_) { OceanBuoyancy::Unregister(this); buoyant_ = false; }
-    if (waterMask_) { ocean::watermask::Unregister(this); waterMask_ = false; }
+    if (worldLinks_) { worldlinks::Detached(*this, std::exchange(worldLinks_, std::uint8_t{ 0 })); } // R7.2: the water mask
     if (physicsRegistered_) { physics::Unregister(this); physicsRegistered_ = false; }
-}
-
-void RenderableObject::SetWaterMask(bool mask)
-{
-    if (mask == waterMask_) { return; }
-    waterMask_ = mask;
-    if (mask) { ocean::watermask::Register(this); }
-    else { ocean::watermask::Unregister(this); }
 }
 
 void RenderableObject::SetPhysicsMotion(physics::Motion motion)

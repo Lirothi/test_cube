@@ -5398,7 +5398,30 @@ Debug, реестр настроек и таблица графики, вкла�
   x14, visibility x14, moved this frame x13, previous model matrix x13», код 0; Debug `--scene-stress=12` на скрытом столе
   CLEAN, ошибок 0. Контроли: передача без копии выключателя тени — регрессия FAIL «render state cast shadow: the hand-over
   copies the game's»; аудит без хэша флага движения — самопроверка называет пять полей и «did not see the writes into moved
-  this frame», код 1; оба файла возвращены побайтно, Debug и Release пересобраны.
+  this frame», код 1; оба файла возвращены побайтно, Debug и Release пересобраны. Коммит `5daaf70c`.
+
+  **R7.2 — четыре подшага**, в порядке плана: **R7.2a** маска воды, **R7.2b** плавучесть, **R7.2c** физика (движение,
+  столкновения, ревизия тела, уведомления), **R7.2d** судно. Общее для всех — `rendering/renderables/ObjectWorldLinks`:
+  модуль выше рендера держит своё о объекте в своей таблице и ставит объекту бит своей «связи с миром»
+  (`RenderableObjectBase::LinkToWorld`, байт на объект — восемь связей), объект говорит связанным модулям о сдвиге или
+  видимости (`worldlinks::Changed`) и об уходе из мира (`worldlinks::Detached`: `DetachFromWorld` и деструктор) и не
+  называет ни одного модуля.
+
+  **Сделано R7.2a (2026-11-27).** Маска воды. `ObjectWorldLinks.h/.cpp` (связи: `Add` — бит модуля один раз, `Changed`,
+  `Detached`; девятая связь — `InvariantFailure`); у `RenderableObjectBase` байт связей (`WorldLinks`, `WorldLinked`,
+  `LinkToWorld`). Переключатель маски — модуля: `ocean::watermask::Set(object, mask)` ставит бит и регистрирует;
+  `Register` / `Unregister` стали внутренними, связь маски (`WaterMaskLink::ObjectDetached`) вычёркивает уходящий объект.
+  У `RenderableObject` ушли `waterMask_`, `SetWaterMask`, `IsWaterMask` (читателей не было); `DetachFromWorld` и деструктор
+  зовут `worldlinks::Detached`. Фабрика (`SceneObjectFactory`, ключ `waterMask` ассета) зовёт `ocean::watermask::Set`.
+  `RenderableObject.cpp` больше не включает `ocean/WaterMask.h`: храповик 34 → 33. Проверено: Debug, Release_Editor,
+  Release; `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS; виды (эталон / после по очереди: lagoon пол
+  0.550 / 0.157 %, эталон-после 0.034 / 0.495 %; bath 0.078 / 0.231 % и 0.189 / 0.155 %; море 0.844 / 0.550 % и 0.829 /
+  0.547 % — шум этого прогона выше обычного, оба плеча в нём); Release `--scene-stress=150 --rt-audit` CLEAN, PASS; Debug
+  `--scene-stress=12` CLEAN, ошибок 0. wind_test (Release): реестр находит три корпуса («water mask: models/small_yacht,
+  fast_boat_13, police_boat ... read the bake»). Контроль A: `Set` не регистрирует — 0 корпусов. Контроль B: связь маски
+  ничего не вычёркивает при уходе объекта — Debug-стресс падает на первой смене уровня (0xC0000005, `watermask::Collect`
+  читает удалённый корпус: `IsVisibleGame`, `WaterMask.cpp:1789` из `Scene::Sync`); файл возвращён побайтно, Debug и
+  Release пересобраны.
 - **R8. Фичи графа и одна точка простоя** (после R4, R6, R16). `SceneRenderer_Graph.cpp` — 3125 строк;
   `ShadowGpuData.cpp` — 5808; `VirtualShadowMap.cpp` — 3410.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →

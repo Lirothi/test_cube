@@ -13,6 +13,7 @@
 #include "core/schema/KeyTable.h" // R9.3: the object's table of keys
 #include "core/vfs/Vfs.h"
 #include "ocean/BuoyancyJson.h"
+#include "ocean/WaterMask.h" // R7.2: ocean::watermask::Set
 #include "physics/CollisionJson.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
@@ -503,7 +504,7 @@ namespace SceneObjectFactory
             schema::Custom<S>("waterMask", [](const json& o, S& mesh) {
                 if (o.contains("waterMask") && o["waterMask"].is_boolean())
                 {
-                    mesh.SetWaterMask(o["waterMask"].get<bool>());
+                    ocean::watermask::Set(mesh, o["waterMask"].get<bool>()); // R7.2: the module's switch, not the object's
                 }
             }, nullptr).Label("Water mask", 0.0f, "Keeps the water out of the hull (ocean/WaterMask.h); absent = off."),
             // Buoyancy: "buoyant" is the per-OBJECT switch (the Inspector's checkbox, absent = off);

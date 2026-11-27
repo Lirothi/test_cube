@@ -344,6 +344,14 @@ public:
 
     // R7.1: the render half's copy of this object, whole (ObjectRenderState).
     const ObjectRenderState& RenderState() const { return render_; }
+    // R7.2 (ObjectWorldLinks.h): the modules that keep something of this object -- a bit each, set and cleared by the
+    // module (ocean::watermask::Set, ...); the object tells them when it leaves the world.
+    std::uint8_t WorldLinks() const { return worldLinks_; }
+    bool WorldLinked(unsigned bit) const { return (worldLinks_ & (1u << bit)) != 0u; }
+    void LinkToWorld(unsigned bit, bool on)
+    {
+        worldLinks_ = static_cast<std::uint8_t>(on ? (worldLinks_ | (1u << bit)) : (worldLinks_ & ~(1u << bit)));
+    }
     // --rt-audit-selftest (R7.1): a game-half write into field `field` of the frozen copy (kObjectRenderStateFields)
     // while the render thread draws -- what the audit must report by its name. A flag flips; a matrix or the position
     // moves a millimetre up. The next hand-over writes the field again.
@@ -412,6 +420,7 @@ protected:
 #endif
     std::uint64_t cameraVisibleFrame_ = ~0ull;
     ObjectRenderState render_; // R7.1: the render half's copy (RenderState)
+    std::uint8_t worldLinks_ = 0; // R7.2: the modules that keep something of this object (ObjectWorldLinks.h), a bit each
     bool physicsRegistered_ = false; // the world knows this object (RenderableObject::SetPhysicsMotion)
     bool gameVisible_ = true; // the game's
     bool gbufferIndirect_ = false;

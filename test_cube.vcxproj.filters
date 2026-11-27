@@ -1101,6 +1101,9 @@
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/ObjectWorldLinks.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -2163,6 +2166,9 @@
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RuntimeObjects.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/ObjectWorldLinks.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h">

@@ -23,6 +23,7 @@
 #include "core/vfs/Vfs.h"
 #include "core/task/TaskSystem.h"
 #include "physics/PhysicsWorld.h"
+#include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the object tells the registry when it leaves the world
 #include "rendering/renderables/RenderableObject.h"
 
 namespace ocean
@@ -1708,6 +1709,8 @@ namespace watermask
         return true;
     }
 
+    namespace
+    {
     void Register(RenderableObject* object)
     {
         Registry& registry = TheRegistry();
@@ -1716,13 +1719,39 @@ namespace watermask
         if (it == registry.entries.end()) { registry.entries.push_back(Entry{ object, nullptr, false }); }
     }
 
-    void Unregister(RenderableObject* object)
+    // `object` is a key here only: at its destructor it is being destroyed.
+    void Unregister(const void* object)
     {
         Registry& registry = TheRegistry();
         std::lock_guard<std::mutex> lock(registry.mutex);
         registry.entries.erase(std::remove_if(registry.entries.begin(), registry.entries.end(),
                                               [&](const Entry& e) { return e.object == object; }),
                                registry.entries.end());
+    }
+
+    // R7.2: the object leaves the world (RenderableObjectBase::DetachFromWorld or its destructor): out of the registry.
+    class WaterMaskLink final : public ObjectWorldLink
+    {
+    public:
+        const char* Name() const override { return "water mask"; }
+        void ObjectDetached(RenderableObjectBase& object) override { Unregister(static_cast<const void*>(object.AsRenderableObject())); }
+    };
+
+    unsigned LinkBit()
+    {
+        static WaterMaskLink link;
+        static const unsigned bit = worldlinks::Add(link);
+        return bit;
+    }
+    } // namespace
+
+    void Set(RenderableObject& object, bool mask)
+    {
+        const unsigned bit = LinkBit();
+        if (mask == object.WorldLinked(bit)) { return; }
+        object.LinkToWorld(bit, mask);
+        if (mask) { Register(&object); }
+        else { Unregister(&object); }
     }
 
     void Collect(std::vector<WaterMaskInstance>& out)
