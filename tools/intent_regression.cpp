@@ -1582,6 +1582,10 @@ void TestTransforms(const EditorActionContext& actionCtx, GrammarIntentSource& g
     std::string whyNot;
     std::string status;
 
+    // Off the origin first: at (0, 0, 0) a move that SET the value instead of adding it lands on the same (0, 2, 0),
+    // and this test passed with ApplyMove's `relative` dropped (R10.3's control). "to 5 5 5" below puts it back where
+    // the rest of the file expects it either way.
+    ctx.document.Find({ 1 })->transform.position = Math::float3(3.0f, 4.0f, 5.0f);
     const Math::float3 before = ctx.document.Find({ 1 })->transform.position;
 
     const EditorIntent move = grammar.Parse("move all coconut_palm by 0 2 0", whyNot);

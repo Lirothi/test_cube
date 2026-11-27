@@ -450,6 +450,15 @@
     <ClCompile Include="sources/editor/commands/SetParticlePresetCommand.cpp" />
     <ClCompile Include="sources/editor/ui/SceneOutlinerPanel.cpp" />
     <ClCompile Include="sources/editor/intent/EditorActionRegistry.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsCommon.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsObjects.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsAppearance.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsGame.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsLights.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsZones.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsTransform.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsEnvironment.cpp" />
+    <ClCompile Include="sources/editor/intent/EditorActionsSpawn.cpp" />
     <ClCompile Include="sources/editor/intent/IntentSchema.cpp" />
     <ClCompile Include="sources/editor/intent/EditorSceneQuery.cpp" />
     <ClCompile Include="sources/editor/intent/EditorRepoSearch.cpp" />
@@ -464,6 +473,14 @@
     <ClCompile Include="sources/editor/intent/EditorIntentResolver.cpp" />
     <ClCompile Include="sources/editor/ui/CommandBarPanel.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspector.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorLights.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorTimeOfDay.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorExposure.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorPostEffects.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorSky.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorOcean.cpp" />
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorWind.cpp" />
     <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp" />
     <ClCompile Include="sources/editor/ui/ViewportGizmo.cpp" />
     <ClCompile Include="sources/app/GraphicsSettings.cpp" />
@@ -732,6 +749,7 @@
     <ClInclude Include="sources/editor/intent/EditorIntent.h" />
     <ClInclude Include="sources/editor/intent/EditorIntentSource.h" />
     <ClInclude Include="sources/editor/intent/EditorActionRegistry.h" />
+    <ClInclude Include="sources/editor/intent/EditorActionBuilders.h" />
     <ClInclude Include="sources/editor/intent/IntentSchema.h" />
     <ClInclude Include="sources/editor/intent/EditorSceneQuery.h" />
     <ClInclude Include="sources/editor/intent/EditorRepoSearch.h" />
@@ -797,6 +815,7 @@
     <ClInclude Include="sources/editor/commands/SetParticlePresetCommand.h" />
     <ClInclude Include="sources/editor/ui/SceneOutlinerPanel.h" />
     <ClInclude Include="sources/editor/ui/InspectorPanel.h" />
+    <ClInclude Include="sources/editor/ui/EnvironmentInspector.h" />
     <ClInclude Include="sources/editor/ui/InspectorMultiEdit.h" />
     <ClInclude Include="sources/editor/ui/InspectorPropertyDelta.h" />
     <ClInclude Include="sources/editor/ui/ViewportGizmo.h" />

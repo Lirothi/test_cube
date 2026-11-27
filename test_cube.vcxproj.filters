@@ -507,6 +507,33 @@
     <ClCompile Include="sources/editor/intent/EditorActionRegistry.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsCommon.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsObjects.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsAppearance.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsGame.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsLights.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsZones.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsTransform.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsEnvironment.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/intent/EditorActionsSpawn.cpp">
+      <Filter>sources\editor\intent</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/intent/IntentSchema.cpp">
       <Filter>sources\editor\intent</Filter>
     </ClCompile>
@@ -547,6 +574,30 @@
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/InspectorPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspector.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorLights.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorTimeOfDay.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorExposure.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorPostEffects.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorSky.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorOcean.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/EnvironmentInspectorWind.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/InspectorMultiEdit.cpp">
@@ -1208,6 +1259,9 @@
     <ClInclude Include="sources/editor/intent/EditorActionRegistry.h">
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/intent/EditorActionBuilders.h">
+      <Filter>sources\editor\intent</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/intent/IntentSchema.h">
       <Filter>sources\editor\intent</Filter>
     </ClInclude>
@@ -1386,6 +1440,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/InspectorPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/EnvironmentInspector.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/InspectorMultiEdit.h">
