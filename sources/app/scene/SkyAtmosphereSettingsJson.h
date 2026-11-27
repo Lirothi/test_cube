@@ -46,7 +46,7 @@ inline const schema::Table<SkyAtmosphereSettings>& Keys()
     using S = SkyAtmosphereSettings;
     using J = nlohmann::json;
     static const schema::Table<S> table{ {
-        schema::Custom<S>("enabled", [](const J& j, S& s) { s.mode = j.value("enabled", true) ? 1u : 0u; },
+        schema::Custom<S>("enabled", [](const J& j, S& s) { s.mode = jsonfield::Value(j, "enabled", true) ? 1u : 0u; },
                           [](J& j, const S& s) { j["enabled"] = s.mode != 0u; }),
         schema::Field("luminanceScale", &S::luminanceScale).Clamp(0.0f, 10.0f),
         schema::Field("skyLuminanceFactor", &S::skyLuminanceFactor).Clamp(0.0f, 10.0f),
@@ -55,20 +55,20 @@ inline const schema::Table<SkyAtmosphereSettings>& Keys()
         schema::Field("environmentLighting", &S::environmentLighting),
         schema::Field("aerialPerspective", &S::aerialPerspective),
         schema::Custom<S>("heightFogContribution",
-            [](const J& j, S& s) { s.heightFogContribution = std::clamp(j.value("heightFogContribution", 1.0f), 0.0f, 10.0f); },
+            [](const J& j, S& s) { s.heightFogContribution = std::clamp(jsonfield::Value(j, "heightFogContribution", 1.0f), 0.0f, 10.0f); },
             [](J& j, const S& s) { j["heightFogContribution"] = s.heightFogContribution; }),
         // rayleighScale, mieScale, ozoneScale, rayleighTint, mieTint, ozoneTint, mieAbsorptionScale: the medium.
         schema::Custom<S>("medium",
             [](const J& j, S& s) {
-                const float rayleigh = std::clamp(j.value("rayleighScale", 1.0f), 0.0f, 10.0f);
-                const float mie = std::clamp(j.value("mieScale", 1.0f), 0.0f, 10.0f);
-                const float ozone = std::clamp(j.value("ozoneScale", 1.0f), 0.0f, 10.0f);
+                const float rayleigh = std::clamp(jsonfield::Value(j, "rayleighScale", 1.0f), 0.0f, 10.0f);
+                const float mie = std::clamp(jsonfield::Value(j, "mieScale", 1.0f), 0.0f, 10.0f);
+                const float ozone = std::clamp(jsonfield::Value(j, "ozoneScale", 1.0f), 0.0f, 10.0f);
                 // The medium's colours over the x Earth scales (absent = Earth's): UE's colour / its default, per channel.
                 for (unsigned c = 0; c < 3; ++c) { s.rayleighTint[c] = s.mieTint[c] = s.ozoneTint[c] = 1.0f; }
                 ReadTint(j, "rayleighTint", s.rayleighTint);
                 ReadTint(j, "mieTint", s.mieTint);
                 ReadTint(j, "ozoneTint", s.ozoneTint);
-                const float absorption = j.value("mieAbsorptionScale", -1.0f); // < 0 (or absent) = the Mie scale's
+                const float absorption = jsonfield::Value(j, "mieAbsorptionScale", -1.0f); // < 0 (or absent) = the Mie scale's
                 s.mieAbsorptionScale = absorption < 0.0f ? -1.0f : std::min(absorption, 10.0f);
                 SetSkyMedium(s, rayleigh, mie, ozone);
             },
@@ -88,14 +88,14 @@ inline const schema::Table<SkyAtmosphereSettings>& Keys()
                 const SkyAtmosphereParameters earth{};
                 for (unsigned i = 0; i < 3; ++i)
                 {
-                    s.parameters.GroundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.GroundAlbedo[0]), 0.0f, 1.0f);
+                    s.parameters.GroundAlbedo[i] = std::clamp(jsonfield::Value(j, "groundAlbedo", earth.GroundAlbedo[0]), 0.0f, 1.0f);
                 }
             },
             [](J& j, const S& s) { j["groundAlbedo"] = s.parameters.GroundAlbedo[0]; }),
         schema::Custom<S>("multiScatteringFactor",
             [](const J& j, S& s) {
                 const SkyAtmosphereParameters earth{};
-                s.parameters.GroundAlbedo[3] = std::clamp(j.value("multiScatteringFactor", earth.GroundAlbedo[3]), 0.0f, 10.0f);
+                s.parameters.GroundAlbedo[3] = std::clamp(jsonfield::Value(j, "multiScatteringFactor", earth.GroundAlbedo[3]), 0.0f, 10.0f);
             },
             [](J& j, const S& s) { j["multiScatteringFactor"] = s.parameters.GroundAlbedo[3]; }),
         // UE's MieAnisotropy, their range and default: how forward-peaked the Mie phase is, which is
@@ -104,7 +104,7 @@ inline const schema::Table<SkyAtmosphereSettings>& Keys()
         schema::Custom<S>("mieAnisotropy",
             [](const J& j, S& s) {
                 const SkyAtmosphereParameters earth{};
-                s.parameters.MieScattering[3] = std::clamp(j.value("mieAnisotropy", earth.MieScattering[3]), 0.0f, 0.999f);
+                s.parameters.MieScattering[3] = std::clamp(jsonfield::Value(j, "mieAnisotropy", earth.MieScattering[3]), 0.0f, 0.999f);
             },
             [](J& j, const S& s) { j["mieAnisotropy"] = s.parameters.MieScattering[3]; }),
     } };

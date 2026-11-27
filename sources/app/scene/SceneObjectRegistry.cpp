@@ -12,6 +12,7 @@
 #include "app/Systems.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
+#include "core/JsonField.h" // R9.6b: Value / As -- strict only under the level loader's scope
 #include "core/math/Math.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
@@ -67,16 +68,18 @@ std::wstring Widen(const std::string& s)
     return vfs::Widen(s);
 }
 
+// R9.6b: an element of another type keeps the default's (or what `out` held's) component -- except under the level
+// loader's jsonfield::StrictScope, where it throws as get<float>() did.
 float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
 {
     if (!j.is_array() || j.size() < 3) { return def; }
-    return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+    return float3(jsonfield::As(j[0], def.x), jsonfield::As(j[1], def.y), jsonfield::As(j[2], def.z));
 }
 
 bool TryFloat3(const json& j, float3& out)
 {
     if (!j.is_array() || j.size() < 3) { return false; }
-    out = float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+    out = float3(jsonfield::As(j[0], out.x), jsonfield::As(j[1], out.y), jsonfield::As(j[2], out.z));
     return true;
 }
 
@@ -93,15 +96,15 @@ SceneObjectRegistry::ObjectList CreateStaticMesh(SceneObjectRegistry::CreationCo
     // RotatingObject is demo-specific: build it only for a nonzero speed, then
     // apply shared staticMesh properties so animation starts from the authored
     // rotation. Zero-speed meshes remain plain meshes and stay fully editable.
-    const float rotateSpeedDeg = o.value("rotateSpeedDeg", 0.0f);
+    const float rotateSpeedDeg = jsonfield::Value(o, "rotateSpeedDeg", 0.0f);
     if (rotateSpeedDeg != 0.0f)
     {
-        const std::string model = o.value("model", std::string{});
-        const std::string material = o.value("material", std::string{});
-        const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-        const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-        const float3 pos = ToFloat3(o.value("position", json::array()));
-        const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
+        const std::string model = jsonfield::Value(o, "model", std::string{});
+        const std::string material = jsonfield::Value(o, "material", std::string{});
+        const std::string layout = jsonfield::Value(o, "inputLayout", std::string("PosNormTanUV"));
+        const std::wstring shader = Widen(jsonfield::Value(o, "shader", std::string("shaders/gbuffer.hlsl")));
+        const float3 pos = ToFloat3(jsonfield::Value(o, "position", json::array()));
+        const float3 scale = ToFloat3(jsonfield::Value(o, "scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto mesh = std::make_unique<RotatingObject>(model, material, layout, shader, pos, scale,
             rotateSpeedDeg * DEG2RAD);
@@ -128,12 +131,12 @@ SceneObjectRegistry::ObjectList CreateInstancedModels(SceneObjectRegistry::Creat
     (void)ctx;
 
     SceneObjectRegistry::ObjectList objects;
-    const std::string model = o.value("model", std::string{});
-    const std::string material = o.value("material", std::string{});
-    const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-    const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer_inst.hlsl")));
-    const std::wstring computeShader = Widen(o.value("computeShader", std::string("shaders/instance_anim.hlsl")));
-    const unsigned int count = o.value("count", 1u);
+    const std::string model = jsonfield::Value(o, "model", std::string{});
+    const std::string material = jsonfield::Value(o, "material", std::string{});
+    const std::string layout = jsonfield::Value(o, "inputLayout", std::string("PosNormTanUV"));
+    const std::wstring shader = Widen(jsonfield::Value(o, "shader", std::string("shaders/gbuffer_inst.hlsl")));
+    const std::wstring computeShader = Widen(jsonfield::Value(o, "computeShader", std::string("shaders/instance_anim.hlsl")));
+    const unsigned int count = jsonfield::Value(o, "count", 1u);
 
     auto instances = std::make_unique<GpuInstancedModels>(model, count, material, layout, shader, computeShader);
 
@@ -241,7 +244,7 @@ SceneObjectRegistry::ObjectList CreateDebugGrid(SceneObjectRegistry::CreationCon
     (void)ctx;
 
     SceneObjectRegistry::ObjectList objects;
-    const float halfSize = o.value("halfSize", 100.0f);
+    const float halfSize = jsonfield::Value(o, "halfSize", 100.0f);
     objects.push_back(std::make_unique<DebugGrid>(halfSize));
     return objects;
 }

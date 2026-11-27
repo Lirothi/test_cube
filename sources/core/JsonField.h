@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -143,5 +144,18 @@ namespace jsonfield
     [[nodiscard]] inline std::string Value(const nlohmann::json& object, const char* key, const char* fallback)
     {
         return Value<std::string>(object, key, std::string(fallback ? fallback : ""));
+    }
+
+    // A field that is set only when it is there -- `if (o.contains(k)) x.Set(o[k].get<T>())`: the value when the key is
+    // there and get<T>() takes it; nothing when it is absent, or of another type outside a StrictScope (as if absent: what
+    // was there stays); inside one, get<T>()'s throw. Not an object: nothing (value() was never called on one here).
+    template <class T>
+    [[nodiscard]] std::optional<T> Find(const nlohmann::json& object, const char* key)
+    {
+        if (!object.is_object()) { return std::nullopt; }
+        const auto it = object.find(key);
+        if (it == object.end()) { return std::nullopt; }
+        if (StrictScope::Active() || detail::Converts<T>(*it)) { return it->template get<T>(); }
+        return std::nullopt;
     }
 } // namespace jsonfield

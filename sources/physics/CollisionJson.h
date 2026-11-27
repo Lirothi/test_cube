@@ -3,6 +3,7 @@
 #include <string_view>
 #include <vector>
 
+#include "core/JsonField.h" // R9.6b: Value -- strict only under the level loader's scope
 #include "physics/PhysicsTypes.h"
 #include "third_party/json/json.hpp"
 
@@ -194,13 +195,13 @@ namespace physics
             {
                 if (!part.is_object()) { continue; }
                 CollisionPrimitive p;
-                const std::string type = part.value("type", std::string("box"));
+                const std::string type = jsonfield::Value(part, "type", std::string("box"));
                 p.kind = type == "sphere" ? PrimitiveKind::Sphere : type == "capsule" ? PrimitiveKind::Capsule : type == "cylinder" ? PrimitiveKind::Cylinder : PrimitiveKind::Box;
                 ReadVec3(part, "center", p.center);
                 ReadVec3(part, "rotationDeg", p.rotationDeg);
                 ReadVec3(part, "halfExtents", p.halfExtents);
-                p.radius = part.value("radius", p.radius);
-                p.halfHeight = part.value("halfHeight", p.halfHeight);
+                p.radius = jsonfield::Value(part, "radius", p.radius);
+                p.halfHeight = jsonfield::Value(part, "halfHeight", p.halfHeight);
                 out.primitives.push_back(p);
             }
         }

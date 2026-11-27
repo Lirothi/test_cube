@@ -29,6 +29,11 @@
 
 #include "app/levels/LevelManager.h"
 #include "app/levels/LevelMigration.h" // R9.5
+#include "app/levels/LevelEnvironment.h" // R9.6b: the editor's road for the local lights
+#include "app/scene/SceneObjectRegistry.h" // R9.6b: the object registry's road
+#include "ocean/OceanRenderConfigJson.h" // R9.6b
+#include "rendering/lighting/PointLight.h" // R9.6b
+#include "rendering/lighting/SpotLight.h" // R9.6b
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
 #include "editor/scene/EditorPlayerStart.h"
@@ -3376,10 +3381,24 @@ void TestKeyTableReadsAsTheHandCodeDid()
     Check(s.steps == 16 && s.radius == 0.0f, "a clamped key clamps into its range");
     Check(s.tint.x == 1.0f && s.tint.y == 1.0f && s.tint.z == 1.0f, "a colour is read only as an array of three");
     Check(s.name == "y" && s.a == 3.0f && s.b == 4.0f, "a string and a Custom key are read");
+    // R9.6b: a key of another type throws, as value() did, only inside the level loader's scope; the editor's read keeps
+    // the member (each kind: a number, a flag, a string, an element of an array of three).
     bool threw = false;
-    try { table.Read(Json::parse(R"({"radius": "far"})"), s); }
-    catch (const Json::exception&) { threw = true; }
-    Check(threw, "a key of another type throws, as value() did (R9.6 decides where that becomes jsonfield::Get)");
+    {
+        jsonfield::StrictScope loader;
+        try { table.Read(Json::parse(R"({"radius": "far"})"), s); }
+        catch (const Json::exception&) { threw = true; }
+    }
+    Check(threw, "inside the level loader's scope, a key of another type throws, as value() did");
+    const Section before = s;
+    Section t = s; // the checks below write `s` back
+    table.Read(Json::parse(R"({"radius": "far", "on": 1, "steps": "x", "count": null, "name": 3, "arr": [1, "y", 3],
+                               "tint": [0.5, true, "z"], "glare": true})"), t);
+    Check(t.radius == before.radius && t.on == before.on && t.steps == before.steps && t.count == before.count &&
+              t.name == before.name && t.arr[0] == 1.0f && t.arr[1] == before.arr[1] && t.arr[2] == 3.0f &&
+              t.tint.x == 0.5f && t.tint.y == 1.0f && t.tint.z == before.tint.z && before.glare == 0.5f && t.glare == 1.0f,
+          "outside it (the editor), a key of another type keeps its member: value()'s own conversions still apply "
+          "(true is 1 as a float)");
     Section untouched;
     table.Read(Json::parse("[1, 2]"), untouched);
     Check(untouched.steps == 8 && untouched.name == "x", "a section that is not an object is not read");
@@ -3545,6 +3564,20 @@ void CheckLevelField(const Json& object, const char* key, T fallback, const char
             catch (const Json::exception&) { asStrictThrows = true; }
         }
         if (asStrictThrows != getThrows) { fail("As under the loader's scope does not throw where get<T>() does"); }
+        // R9.6b: Find -- the value where get<T>() takes it, nothing where it throws; under the scope, the throw.
+        const std::optional<T> found = jsonfield::Find<T>(object, key);
+        if (getThrows ? found.has_value() : !(found.has_value() && *found == got)) { fail("Find is neither get<T>()'s nor nothing"); }
+        bool findStrictThrows = false;
+        {
+            jsonfield::StrictScope scope;
+            try { (void)jsonfield::Find<T>(object, key); }
+            catch (const Json::exception&) { findStrictThrows = true; }
+        }
+        if (findStrictThrows != getThrows) { fail("Find under the loader's scope does not throw where get<T>() does"); }
+    }
+    else if (jsonfield::Find<T>(object, key).has_value())
+    {
+        fail("Find finds a field that is not there");
     }
 }
 
@@ -3582,6 +3615,135 @@ void TestALevelFieldReadsAsValueDid()
     Check(jsonfield::Value(level, "s", "fb") == "text" && jsonfield::Value(level, "i", "fb") == "fb",
           "a literal fallback reads a string");
     Check(!jsonfield::StrictScope::Active(), "the loader's scope ends with its block");
+}
+
+// Architecture plan R9.6b: the readers the level loader shares with the editor -- the object registry and factory with
+// their key tables, the environment sections' tables, the local lights, the ocean's render block -- take a key of
+// another type without throwing when the editor reads its document (in a frame, where a throw is std::terminate with
+// the unsaved level), and still throw inside the loader's StrictScope (the load stops with the file named). Every field
+// down to depth 3 of every distinct object (by type and mesh, its mesh.json's keys folded in) and of every environment
+// section of the levels in data/levels is given, one at a time, values of other types.
+void CollectFieldPointers(const Json& value, const Json::json_pointer& at, int depth, std::vector<Json::json_pointer>& out)
+{
+    if (depth > 3) { return; }
+    if (value.is_object())
+    {
+        for (auto it = value.begin(); it != value.end(); ++it)
+        {
+            const Json::json_pointer p = at / it.key();
+            out.push_back(p);
+            CollectFieldPointers(it.value(), p, depth + 1, out);
+        }
+    }
+    else if (value.is_array() && depth > 0) // an object's array (a position, a slot list): its elements too
+    {
+        for (std::size_t i = 0; i < value.size() && i < 4; ++i)
+        {
+            const Json::json_pointer p = at / i;
+            out.push_back(p);
+            CollectFieldPointers(value[i], p, depth + 1, out);
+        }
+    }
+}
+
+void TestALevelKeyOfAnotherTypeDoesNotEndTheEditor(Scene& scene)
+{
+    const Json wrong[] = { Json("x"), Json(true), Json(7), Json::array({ 1, "y" }), Json{ { "k", 1 } }, Json() };
+    const SceneObjectRegistry registry = SceneObjectRegistry::CreateWithBuiltins();
+    SceneObjectRegistry::CreationContext creation{ scene };
+    SceneObjectFactory::MeshAssetLoadScope meshAssets; // each mesh.json parsed once, as a level load does
+    int reads = 0;
+    int strictThrows = 0;
+    std::string editorThrow;
+    // One section (or object) under every mutation: `read` is what the editor's road calls on it.
+    const auto mutateAll = [&](const std::string& where, const Json& section, const auto& read)
+    {
+        std::vector<Json::json_pointer> fields;
+        CollectFieldPointers(section, Json::json_pointer(), 0, fields);
+        for (const Json::json_pointer& field : fields)
+        {
+            for (const Json& value : wrong)
+            {
+                Json mutated = section;
+                mutated[field] = value;
+                ++reads;
+                try { read(mutated); }
+                catch (const std::exception& e)
+                {
+                    if (editorThrow.empty()) { editorThrow = where + field.to_string() + " = " + value.dump() + ": " + e.what(); }
+                }
+                jsonfield::StrictScope loader;
+                try { read(mutated); }
+                catch (const Json::exception&) { ++strictThrows; }
+                catch (const std::exception&) {} // the loader's catch takes nlohmann's own only; counted as no throw
+            }
+        }
+    };
+
+    std::set<std::string> seenObjects;
+    int objects = 0;
+    int sections = 0;
+    for (const auto& entry : std::filesystem::directory_iterator("data/levels"))
+    {
+        if (entry.path().extension() != ".json") { continue; }
+        std::ifstream in(entry.path()); // vfs-ok: a test reading the repository's levels
+        const Json raw = Json::parse(in, nullptr, false, /*ignore_comments=*/true);
+        if (!raw.is_object()) { continue; }
+        const Json level = levelmigrate::Migrate(raw, true);
+        const std::string name = entry.path().stem().string();
+        for (const Json& o : level.value("objects", Json::array()))
+        {
+            const std::string type = o.is_object() ? o.value("type", std::string()) : std::string();
+            if (type != "staticMesh" && type != "transparentMesh" && type != "instancedModels" && type != "particleEmitter")
+            {
+                continue;
+            }
+            const std::string identity = type + "|" + o.value("mesh", o.value("model", o.value("preset", std::string())));
+            if (!seenObjects.insert(identity).second) { continue; }
+            ++objects;
+            mutateAll(name + " object " + identity, SceneObjectFactory::ResolveMeshAsset(o),
+                      [&](const Json& m) { (void)registry.Create(type, creation, m); });
+        }
+        const Json post = level.value("postProcess", Json::object());
+        const auto section = [&](const char* key, const Json& s, const auto& read)
+        {
+            if (s.is_object()) { ++sections; mutateAll(name + " " + key, s, read); }
+        };
+        section("gtao", post.value("gtao", Json()), [](const Json& m) { GtaoSettings s; GtaoSettingsJson::ApplyOverrides(m, s); });
+        section("heightFog", post.value("heightFog", Json()),
+                [](const Json& m) { HeightFogSettings s; HeightFogSettingsJson::ApplyOverrides(m, s); });
+        section("bloom", post.value("bloom", Json()), [](const Json& m) { BloomSettings s; BloomSettingsJson::ApplyOverrides(m, s); });
+        section("cameraExposure", post.value("cameraExposure", Json()),
+                [](const Json& m) { render::CameraExposureSettings s; render::PhotographicSettingsJson::ApplyOverrides(m, s); });
+        section("colorPipeline", post.value("colorPipeline", Json()),
+                [](const Json& m) { render::ColorPipelineSettings s; render::PhotographicSettingsJson::ApplyOverrides(m, s); });
+        section("skyAtmosphere", level.value("skyAtmosphere", Json()),
+                [](const Json& m) { SkyAtmosphereSettings s; SkyAtmosphereSettingsJson::ApplyOverrides(m, s); });
+        section("volumetricCloud", level.value("volumetricCloud", Json()),
+                [](const Json& m) { VolumetricCloudSettings s; VolumetricCloudSettingsJson::ApplyOverrides(m, s); });
+        section("timeOfDay", level.value("timeOfDay", Json()), [](const Json& m) {
+            TimeOfDaySettings s;
+            DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
+            TimeOfDaySettingsJson::ApplyOverrides(m, s, sun);
+        });
+        section("ocean.render", level.value("ocean", Json::object()).value("render", Json()),
+                [](const Json& m) { OceanRenderConfig r; OceanRenderConfigJson::ApplyOverrides(m, r); });
+        for (const Json& light : level.value("spotLights", Json::array()))
+        {
+            section("spotLight", light, [](const Json& m) { SpotLightDesc d{}; levelenv::ReadSpotLight(m, d); });
+            break; // the keys are the same in every light of a level
+        }
+        for (const Json& light : level.value("pointLights", Json::array()))
+        {
+            section("pointLight", light, [](const Json& m) { PointLightDesc d{}; levelenv::ReadPointLight(m, d); });
+            break;
+        }
+    }
+    std::printf("  R9.6b: %d distinct objects and %d sections, %d reads of a field of another type, %d threw under the "
+                "loader's scope\n", objects, sections, reads, strictThrows);
+    Check(objects >= 10 && sections >= 20, "the levels' objects and sections were found and read");
+    Check(editorThrow.empty(), "a level key of another type does not throw out of the editor's readers -- " + editorThrow);
+    Check(strictThrows > reads / 20, "and inside the level loader's scope it still throws, as value() did");
 }
 
 void TestJsonFieldsAreReadWithoutThrowing()
@@ -6767,6 +6929,7 @@ int main(int argc, char** argv)
         TestEnvironmentSettingsAreEnumeratedFromTheLevel();
         TestOldSunBecomesTheTimeOfDay();
         TestAnOldLevelIsReadAsTodays(); // R9.5
+        TestALevelKeyOfAnotherTypeDoesNotEndTheEditor(*scene); // R9.6b
         {
             EditorSceneDocument envDocument = MakeEnvironmentDocument();
             EditorSelection envSelection;

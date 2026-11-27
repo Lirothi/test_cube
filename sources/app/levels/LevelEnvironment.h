@@ -4,10 +4,11 @@
 // (EnvironmentRuntime::Apply, RebuildLights) call the same functions. A section is read over its struct's defaults
 // and handed to the scene whole, so "the section is not in the file" and "the Inspector cleared it" mean one thing.
 //
-// The two readers differ in ONE thing, said by the caller: a level file is read Strict -- a value of another type
-// throws, and JsonLevel turns that into an error naming the file (AGENTS.md "A Field of Another Type") -- while the
-// editor reads its document Tolerant: an edit made through MCP or the Inspector runs in the frame, where a throw
-// would end the process, so a number of another type keeps its default.
+// The two readers differ in ONE thing: a level file is read Strict -- a value of another type throws, and JsonLevel
+// turns that into an error naming the file (AGENTS.md "A Field of Another Type") -- while the editor reads its document
+// Tolerant: an edit made through MCP or the Inspector runs in the frame, where a throw would end the process, so a key
+// of another type keeps what was there. R9.6b: the caller no longer says which -- every read goes through
+// jsonfield::Value / As, and the loader's jsonfield::StrictScope makes its reads strict.
 #include "third_party/json/json.hpp"
 
 class Scene;
@@ -16,16 +17,10 @@ struct PointLightDesc;
 
 namespace levelenv
 {
-enum class JsonRead
-{
-    Strict,   // value(): a key of another type throws (the level file)
-    Tolerant, // a number of another type keeps the default (the editor's document, in the frame)
-};
-
 // A local light's keys over the desc's defaults (P16.5's `luminousFluxLm`, else the legacy `intensity` converted).
 // `enabled` is the caller's: a disabled light is not built at all.
-void ReadSpotLight(const nlohmann::json& light, SpotLightDesc& desc, JsonRead mode);
-void ReadPointLight(const nlohmann::json& light, PointLightDesc& desc, JsonRead mode);
+void ReadSpotLight(const nlohmann::json& light, SpotLightDesc& desc);
+void ReadPointLight(const nlohmann::json& light, PointLightDesc& desc);
 
 // One environment section -- null = absent, the struct's defaults -- into the scene.
 void ApplySkyAtmosphere(Scene& scene, const nlohmann::json* section);

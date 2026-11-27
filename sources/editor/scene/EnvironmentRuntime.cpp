@@ -184,7 +184,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         auto& points = ctx.scene.GetLightManager().PointLights();
         if (i < 0 || i >= static_cast<int>(points.size())) { return; }
         PointLightDesc d;
-        levelenv::ReadPointLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
+        levelenv::ReadPointLight(p, d); // R9.4: the level's reader too
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -193,7 +193,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         auto& spots = ctx.scene.GetLightManager().SpotLights();
         if (i < 0 || i >= static_cast<int>(spots.size())) { return; }
         SpotLightDesc d;
-        levelenv::ReadSpotLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
+        levelenv::ReadSpotLight(p, d); // R9.4: the level's reader too
         spots[i].SetDesc(d);
     }
     else if (env.type == "timeOfDay")
@@ -456,14 +456,14 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
         if (e.type == "spotLight")
         {
             SpotLightDesc d;
-            levelenv::ReadSpotLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
+            levelenv::ReadSpotLight(p, d); // R9.4: the level's reader too
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
         }
         else if (e.type == "pointLight")
         {
             PointLightDesc d;
-            levelenv::ReadPointLight(p, d, levelenv::JsonRead::Tolerant); // R9.4: the level's reader too
+            levelenv::ReadPointLight(p, d); // R9.4: the level's reader too
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }

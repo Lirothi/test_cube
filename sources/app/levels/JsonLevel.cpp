@@ -303,7 +303,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
                 continue;
             }
             SpotLightDesc desc{};
-            levelenv::ReadSpotLight(sl, desc, levelenv::JsonRead::Strict); // R9.4: the editor's reader too
+            levelenv::ReadSpotLight(sl, desc); // R9.4: the editor's reader too (R9.6b: strict under the load's scope)
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
         }
@@ -319,7 +319,7 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             }
 
             PointLightDesc desc{};
-            levelenv::ReadPointLight(pl, desc, levelenv::JsonRead::Strict); // R9.4: the editor's reader too
+            levelenv::ReadPointLight(pl, desc); // R9.4: the editor's reader too (R9.6b: strict under the load's scope)
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }

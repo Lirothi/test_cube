@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "core/JsonField.h" // R9.6b: Value / As / Find -- strict only under the level loader's scope
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
 #include "core/schema/KeyTable.h" // R9.3: the object's table of keys
@@ -29,16 +30,18 @@ namespace
         return vfs::Widen(s);
     }
 
+    // R9.6b: an element of another type keeps the default's component (the level loader's StrictScope: it throws).
     float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
     {
         if (!j.is_array() || j.size() < 3) { return def; }
-        return float3(j[0].get<float>(), j[1].get<float>(), j[2].get<float>());
+        return float3(jsonfield::As(j[0], def.x), jsonfield::As(j[1], def.y), jsonfield::As(j[2], def.z));
     }
 
     float4 ToFloat4(const json& j, const float4& def = float4(0.0f, 0.0f, 0.0f, 0.0f))
     {
         if (!j.is_array() || j.size() < 4) { return def; }
-        return float4(j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>());
+        return float4(jsonfield::As(j[0], def.x), jsonfield::As(j[1], def.y), jsonfield::As(j[2], def.z),
+                      jsonfield::As(j[3], def.w));
     }
 
     RenderLayer RenderLayerFromString(const std::string& s)
@@ -197,7 +200,7 @@ namespace SceneObjectFactory
         }
         else
         {
-            const std::string model = o.value("model", std::string());
+            const std::string model = jsonfield::Value(o, "model", std::string());
             if (!model.empty())
             {
                 const std::string file = model.substr(0, model.find('#'));
@@ -275,7 +278,7 @@ namespace SceneObjectFactory
         static const schema::Table<S> table{ {
             schema::Custom<S>("recomputeNormalSlots", [](const json& o, S& mesh) {
                 mesh.SetRecomputeNormalSlots(ToUIntVector(
-                    o.value("recomputeNormalSlots", json::array())));
+                    jsonfield::Value(o, "recomputeNormalSlots", json::array())));
             }, nullptr).Label("Recompute normals", 0.0f, "Material slots whose normals are rebuilt from the geometry at load."),
 
             // mesh.json "chunkGrid": the .mesh.bin was baked with its LOD0 split into an N x N grid of
@@ -363,7 +366,7 @@ namespace SceneObjectFactory
                 {
                     LOG_WARNING_ONCE(logging::LogCategory::Asset,
                         "mesh.json without uvDensity (texel factor falls back to object bounds), first: {}",
-                        o.value("mesh", o.value("model", std::string("?"))));
+                        jsonfield::Value(o, "mesh", jsonfield::Value(o, "model", std::string("?"))));
                 }
             }, nullptr).Label("UV density", 0.0f, "Per slot, the world size of a unit-UV square (the bake measures it)."),
 
@@ -384,20 +387,22 @@ namespace SceneObjectFactory
                     mp.texOffsScale = ToFloat4(o["texOffsScale"], mp.texOffsScale);
                     mesh.MarkMaterialParamOverride(ParamField::TexOffsScale);
                 }
-                if (o.contains("normalStrength"))
+                // R9.6b: a key of another type is as if absent here -- no value, no override mark -- except under the
+                // level loader's StrictScope, where Find throws as get<T>() did.
+                if (const auto v = jsonfield::Find<float>(o, "normalStrength"))
                 {
-                    mp.texFlags.w = o["normalStrength"].get<float>();
+                    mp.texFlags.w = *v;
                     mesh.MarkMaterialParamOverride(ParamField::NormalStrength);
                 }
-                if (o.contains("useMR"))
+                if (const auto v = jsonfield::Find<bool>(o, "useMR"))
                 {
-                    mp.SetUseMR(o["useMR"].get<bool>());
+                    mp.SetUseMR(*v);
                     mesh.MarkMaterialParamOverride(ParamField::UseMR);
                 }
                 // false = the albedo texture is off and baseColor is the colour (a flat material).
-                if (o.contains("useAlbedo"))
+                if (const auto v = jsonfield::Find<bool>(o, "useAlbedo"))
                 {
-                    mp.SetUseAlbedo(o["useAlbedo"].get<bool>());
+                    mp.SetUseAlbedo(*v);
                     mesh.MarkMaterialParamOverride(ParamField::UseAlbedo);
                 }
                 // Self-illumination on slot 0 (glowing embers etc). The override mask keeps explicitly
@@ -425,9 +430,9 @@ namespace SceneObjectFactory
                     mp.emissiveColor = ToFloat3(o["emissiveColor"], mp.emissiveColor);
                     mesh.MarkMaterialParamOverride(ParamField::EmissiveColor);
                 }
-                if (o.contains("emissiveStrength"))
+                if (const auto v = jsonfield::Find<float>(o, "emissiveStrength"))
                 {
-                    mp.emissiveStrength = o["emissiveStrength"].get<float>();
+                    mp.emissiveStrength = *v;
                     mesh.MarkMaterialParamOverride(ParamField::EmissiveStrength);
                 }
                 if (o.contains("metalRough"))
@@ -435,7 +440,7 @@ namespace SceneObjectFactory
                     const json& mr = o["metalRough"];
                     if (mr.is_array() && mr.size() >= 2)
                     {
-                        mp.metalRough = float2(mr[0].get<float>(), mr[1].get<float>());
+                        mp.metalRough = float2(jsonfield::As(mr[0], mp.metalRough.x), jsonfield::As(mr[1], mp.metalRough.y));
                         mesh.MarkMaterialParamOverride(ParamField::MetalRough);
                     }
                 }
@@ -446,9 +451,9 @@ namespace SceneObjectFactory
             // W3: per-object wind sway strength (0 = rigid). Applied uniformly to every slot at Init
             // (submesh sync), so it is a per-object property rather than a slot-0 material override.
             schema::Custom<S>("windStrength", [](const json& o, S& mesh) {
-                if (o.contains("windStrength"))
+                if (const auto v = jsonfield::Find<float>(o, "windStrength"))
                 {
-                    mesh.SetWindStrength(o["windStrength"].get<float>());
+                    mesh.SetWindStrength(*v);
                 }
             }, nullptr).Label("Wind strength", 0.01f, "How much it sways in the wind (0 = rigid)."),
 
@@ -463,9 +468,9 @@ namespace SceneObjectFactory
             }, nullptr).Label("Trunk stiffness", 0.01f, "The asset's trunk against the wind."),
 
             schema::Custom<S>("renderLayer", [](const json& o, S& mesh) {
-                if (o.contains("renderLayer"))
+                if (const auto v = jsonfield::Find<std::string>(o, "renderLayer"))
                 {
-                    mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));
+                    mesh.SetRenderLayer(RenderLayerFromString(*v));
                 }
             }, nullptr).Label("Render layer", 0.0f, "Default, Terrain, Transparent, Sky, Lights, Gizmo or Debug."),
 
@@ -577,12 +582,12 @@ namespace SceneObjectFactory
         // object (legacy `"model"` + inline plumbing) passes through untouched.
         const json o = ResolveMeshAsset(oIn);
 
-        const std::string model = o.value("model", std::string{});
-        const std::string material = o.value("material", std::string{});
-        const std::string layout = o.value("inputLayout", std::string("PosNormTanUV"));
-        const std::wstring shader = Widen(o.value("shader", std::string("shaders/gbuffer.hlsl")));
-        const float3 pos = ToFloat3(o.value("position", json::array()));
-        const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
+        const std::string model = jsonfield::Value(o, "model", std::string{});
+        const std::string material = jsonfield::Value(o, "material", std::string{});
+        const std::string layout = jsonfield::Value(o, "inputLayout", std::string("PosNormTanUV"));
+        const std::wstring shader = Widen(jsonfield::Value(o, "shader", std::string("shaders/gbuffer.hlsl")));
+        const float3 pos = ToFloat3(jsonfield::Value(o, "position", json::array()));
+        const float3 scale = ToFloat3(jsonfield::Value(o, "scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto mesh = std::make_unique<StaticMesh>(model, material, layout, shader);
         // B2: optional per-slot material list for multi-submesh assets: "materials": ["a","auto",...]
@@ -606,9 +611,9 @@ namespace SceneObjectFactory
     std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const json& oIn)
     {
         const json o = ResolveMeshAsset(oIn); // J1: transparent meshes may reference a mesh asset too
-        const std::string model = o.value("model", std::string{});
-        const float3 pos = ToFloat3(o.value("position", json::array()));
-        const float3 scale = ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f));
+        const std::string model = jsonfield::Value(o, "model", std::string{});
+        const float3 pos = ToFloat3(jsonfield::Value(o, "position", json::array()));
+        const float3 scale = ToFloat3(jsonfield::Value(o, "scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
         auto glass = std::make_unique<TransparentStaticMesh>(&scene, model, pos, scale, 0.0f);
         TransparentMeshKeys().Read(o, *glass);
@@ -621,7 +626,7 @@ namespace SceneObjectFactory
         using S = TransparentStaticMesh;
         static const schema::Table<S> table{ {
             schema::Custom<S>("recomputeNormalSlots", [](const json& o, S& glass) {
-                glass.SetRecomputeNormalSlots(ToUIntVector(o.value("recomputeNormalSlots", json::array())));
+                glass.SetRecomputeNormalSlots(ToUIntVector(jsonfield::Value(o, "recomputeNormalSlots", json::array())));
             }, nullptr).Label("Recompute normals", 0.0f, "Material slots whose normals are rebuilt from the geometry at load."),
             schema::Custom<S>("tint", [](const json& o, S& glass) {
                 if (o.contains("tint")) { glass.SetTint(ToFloat3(o["tint"], float3(1.0f, 1.0f, 1.0f))); }
@@ -629,23 +634,24 @@ namespace SceneObjectFactory
             schema::Custom<S>("absorption", [](const json& o, S& glass) {
                 if (o.contains("absorption")) { glass.SetAbsorption(ToFloat3(o["absorption"])); }
             }, nullptr).Label("Absorption", 0.01f, "What the glass absorbs per metre [r, g, b]."),
+            // R9.6b: Find -- a key of another type is as if absent, except under the level loader's StrictScope.
             schema::Custom<S>("thickness", [](const json& o, S& glass) {
-                if (o.contains("thickness")) { glass.SetThickness(o["thickness"].get<float>()); }
+                if (const auto v = jsonfield::Find<float>(o, "thickness")) { glass.SetThickness(*v); }
             }, nullptr).Label("Thickness", 0.001f, "Metres of glass the absorption runs through."),
             schema::Custom<S>("reflectionStrength", [](const json& o, S& glass) {
-                if (o.contains("reflectionStrength")) { glass.SetReflectionStrength(o["reflectionStrength"].get<float>()); }
+                if (const auto v = jsonfield::Find<float>(o, "reflectionStrength")) { glass.SetReflectionStrength(*v); }
             }, nullptr).Label("Reflection strength", 0.01f, "Scales the reflection."),
             schema::Custom<S>("refractionDistortion", [](const json& o, S& glass) {
-                if (o.contains("refractionDistortion")) { glass.SetRefractionDistortion(o["refractionDistortion"].get<float>()); }
+                if (const auto v = jsonfield::Find<float>(o, "refractionDistortion")) { glass.SetRefractionDistortion(*v); }
             }, nullptr).Label("Refraction distortion", 0.01f, "How much the scene behind bends."),
             schema::Custom<S>("roughness", [](const json& o, S& glass) {
-                if (o.contains("roughness")) { glass.SetRoughness(o["roughness"].get<float>()); }
+                if (const auto v = jsonfield::Find<float>(o, "roughness")) { glass.SetRoughness(*v); }
             }, nullptr).Label("Roughness", 0.01f, "Frosted (1) to clear (0)."),
             schema::Custom<S>("ior", [](const json& o, S& glass) {
-                if (o.contains("ior")) { glass.SetIor(o["ior"].get<float>()); }
+                if (const auto v = jsonfield::Find<float>(o, "ior")) { glass.SetIor(*v); }
             }, nullptr).Label("IOR", 0.01f, "Index of refraction (glass 1.5)."),
             schema::Custom<S>("normalMap", [](const json& o, S& glass) {
-                if (o.contains("normalMap")) { glass.SetNormalMap(Widen(o["normalMap"].get<std::string>())); }
+                if (const auto v = jsonfield::Find<std::string>(o, "normalMap")) { glass.SetNormalMap(Widen(*v)); }
             }, nullptr).Label("Normal map", 0.0f, "A texture path for the glass's surface."),
         } };
         return table;
@@ -658,9 +664,9 @@ namespace SceneObjectFactory
         // edits + save round-trip like any other object.
         vfx::EmitterDesc d = vfx::ResolveEmitterDesc(o);
         auto emitter = std::make_unique<ParticleEmitterObject>(d);
-        emitter->SetPosition(ToFloat3(o.value("position", json::array())));
+        emitter->SetPosition(ToFloat3(jsonfield::Value(o, "position", json::array())));
         if (o.contains("rotationDeg")) { emitter->SetRotationEulerDeg(ToFloat3(o["rotationDeg"])); }
-        if (o.contains("scale")) { emitter->SetScale(ToFloat3(o.value("scale", json::array()), float3(1.0f, 1.0f, 1.0f))); }
+        if (o.contains("scale")) { emitter->SetScale(ToFloat3(jsonfield::Value(o, "scale", json::array()), float3(1.0f, 1.0f, 1.0f))); }
         return emitter;
     }
 }

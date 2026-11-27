@@ -7,15 +7,17 @@
 // that is not the struct's, two members behind one key -- is a Custom record with its own read and write, still a row
 // of the table.
 //
-// Reading is the hand code's, exactly: `s.m = j.value(key, s.m)` (clamped when the record says so) -- an absent key
-// leaves the member as it is, a key of another type throws nlohmann's type_error, as value() always did (R9.6 decides
-// where that becomes jsonfield::Get). Writing is `j[key] = s.m`.
+// Reading is the hand code's: `s.m = j.value(key, s.m)` (clamped when the record says so) -- an absent key leaves the
+// member as it is. R9.6b: through jsonfield::Value / As, so a key of another type throws nlohmann's type_error only
+// inside the level loader's jsonfield::StrictScope (the load stops with the file named); the editor, which applies the
+// same table to its document in a frame, keeps the member instead. Writing is `j[key] = s.m`.
 #include <algorithm>
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "core/JsonField.h" // R9.6b: Value / As
 #include "core/math/Math.h"
 #include "third_party/json/json.hpp"
 
@@ -132,18 +134,18 @@ void ReadKey(const Key<S>& k, const nlohmann::json& j, S& s)
         }
         else
         {
-            s.*k.boolMember = j.value(k.key, s.*k.boolMember);
+            s.*k.boolMember = jsonfield::Value(j, k.key, s.*k.boolMember);
         }
         break;
     case Kind::Int:
     {
-        const int v = j.value(k.key, s.*k.intMember);
+        const int v = jsonfield::Value(j, k.key, s.*k.intMember);
         s.*k.intMember = k.clamped ? std::clamp(v, static_cast<int>(k.lo), static_cast<int>(k.hi)) : v;
         break;
     }
     case Kind::UInt:
     {
-        const std::uint32_t v = j.value(k.key, s.*k.uintMember);
+        const std::uint32_t v = jsonfield::Value(j, k.key, s.*k.uintMember);
         s.*k.uintMember = k.clamped ? std::clamp(v, static_cast<std::uint32_t>(k.lo), static_cast<std::uint32_t>(k.hi)) : v;
         break;
     }
@@ -157,7 +159,7 @@ void ReadKey(const Key<S>& k, const nlohmann::json& j, S& s)
         }
         else
         {
-            v = j.value(k.key, v);
+            v = jsonfield::Value(j, k.key, v);
         }
         // The clamp applies to what the member holds afterwards, read or not -- as `std::clamp(j.value(...), ...)` did.
         s.*k.floatMember = k.clamped ? std::clamp(v, k.lo, k.hi) : (k.atLeast ? std::max(k.lo, v) : v);
@@ -174,7 +176,7 @@ void ReadKey(const Key<S>& k, const nlohmann::json& j, S& s)
         const auto it = j.find(k.key);
         if (it != j.end() && it->is_array() && it->size() == 3)
         {
-            for (int c = 0; c < 3; ++c) { (s.*k.floatArray3Member)[c] = (*it)[c].get<float>(); }
+            for (int c = 0; c < 3; ++c) { (s.*k.floatArray3Member)[c] = jsonfield::As((*it)[c], (s.*k.floatArray3Member)[c]); }
         }
         break;
     }
@@ -183,12 +185,14 @@ void ReadKey(const Key<S>& k, const nlohmann::json& j, S& s)
         const auto it = j.find(k.key);
         if (it != j.end() && it->is_array() && it->size() == 3)
         {
-            s.*k.float3Member = Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            const Math::float3 was = s.*k.float3Member;
+            s.*k.float3Member = Math::float3(jsonfield::As((*it)[0], was.x), jsonfield::As((*it)[1], was.y),
+                                             jsonfield::As((*it)[2], was.z));
         }
         break;
     }
     case Kind::String:
-        s.*k.stringMember = j.value(k.key, s.*k.stringMember);
+        s.*k.stringMember = jsonfield::Value(j, k.key, s.*k.stringMember);
         break;
     case Kind::Custom:
         if (k.read) { k.read(j, s); }

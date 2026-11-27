@@ -22,7 +22,7 @@ inline const schema::Table<VolumetricCloudSettings>& Keys()
         // A level that has the section has clouds unless it says otherwise: `enabled` reads true when absent, not the
         // struct's default (off) -- it switches them off without losing the tuning.
         schema::Custom<S>("enabled",
-            [](const nlohmann::json& j, S& s) { s.enabled = j.value("enabled", true); },
+            [](const nlohmann::json& j, S& s) { s.enabled = jsonfield::Value(j, "enabled", true); },
             [](nlohmann::json& j, const S& s) { j["enabled"] = s.enabled; }),
         schema::Field("layerBottomKm", &S::layerBottomKm).Clamp(0.1f, 20.0f),
         schema::Field("layerHeightKm", &S::layerHeightKm).Clamp(0.1f, 20.0f),

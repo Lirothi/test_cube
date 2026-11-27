@@ -32,7 +32,7 @@ inline void FinishCamera(const nlohmann::json& j, CameraExposureSettings& out)
 {
     if (!j.contains("apertureFStop") && j.contains("manualEv100"))
     {
-        out.apertureFStop = ApertureFromEv100(j.value("manualEv100", 0.0f),
+        out.apertureFStop = ApertureFromEv100(jsonfield::Value(j, "manualEv100", 0.0f),
                                               out.shutterSpeedSec, out.isoSensitivity);
     }
     // Clamp at the settings boundary only (plan section 6.2: no hidden clamps scattered through
