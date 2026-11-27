@@ -4,6 +4,7 @@
 
 #include "app/game/PlayerController.h"
 #include "app/game/PlayerStart.h"
+#include "app/game/PlayWorld.h" // R6.2a
 #include "app/game/RaceCourse.h"
 #include "app/game/VesselCamera.h" // ScriptCameraHold
 
@@ -17,6 +18,17 @@ class Scene;
 class PlaySession
 {
 public:
+    // R6.2a: the session owns the game's part of the world (game::PlayWorld: the race, the helm's and the spectator's
+    // cameras) for the whole run, and registers it for code that has no session at hand (game::ActivePlayWorld).
+    PlaySession() { game::SetActivePlayWorld(&world_); }
+    ~PlaySession() { if (game::ActivePlayWorld() == &world_) { game::SetActivePlayWorld(nullptr); } }
+    PlaySession(const PlaySession&) = delete;
+    PlaySession& operator=(const PlaySession&) = delete;
+    game::PlayWorld& World() { return world_; }
+    const game::PlayWorld& World() const { return world_; }
+    // The scene calls the game's part of its hand-over and tells it when its objects go (Scene::SetGameHooks).
+    void AttachTo(Scene& scene);
+
     bool Playing() const { return playing_; }
     bool Possessed() const { return playing_ && possessed_; }
     // `start` null = from where the camera stands. `takeMouse` false: a script's Play (--play, MCP) leaves the owner's mouse alone until a click in the window.
@@ -62,6 +74,7 @@ private:
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;
     game::ScriptCameraHold scriptCameraBefore_; // the script's camera (VesselCamera.h) before the session, as settingsBefore_
+    game::PlayWorld world_; // R6.2a
     Math::float3 cameraPosition_;
     float cameraYaw_ = 0.0f;
     float cameraPitch_ = 0.0f;

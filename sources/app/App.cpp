@@ -1,4 +1,5 @@
 #include "app/FrameRequests.h" // what a --set asks of the frame (R2.2)
+#include "app/game/PlayWorld.h" // R6.2a
 #include "app/App.h"
 #include "app/AppResources.h"
 #include "app/BuildVersion.h"
@@ -1181,7 +1182,7 @@ namespace
                     out += "]";
                 }
                 // The race (game::Race): the bots at their helms, the player's own laps.
-                out += scene_.RaceRef().ReadoutJson();
+                if (game::PlayWorld* play = game::ActivePlayWorld()) { out += play->race.ReadoutJson(); } // R6.2a
                 // The boats' spray (vfx/VesselSpray): boats with emitters, drops a second thrown now, slam bursts so far.
                 {
                     const vfx::VesselSpray& spray = scene_.VesselSprayRef();
@@ -1496,6 +1497,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         {
             MEM_SCOPE(MemTag::Renderer);
             appController_.InitializeGraphicsSettings(renderer, scene);
+            appController_.AttachPlay(scene); // R6.2a: the race's boats and the boat cameras at the hand-over
             // The graphics levels (docs/scalability_plan.md) over the settings file and the level: the player's saved
             // choice, or --scalability's. Nothing saved and nothing asked = nothing managed: today's picture.
             settings::Scalability& scalability = settings::TheScalability();

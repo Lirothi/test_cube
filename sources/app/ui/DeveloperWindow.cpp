@@ -1,6 +1,7 @@
 // A shipped build compiles none of this (DeveloperWindow.h: the class is a stub there).
 #if !TC_SHIPPING
 #include "app/game/PlayerStart.h"
+#include "app/game/PlayWorld.h" // R6.2a
 #include "app/ui/DeveloperWindow.h"
 #include "core/vfs/Vfs.h"
 
@@ -4101,9 +4102,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::DragFloat(key.label, &(race.*(key.member)), key.speed, key.lo, key.hi, key.format);
                     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s\n--set race.%s (%g .. %g)", key.hint, key.key, key.lo, key.hi); }
                 }
-                const std::wstring raceLine = scene.RaceRef().HudLine();
+                const game::PlayWorld* play = game::ActivePlayWorld(); // R6.2a: the session's race
+                const std::wstring raceLine = play ? play->race.HudLine() : std::wstring();
                 if (!raceLine.empty()) { ImGui::Text("%ls", raceLine.c_str()); }
-                else { ImGui::TextDisabled(scene.RaceRef().HasTrack() ? "The course is there; no boat runs it." : "No course in Play: mark buoys with a Race gate number (Inspector > Race)."); }
+                else { ImGui::TextDisabled(play && play->race.HasTrack() ? "The course is there; no boat runs it." : "No course in Play: mark buoys with a Race gate number (Inspector > Race)."); }
             }
 
             if (activeTab_ == Tab::Tessy)

@@ -1,4 +1,5 @@
 #include "app/BootOptions.h"
+#include "app/game/PlayWorld.h" // R6.2a
 #include "app/FrameRequests.h"
 #include "app/game/VesselCamera.h"
 #include "app/scene/Scene.h"
@@ -66,11 +67,18 @@ const SettingDesc kFrameRows[] = {
                [](SettingContext& c, float value)
                {
                    const auto view = static_cast<game::VesselCamera::View>(std::clamp(static_cast<int>(std::lround(value)), 0, 2));
-                   c.scene.VesselCameraRef().SetView(view);
-                   c.scene.SpectatorCameraRef().SetView(view);
+                   if (game::PlayWorld* play = game::ActivePlayWorld()) // R6.2a: the session's cameras
+                   {
+                       play->vesselCamera.SetView(view);
+                       play->spectatorCamera.SetView(view);
+                   }
                    return true;
                },
-               [](SettingContext& c, float& out) { out = AsFloat(c.scene.VesselCameraRef().GetView()); return true; }),
+               [](SettingContext&, float& out) {
+                   const game::PlayWorld* play = game::ActivePlayWorld();
+                   out = play ? AsFloat(play->vesselCamera.GetView()) : 0.0f;
+                   return true;
+               }),
     TC_SETTING("aa.fxaa", Bool, SettingPersistent | SettingScalable | SettingCostNextFrame,
                [](SettingContext& c, float value) { c.renderSettings.doFxaa = value != 0.0f; return true; },
                [](SettingContext& c, float& out) { out = (c.renderSettings.doFxaa) ? 1.0f : 0.0f; return true; }),

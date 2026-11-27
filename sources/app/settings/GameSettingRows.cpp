@@ -1,4 +1,5 @@
 #include "app/Systems.h"
+#include "app/game/PlayWorld.h" // R6.2a
 #include "app/game/PlayerStart.h"
 #include "app/game/Race.h"
 #include "app/game/RaceBot.h"
@@ -27,10 +28,18 @@ namespace
 const SettingDesc kGameRows[] = {
     // The race (game::Race): a script's start and the results away.
     TC_SETTING("race.start", Bool, SettingTransient | SettingAction,
-               [](SettingContext& c, float value) { if (value != 0.0f) { c.scene.RaceRef().RequestStart(); } return true; },
+               [](SettingContext&, float value) {
+                   game::PlayWorld* play = game::ActivePlayWorld(); // R6.2a: the session's race
+                   if (value != 0.0f && play) { play->race.RequestStart(); }
+                   return true;
+               },
                nullptr),
     TC_SETTING("race.close", Bool, SettingTransient | SettingAction,
-               [](SettingContext& c, float value) { if (value != 0.0f) { c.scene.RaceRef().CloseResults(); } return true; },
+               [](SettingContext&, float value) {
+                   game::PlayWorld* play = game::ActivePlayWorld();
+                   if (value != 0.0f && play) { play->race.CloseResults(); }
+                   return true;
+               },
                nullptr),
     // What a script says in place of the keys goes into the keys' own channel (architecture plan R12.3): a press is the
     // next frame's press, held / axis values stay until 0. testMoveX / Z are the WORLD's axes (actions::kMoveWorldX / Z);

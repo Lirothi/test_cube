@@ -23,6 +23,8 @@ class AppController
 {
 public:
     void InitializeGraphicsSettings(Renderer& renderer, Scene& scene);
+    // R6.2a: the scene calls the play session's part of its hand-over (game::PlayWorld) from now on.
+    void AttachPlay(Scene& scene) { playSession_.AttachTo(scene); }
     void ApplySceneGraphicsSettings(Scene& scene) const;
     void FlushGraphicsSettings(Renderer& renderer, const Scene& scene);
     // Shutdown, the GPU idle, before Renderer::Shutdown: the UI's own GPU textures go while the device is there.

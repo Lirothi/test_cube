@@ -279,13 +279,13 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
     if (playSession_.Playing())
     {
-        scene.RaceRef().DrawResults();
-        scene.RaceRef().DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
-        scene.RaceRef().DrawBotCards(scene.CameraRef()); // bot.debug: what each bot decides and why
+        playSession_.World().race.DrawResults();
+        playSession_.World().race.DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
+        playSession_.World().race.DrawBotCards(scene.CameraRef()); // bot.debug: what each bot decides and why
         playSession_.DrawBoatCard(scene); // on foot beside a boat: what it does
         playSession_.DrawSpectatorPanel(scene); // the camera on a bot's boat: which boat, its view, the bots' vision
     }
-    const bool raceResults = playSession_.Playing() && scene.RaceRef().ResultsOpen();
+    const bool raceResults = playSession_.Playing() && playSession_.World().race.ResultsOpen();
     // The forced auto-detect measures the boot's view: nobody walks or looks away until it is done.
     const bool detecting = settings::TheScalability().AutodetectForced();
 
@@ -313,7 +313,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (playSession_.Playing())
     {
         playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults || gameMenuOpen_ || detecting, uiCapturingMouse);
-        if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { scene.RaceRef().DebugDraw(*draw); } // bot.debug
+        if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { playSession_.World().race.DebugDraw(*draw); } // bot.debug
     }
     else
     {
@@ -444,7 +444,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     if (detecting) { hudPlayLine_ = L"SETTING UP THE GRAPHICS: the keys wait until the measurement is done"; }
 #endif
     hudRaceLine_ = playSession_.RaceHudLine(scene);
-    hudBigText_ = playSession_.Playing() ? scene.RaceRef().BigText() : std::wstring{};
+    hudBigText_ = playSession_.Playing() ? playSession_.World().race.BigText() : std::wstring{};
 }
 
 void AppController::DrawGameMenu(Renderer& renderer, Scene& scene, LevelManager& levelManager, InputManager& input)

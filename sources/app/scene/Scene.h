@@ -8,9 +8,9 @@
 #include <wrl/client.h>
 #include <cstdint>
 
+#include <functional> // R6.2a: the game's hooks
 #include "app/game/PlayerStart.h"
-#include "app/game/Race.h"
-#include "app/game/VesselCamera.h"
+#include "app/game/Race.h" // game::RaceCourse (levelRaceCourse_) until R6.2b
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/LocalShadowCache.h"
@@ -155,8 +155,14 @@ public:
     // Runtime objects (no editor identity) out of the scene, at the hand-over or parked (it parks). Their GPU resources go
     // once the frames in flight are done (RetireRemovedObject). How many went.
     std::size_t RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone);
-    // The race's own boats (game::Race::TakeSpawns / TakeDespawns), at the hand-over: made where the grid is, taken out after.
-    void SyncRaceBoats(Renderer* renderer);
+    // R6.2a: the game's part of the hand-over (game::PlayWorld::HandOver: the race's own boats, the helm's and the
+    // spectator's camera) -- Sync calls it right after the physics poses are synced, the render half parked -- and what
+    // Clear tells the game (its boats were among the objects). Set by the play session; unset, the scene has no game.
+    void SetGameHooks(std::function<void(Renderer*)> handOver, std::function<void()> forget)
+    {
+        gameHandOver_ = std::move(handOver);
+        gameForget_ = std::move(forget);
+    }
     bool RemoveOceanObjects();
     void SetOceanVisible(bool visible);
     // W1: locate the ocean's shared clock (null if no ocean). PUBLIC since P16.6 -- the capture
@@ -167,13 +173,6 @@ public:
     // The collision world and the rigid bodies (docs/physics_plan.md).
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
-    game::VesselCamera& VesselCameraRef() { return vesselCamera_; }
-    const game::VesselCamera& VesselCameraRef() const { return vesselCamera_; }
-    // The spectator's on a bot's boat (race.watch): its view (behind, cockpit, cinema) is the Play panel's and V's.
-    game::VesselCamera& SpectatorCameraRef() { return spectatorCamera_; }
-    // The level's race in a play session: its gates, the bots at their boats' helms (game::Race).
-    game::Race& RaceRef() { return race_; }
-    const game::Race& RaceRef() const { return race_; }
     const vfx::VesselSpray& VesselSprayRef() const { return vesselSpray_; } // readouts (written at Sync)
     // The Player Start the level loaded with, for a build without the editor; with one, the document is its truth (it moves).
     void SetLevelPlayerStart(std::optional<game::PlayerStart> start) { levelPlayerStart_ = std::move(start); }
@@ -479,12 +478,9 @@ private:
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
     std::optional<game::PlayerStart> levelPlayerStart_;
-    game::VesselCamera vesselCamera_;
-    // race.watch: the same chase camera on a bot's boat (Scene::Sync), and the boat it is on now.
-    game::VesselCamera spectatorCamera_;
-    RenderableObject* spectated_ = nullptr;
-    game::Race race_;
     game::RaceCourse levelRaceCourse_;
+    std::function<void(Renderer*)> gameHandOver_; // R6.2a: SetGameHooks
+    std::function<void()> gameForget_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
     std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
     vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync

@@ -5037,6 +5037,43 @@ Debug, реестр настроек и таблица графики, вкла�
   самопроверки, `live objects at exit: none`, чистое завершение. Debug `--scene-stress=12` CLEAN; Release
   `--mem-readout=30` PASS (50 рядов, круче всего 0.092 МБ/с). Не покрыто: виды с прожекторами и точечными тенями
   (на трёх видах при 15:00 ламп нет — их виды строятся, но пусты); полный `--scene-stress-gbv` — в конце R6.
+  Коммит `64d7997b`.
+
+  **Подшаги R6.2 (2026-11-27).** Сверено: игровое в `Scene` — `race_`, `vesselCamera_`, `spectatorCamera_`,
+  `spectated_` (гонка и камеры), `levelPlayerStart_`, `levelRaceCourse_` (данные уровня для старта Play), `vesselSpray_`,
+  `vesselHulls_`; читатели — `PlaySession` (20), `AppController` (15), загрузчик уровня (4), строки настроек `race.*` /
+  `frame.vesselView` (5), отчёты `App` (2), окно разработчика (2). Игровая часть `Scene::Sync` — лодки гонки
+  (`SyncRaceBoats`, сразу после `physics_.SyncPoses()`) и камера судна / зрителя (после следа и спрея, перед
+  `renderCamera_.TakePose`); между ними только след и спрей, которые камеру и позы не трогают, — значит, обе части можно
+  звать одним крючком в точке `SyncRaceBoats`, порядок того, что они читают и пишут, не меняется.
+  - **R6.2a**: `game::PlayWorld` (`app/game/PlayWorld.h/.cpp`) — гонка, две камеры, наблюдаемая лодка и игровая часть
+    передачи (`HandOver`); владеет `PlaySession` (член AppController на всё время работы); `Scene::Sync` зовёт крючок
+    передачи (`Scene::SetGameHandOver`) там, где звал `SyncRaceBoats`; строки настроек получают `game::PlayWorld*` в
+    `SettingContext`, окно разработчика и отчёты `App` — через AppController.
+  - **R6.2b**: данные уровня для Play (`PlayerStart`, `RaceCourse`) — из `Scene` к миру игры через загрузчик; тогда
+    `Scene.h` перестаёт включать `app/game/*` (три разрешения храповика).
+  - Спрей (`vfx::VesselSpray`) остаётся у сцены вопреки списку §5 R6: это эффект мира, он идёт всюду, где плывут лодки,
+    и в Release без сессии Play (мир там идёт всегда, `play_and_physics.md`), — не игра.
+
+  **Сделано R6.2a (2026-11-27).** `app/game/PlayWorld.h/.cpp`: `game::PlayWorld` — гонка, камера судна, камера зрителя и
+  наблюдаемая лодка; `HandOver(Scene&, Renderer*)` — игровая часть передачи: `SyncRaceBoats` и блок камеры судна /
+  зрителя из `Scene::Sync`, перенесены скриптом дословно (`r62a_extract.py` рабочей папки; `race_` → `race`, своё у сцены —
+  через её открытые `RemoveRuntimeObjects` / `AddInitializedObject` / `Physics()` / `FindOceanRenderable()` /
+  `CameraRef()`); `Forget()` — то, что `Scene::Clear` делал с гонкой. `Scene::SetGameHooks(handOver, forget)`: `Sync`
+  зовёт крючок там, где звал `SyncRaceBoats` (сразу после `physics_.SyncPoses()`), — камера теперь ставится до следа и
+  спрея, а не после: они читают позы корпусов и пишут океан и эмиттеры, камеру и позы не трогают, так что видимое не
+  меняется. Владелец — `PlaySession` (член `AppController` на всё время работы; запрет копирования), она регистрирует
+  мир для кода без сессии под рукой (`game::ActivePlayWorld()`: строки `camera.boatView`, `race.start`, `race.close`,
+  окно разработчика, отчёт `get_readouts`) и цепляет крючки (`PlaySession::AttachTo` ← `AppController::AttachPlay` ←
+  `App` после настроек графики). Из `Scene` ушли `race_`, `vesselCamera_`, `spectatorCamera_`, `spectated_`,
+  `RaceRef`, `VesselCameraRef`, `SpectatorCameraRef`, `SyncRaceBoats`; `Scene.h` больше не включает
+  `app/game/VesselCamera.h` — храповик 42 → 41 (`Race.h` остаётся ради `RaceCourse` до R6.2b). Проверено: три
+  конфигурации, `check_*.py` 0, CRLF, обе регрессии PASS (`TestRaceCourseAndBot` среди них); живая гонка Release
+  `--play --set=race.laps:1;frame.timeScale:2;race.start:1;race.watch:1` (wind_test, 25 с): эталон и новая сборка —
+  по 4 лодки «made for the grid», ни одной ошибки, кадр — камера зрителя «Behind» за лодкой бота в обоих. Контроль:
+  `App` не цепляет сессию к сцене (без `AttachPlay`) — та же гонка: 0 лодок, гонка стоит; файл возвращён байт в байт.
+  Release `--scene-stress=150 --rt-audit` CLEAN, `rt audit: PASS`. Не покрыто: камера у штурвала (`--play` за рулём
+  своей лодки) живьём не снималась — та же ветка того же блока, перенесённого дословно.
 - **R13. Игровые системы** (после R6.2), **R14. Физика как сервис** (после R13; по одной сущности: якорь →
   швартовка → лодка → игрок; `OceanRenderable` в `physics/` — 5 упоминаний → интерфейс «поверхность воды»).
   Якорь, швартовка, лодка и руль бота — под `FixedTick`; игрок — на покадровом хуке, как сегодня

@@ -12,7 +12,6 @@ app/levels/JsonLevel.cpp -> app/game/RaceCourseJson.h
 app/scene/Scene.cpp -> app/Systems.h
 app/scene/Scene.h -> app/game/PlayerStart.h
 app/scene/Scene.h -> app/game/Race.h
-app/scene/Scene.h -> app/game/VesselCamera.h
 app/scene/SceneObjectRegistry.cpp -> app/Systems.h
 app/ui/DeveloperWindow.cpp -> editor/EditorController.h
 materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
