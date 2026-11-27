@@ -612,6 +612,54 @@
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabFrame.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabAntiAliasing.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabVisibility.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabReflections.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabFog.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabSky.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabDebug.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabGi.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabLod.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabCsm.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabContact.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabVsm.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabPhysics.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabTessy.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabStreaming.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/ui/DeveloperTabBindings.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/ui/LogWindow.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
@@ -1458,6 +1506,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/ui/DeveloperWindow.h">
+      <Filter>sources\app\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/ui/DeveloperTabs.h">
       <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/ui/LogWindow.h">

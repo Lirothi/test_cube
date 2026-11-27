@@ -16,8 +16,8 @@ import re
 import sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'sources')
-GAME_FILES = ['app/App.cpp', 'app/GraphicsSettings.cpp', 'app/ui/DeveloperWindow.cpp', 'app/AppController.cpp',
-              'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'editor/ui/EnvironmentInspector*.cpp',
+GAME_FILES = ['app/App.cpp', 'app/GraphicsSettings.cpp', 'app/ui/DeveloperWindow.cpp', 'app/ui/DeveloperTab*.cpp',
+              'app/AppController.cpp', 'app/main.cpp', 'editor/ui/InspectorPanel.cpp', 'editor/ui/EnvironmentInspector*.cpp',
               'app/ui/OceanControlsWindow.cpp', 'app/ui/MemoryTab.cpp',
               'app/settings/Scalability.cpp', 'app/settings/UserSettings.cpp', 'app/settings/DisplayMode.cpp',
               'app/ui/GameSettingsMenu.cpp']

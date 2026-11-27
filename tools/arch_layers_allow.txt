@@ -9,7 +9,7 @@ app/BootTools.cpp -> editor/assets/MaterialFileGen.h
 app/levels/JsonLevel.cpp -> app/Systems.h
 app/scene/Scene.cpp -> app/Systems.h
 app/scene/SceneObjectRegistry.cpp -> app/Systems.h
-app/ui/DeveloperWindow.cpp -> editor/EditorController.h
+app/ui/DeveloperTabDebug.cpp -> editor/EditorController.h
 materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
 ocean/WaterMask.cpp -> physics/PhysicsWorld.h
 physics/PhysicsWorld.cpp -> ocean/OceanReadback.h

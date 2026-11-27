@@ -114,7 +114,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         if (!developerWindow_.OpenTab(Boot().editor.devTab)) // once, like --mem-window
         {
             LOG_WARNING(logging::LogCategory::App, "--dev-tab={}: no Developer Controls tab has that label "
-                        "(Scalability, Frame, AA / Scale, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
+                        "(Scalability, Frame, AA / Scale = AA, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
                         "Tessy, Physics, Streaming, Memory, Bindings)", Boot().editor.devTab);
         }
         Boot().editor.devTab.clear();

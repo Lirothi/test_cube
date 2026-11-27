@@ -49,6 +49,7 @@ public:
 class EditorController;
 #endif
 class InputManager;
+enum class GraphicsControl;
 class GraphicsSettingsManager;
 class LevelManager;
 class Renderer;
@@ -102,6 +103,52 @@ private:
     // Every --set name of the settings registry (architecture plan R2.n): a widget by its type, through the row.
     // True when a persisted setting changed (the graphics settings save it as the other tabs' edits).
     bool DrawSettingsTab(Scene& scene, SceneRenderSettings& settings);
+    // R10.4: a tab a file (app/ui/DeveloperTab<Tab>.cpp); Draw keeps the window, the navigation, the order and the
+    // three tabs above, which only call out. A tab takes the Draw arguments its body reads, under Draw's names: the
+    // bodies moved out of Draw verbatim.
+    void DrawFrameTab(Renderer& renderer, Scene& scene, const InputManager& input, SceneRenderSettings& settings);
+    void DrawAntiAliasingTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawVisibilityTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawReflectionsTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawFogTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawSkyTab(Scene& scene, SceneRenderSettings& settings);
+    void DrawDebugTab(Renderer& renderer, Scene& scene, LevelManager& levelManager, SceneRenderSettings& settings
+#if WITH_EDITOR
+        , EditorController& editorController
+#endif
+    );
+    void DrawGiTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawLodTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawCsmTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawContactTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawVsmTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawPhysicsTab(Scene& scene); // its own `settings` are physics' (they hid Draw's while it was a block)
+    void DrawTessyTab(Scene& scene);
+    void DrawStreamingTab(Renderer& renderer, Scene& scene, SceneRenderSettings& settings,
+        GraphicsSettingsManager& graphicsSettings);
+    void DrawBindingsTab(const InputManager& input);
+    // The widget a graphics setting is drawn through in every tab -- the control, its reset icon, the scalability dot
+    // (DeveloperTabs.h, through GRAPHICS_CONTROL). It reaches Draw's arguments and locals through frame_, set for the
+    // length of Draw.
+    struct Frame;
+    Frame* frame_ = nullptr;
+    template <class DrawFn>
+    bool graphicsControl(GraphicsControl control, const char* id, float explicitWidth, const DrawFn& draw);
+    // S15: THE shadow-mode combo, drawn from the CSM and the VSM tabs.
+    void DrawShadowModeCombo(const char* id);
+    static bool IsGraphicsToggle(GraphicsControl control);
+    static bool ResetIconButton(ImTextureID texture);
+    // Hover text for a control (DeveloperWindow.cpp).
+    static void DevHelp(const char* text);
     char settingsFilter_[64] = {};
     Tab activeTab_ = Tab::Frame;
 

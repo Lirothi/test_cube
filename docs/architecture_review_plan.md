@@ -5597,7 +5597,34 @@ Debug, реестр настроек и таблица графики, вкла�
   действие каждого доменного файла, параметры по образцам регрессии, ни одного отказа — и 4 `run_action` (move,
   setEnabled, setTime, spawn), каждое с `query` после и `undo`; эталон — Release_Editor до разреза действий. Порог (эталон
   дважды): 50 из 50 ответов слово в слово; эталон-новый: 50 из 50; файл уровня не тронут. Контроль (`ApplyMove` без
-  `relative`) — расходится ответ `query` после move (пальмы стоят у начала координат вместо сдвига на 1 м вверх). Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
+  `relative`) — расходится ответ `query` после move (пальмы стоят у начала координат вместо сдвига на 1 м вверх).
+
+  **Сделано R10.4 (2026-11-27).** Якорь сдвинулся: `DeveloperWindow.cpp` — 4426 строк, из них 3700 — `Draw`, где окно,
+  навигация и 19 вкладок блоками `if (activeTab_ == Tab::X)`. Резали скриптом, тела дословно (отступ 16 → 4): 16 вкладок —
+  методы `DrawXTab` в `app/ui/DeveloperTab<X>.cpp`, каждый берёт те аргументы `Draw`, что читает его тело, под именами
+  `Draw`; Scalability, Memory, Settings и так звали наружу и остались. Две общие лямбды стали членами: `graphicsControl`
+  (шаблон в `app/ui/DeveloperTabs.h` вместе с макросами `GRAPHICS_CONTROL`; локальные `Draw`, до которых он дотягивается,
+  — через `frame_`, указатель на `Frame`, живущий ровно время `Draw`) и `DrawShadowModeCombo`; `IsGraphicsToggle`,
+  `ResetIconButton`, `DevHelp` — статические члены; помощники одной вкладки (пути уровней и `RefreshLevelList` — Debug,
+  режимы DLSS — AA, подписи SSR — Reflections) уехали в её файл. `DeveloperWindow.cpp` — 919 строк. У вкладки Physics
+  своя локальная `settings` (физики) — в блоке `Draw` она перекрывала параметр, в методе столкнулась бы с ним: параметр ей
+  не дан. Слои: include `editor/EditorController.h` ушёл с единственной вкладкой, которая трогает редактор (Debug),
+  исключение в `arch_layers_allow.txt` сменило файл (`DeveloperWindow.cpp` → `DeveloperTabDebug.cpp`), их по-прежнему 33;
+  `check_render_knobs.py` читает `app/ui/DeveloperTab*.cpp` (60 файлов).
+  Проверено: сверка строк (HEAD `.cpp` + `.h` против нового набора) — пропали только заголовки двух лямбд, `static` у
+  `DevHelp` и два имени помощников без `DeveloperWindow::`; Debug, Release_Editor, Release, Shipping, Development, Cook;
+  `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS. Снимки вкладок (`--dev-tab`, wind_test, ветер и время
+  заморожены, сравнение внутри окна `--rect 1446,844,2555,1436`, эталон — Release_Editor на R10.3): Sky, Visibility,
+  Reflections — 0.0000 %; Frame — 0.117 % при пороге (эталон дважды) 0.130 % (FPS и время кадра в окне); CSM, VSM, Debug — 0.0000 %; AA / Scale эталон открыть не может (см. ниже) — снята новым
+  exe по `--dev-tab=AA`: вкладка на месте, статус DLSS, режим «Balanced» из перенесённого `kDlssModes`, значки сброса с
+  точкой масштабируемости.
+  Контроль (`ctl104.py`: для Sky зовётся метод Fog) — 23.9 % в окне. Найдено по пути: `--dev-tab` читает значение до
+  пробела (`BootParse.cpp` `DevTab`), и вкладку «AA / Scale» им было не открыть никогда (приходило «AA», вкладки нет —
+  предупреждение, окно закрыто; на первом снимке в прямоугольнике была сцена); `OpenTab` принимает и первое слово
+  метки (`--dev-tab=aa`), предупреждение это называет. Не покрыто снимками: GI, Fog, LOD, Contact, Tessy, Physics,
+  Streaming, Bindings — серия остановлена по слову владельца (по запуску exe на кадр — ~65 с, слишком долго); их тела
+  сверены построчно и собраны. Снимок через один открытый редактор и MCP был бы дешевле — у MCP нет переключения
+  вкладки разработчика; это повод его добавить. Конфигурации `Debug|Win32`, `Release|Win32`, `Release_Editor|Win32` — удалить;
   `TaskSystemEnki.cpp`, `TaskSystemTBB.cpp` (**В4**), папка `bckp/`; `Renderer::InitFence` — пустая обёртка
   «для совместимости» (`Renderer.h:291`, `Renderer.cpp:399`, `:402-405`). Одноимённый `FrameScheduler::InitFence`
   (`FrameScheduler.cpp:106`) создаёт заборы и ОСТАЁТСЯ: `Renderer.cpp:360` зовёт его напрямую.
