@@ -531,6 +531,7 @@
     <ClCompile Include="sources/app/scene/Scene.cpp" />
     <ClCompile Include="sources/app/scene/World.cpp" />
     <ClCompile Include="sources/app/scene/OceanWaterSurface.cpp" />
+    <ClCompile Include="sources/app/scene/VesselGates.cpp" />
     <ClCompile Include="sources/app/scene/TimeOfDay.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
@@ -600,6 +601,7 @@
     <ClCompile Include="sources/physics/PhysicsCharacter.cpp" />
     <ClCompile Include="sources/physics/PhysicsVessel.cpp" />
     <ClCompile Include="sources/physics/PhysicsBody.cpp" />
+    <ClCompile Include="sources/physics/VesselBench.cpp" />
     <ClCompile Include="sources/app/game/VesselCamera.cpp" />
     <ClCompile Include="sources/physics/PhysicsShapes.cpp" />
     <ClCompile Include="sources/physics/PhysicsWorld.cpp" />
@@ -876,6 +878,7 @@
     <ClInclude Include="sources/app/scene/Scene.h" />
     <ClInclude Include="sources/app/scene/World.h" />
     <ClInclude Include="sources/app/scene/OceanWaterSurface.h" />
+    <ClInclude Include="sources/app/scene/VesselGates.h" />
     <ClInclude Include="sources/app/scene/SceneObjectFactory.h" />
     <ClInclude Include="sources/app/scene/SceneObjectRegistry.h" />
     <ClInclude Include="sources/rendering/scene/SceneFrameData.h" />
@@ -958,6 +961,8 @@
     <ClInclude Include="sources/physics/PhysicsWorld.h" />
     <ClInclude Include="sources/physics/WaterSurface.h" />
     <ClInclude Include="sources/physics/PhysicsBody.h" />
+    <ClInclude Include="sources/physics/VesselBench.h" />
+    <ClInclude Include="sources/physics/VesselModel.h" />
     <ClInclude Include="sources/physics/CollisionJson.h" />
     <ClInclude Include="sources/physics/PhysicsInternal.h" />
     <ClInclude Include="sources/ocean/OceanReadback.h" />

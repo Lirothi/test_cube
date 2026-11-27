@@ -350,7 +350,15 @@ namespace physics
                                    std::vector<std::uint32_t>& indices, std::vector<Math::float3>& slotPositions,
                                    std::vector<std::uint32_t>& slotIndices);
 
-    // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them. Each logs
-    // `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and intent_regression run this.
-    int RunGates(const std::string& name);
+    // A gate of a layer above the physics (R14.3a: the boats', app/scene/VesselGates), run by RunGates beside the physics' own:
+    // `run` fills `detail` and answers 0 = PASS, 1 = FAIL, 2 = SKIP.
+    struct ExtraGate
+    {
+        const char* name;
+        std::function<int(std::string& detail)> run;
+    };
+    // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them, the physics' and then
+    // `extra`. Each logs `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and
+    // intent_regression run this.
+    int RunGates(const std::string& name, const std::vector<ExtraGate>& extra = {});
 } // namespace physics

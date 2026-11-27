@@ -39,4 +39,6 @@ namespace physics
         body_->ApplyBuoyancyImpulse(total, submerged, ToJolt(centreOfBuoyancy), buoyancy, linearDrag, angularDrag, ToJolt(fluidVelocity),
                                     ToJolt(gravity), dt);
     }
+
+    Math::quat RotationAbout(const Math::float3& axis, float radians) { return FromJolt(JPH::Quat::sRotation(ToJolt(axis), radians)); }
 } // namespace physics

@@ -39,4 +39,8 @@ namespace physics
     private:
         JPH::Body* body_;
     };
+
+    // The rotation by `radians` about `axis` (unit), as the physics makes it (Jolt's Quat::sRotation): a gate that wants the
+    // physics' very numbers turns with this.
+    Math::quat RotationAbout(const Math::float3& axis, float radians);
 } // namespace physics
