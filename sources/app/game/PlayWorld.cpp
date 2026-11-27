@@ -45,7 +45,7 @@ void HelmCameraSystem::OnHandOver(Scene& scene, Renderer* /*renderer*/, RuntimeO
     // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
     Camera& camera = scene.CameraRef();
     const OceanRenderable* ocean = scene.FindOceanRenderable();
-    camera_.Apply(camera, game::PoseOf(scene.Physics().GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
+    camera_.Apply(camera, game::PoseOf(scene.Vessels().GetHelm()), ocean ? ocean->GetWaterLevel() : -1.0e6f);
 }
 
 void SpectatorSystem::OnHandOver(Scene& scene, Renderer* /*renderer*/, RuntimeObjects& /*objects*/)
@@ -57,7 +57,7 @@ void SpectatorSystem::OnHandOver(Scene& scene, Renderer* /*renderer*/, RuntimeOb
         // race.watch: a bot's boat, from the pose this frame draws it at -- the helm's chase camera, on another hull. Another
         // boat is a cut.
         std::vector<physics::VesselHull> hulls;
-        scene.Physics().CollectHulls(hulls);
+        scene.Vessels().CollectHulls(hulls);
         for (const physics::VesselHull& hull : hulls)
         {
             if (hull.object != watched || !hull.settings) { continue; }
@@ -129,11 +129,11 @@ void SpectatorSystem::OnDrawUi(const SessionFrame& frame)
 }
 
 void RaceSystem::OnSessionBegin(Scene& /*scene*/, const RaceCourse& course) { race_.Begin(course); }
-void RaceSystem::OnSessionEnd(Scene& scene) { race_.End(scene.Physics()); }
+void RaceSystem::OnSessionEnd(Scene& scene) { race_.End(scene.Vessels()); }
 
 void RaceSystem::OnFrame(Scene& scene, float deltaTime)
 {
-    race_.Tick(scene.Physics(), deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
+    race_.Tick(scene.Vessels(), deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
     if (race_.TakeCameraCut()) { scene.CameraRef().ResetHistory(); } // the boats were put on the grid: a jump, not a pan
 }
 

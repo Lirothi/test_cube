@@ -1973,33 +1973,6 @@ namespace physics
                     return finish(Verdict::Fail);
                 }
             }
-            // The helm's road through the world: who is near a hull (its rectangle, not a circle of its length), taking it, the numbers by name, and a boat gone with its helm held.
-            {
-                auto boat = std::make_unique<GateBody>();
-                boat->SetCollisionSettings(customBox(Math::float3(5.0f, 1.35f, 1.17f)));
-                boat->SetVesselSettings(std::make_shared<VesselSettings>());
-                boat->SetBuoyant(true);
-                boat->SetPhysicsMotion(Motion::Dynamic);
-                World world;
-                frame(world, 1.0f / 60.0f);
-                const Stats made = world.GetStats();
-                const bool beside = world.FindVessel(Math::float3(0.0f, 0.0f, 3.5f), 3.0f) == boat.get();
-                const bool past = world.FindVessel(Math::float3(0.0f, 0.0f, 4.5f), 3.0f) == nullptr;
-                const bool taken = world.SetHelm(boat.get()) && world.GetHelm().exists;
-                world.SetHelmInput(VesselInput{ 1.0f, 1.0f });
-                frame(world, 1.0f / 60.0f);
-                const bool tuned = world.TuneVessels("thrust", 1000.0f) && !world.TuneVessels("nonsense", 1.0f);
-                boat.reset();
-                frame(world, 1.0f / 60.0f);
-                const bool gone = !world.GetHelm().exists && !world.SetHelm(nullptr);
-                report += "helm: floating " + std::to_string(made.floatingBodies) + ", beside " + std::to_string(beside) + ", past " + std::to_string(past) + ", taken " + std::to_string(taken) +
-                    ", tuned " + std::to_string(tuned) + ", gone " + std::to_string(gone) + "; ";
-                if (made.floatingBodies != 1 || !beside || !past || !taken || !tuned || !gone)
-                {
-                    detail = report;
-                    return finish(Verdict::Fail);
-                }
-            }
             detail = report;
             return finish(Verdict::Pass);
         }

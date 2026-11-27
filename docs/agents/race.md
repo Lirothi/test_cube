@@ -4,6 +4,11 @@ Moved verbatim from `AGENTS.md` on 2026-11-24, when that file had grown to 513 K
 short form and an index of these notes. This note keeps the full text: design, measurements, history and the reasons
 behind each rule. Section titles are the old ones, so an old reference «AGENTS.md "<title>"» lands here.
 
+Since 2026-11-27 (architecture plan R14.3) the boats are `app/scene/VesselSystem` (`scene.Vessels()`: the helm, the pilots,
+`PlaceVessel`, the anchor, the mooring, `CollectHulls`) and their model `app/scene/VesselModel.cpp` (namespace `boats`:
+`PushVessel`, `HoldMooring`); a mention below of `physics::World::SetPilot` / `PlaceVessel` / `CollectHulls` or
+`World::Impl::PushVessels` names those now.
+
 ## A Race Course and Its Bot -- Buoys, Gates, a Helmsman
 
 2026-11-10 (owner: "design a water course, mark it with buoys (ocean_buoy) and write a bot that runs it; part of it along

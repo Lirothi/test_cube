@@ -1149,7 +1149,7 @@ namespace
                               player.exists ? "true" : "false", player.possessed ? "true" : "false", physics::PlayerModeName(player.mode),
                               player.onGround ? "true" : "false", player.crouched ? "true" : "false", player.speed, player.feet.x, player.feet.y, player.feet.z);
                 out += playerItem;
-                const physics::HelmState& helm = scene_.Physics().GetHelm();
+                const physics::HelmState& helm = scene_.Vessels().GetHelm();
                 char helmItem[480];
                 std::snprintf(helmItem, sizeof(helmItem),
                               ",\"helm\":{\"exists\":%s,\"speed\":%.3f,\"throttle\":%.3f,\"rudder\":%.3f,\"immersion\":%.3f,\"bite\":%.3f,\"impact\":%.3f,\"waterHeight\":%.3f,\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"starboardY\":%.4f,\"buoyancyLead\":%.3f,\"trimTorque\":%.0f}",
@@ -1160,7 +1160,7 @@ namespace
                 // Every boat as the frame draws it: one that nobody steers rocks in another's wake (OceanWake -> OceanReadback).
                 {
                     std::vector<physics::VesselHull> boats;
-                    scene_.Physics().CollectHulls(boats);
+                    scene_.Vessels().CollectHulls(boats);
                     out += ",\"vessels\":[";
                     for (size_t i = 0; i < boats.size(); ++i)
                     {

@@ -5542,7 +5542,31 @@ Debug, реестр настроек и таблица графики, вкла�
   движка. Проверено: Debug, Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS;
   `--physics-gate` все PASS. Контроль (`ctl143a.py`: `RunGates` отбрасывает переданные гейты) — `--physics-gate=vessel`
   FAIL «no gate named 'vessel'»; `intent_regression` проверял только `RunGates("", …) == 0` и с такой поломкой прошёл бы
-  — добавлена проверка по имени, на контроле она FAIL; файл возвращён побайтно.
+  — добавлена проверка по имени, на контроле она FAIL; файл возвращён побайтно. Коммит `071020ec`.
+
+  **Сделано R14.3b (2026-11-27).** Лодки ушли из физики. `app/scene/VesselSystem` — член `World` (`scene.Vessels()`):
+  всё лодочное из `PhysicsWorld.cpp` строка в строку — состояние `Entry` (вода под корпусом, приказы штурвала и пилотов,
+  якорь, швартовка, где показан корпус), `SampleVesselWater`, `TakeHelmInputs`, `PushVessels`, `ShowVessels` и API
+  (`FindVessel`, `SetHelm`, `SetHelmInput`, `SetPilot`, `PlaceVessel`, `ToggleAnchor`, `GetHelm`, `CollectHulls`,
+  `TuneVessels`). Со списком тел физики сверяется по ревизии (`VesselsRevision`): ушедшая лодка уносит своё, новая
+  начинает с нуля, перед правкой списка — ожидание шага (как ждала физика при удалении). Физика: тела лодок (форма — по
+  ассету), реестр `CollectVesselBodies` (`VesselBody`), запросы к телу (`BodyPose`, `BodyToWorld`, `ShowBody` — интерполяция
+  и оси суммами Jolt, `PlaceBody`) и `World::StepHooks`: measure (где считаются шаги), start (где они начинаются), fixed
+  (перед каждым шагом), shown (где кадр показывает позы), stopped (Stop); `AddFixedTick` — крючок с одним `fixed`.
+  `PhysicsWorld.cpp` 1911 → 1776 строк, `PhysicsVessel.cpp` — 54 (форма и тело). Модель лодки —
+  `app/scene/VesselModel.{h,cpp}` (namespace `boats`, заголовок — `git mv`). Потребители: `BoatHelm`, `PlaySession`,
+  `PlayWorld`, `Race` (`VesselSystem&` вместо `physics::World&`, луч — `Physics().RayCast`), `Scene::Sync`, показания
+  `App`, строки `vessel.*`, `SetVesselTuneCommand`. Путь штурвала ушёл из гейта `world` в новый гейт `helm`
+  (`VesselGates`), и к нему проход, которого не было: лодка в мире на плоской воде через крючки системы держится на
+  осадке (−0.380 м при осадке 0.380), без воды падает (−122 м). Проверено: Debug, Release_Editor, Release; `check_*.py` и
+  `settings_names.py` 0 (храповик 31, слои — 0 находок); CRLF; обе регрессии PASS; `--physics-gate` все PASS (`vessel` —
+  в 7-м знаке от R14.3a: модель теперь собирается не с флагами Jolt, без `/arch:AVX2`). Живьём: `live_float.py` (свой
+  редактор, MCP 8176, Play 8 с) — police_boat −0.695, fast_boat_13 −0.411, small_yacht −0.323, наклоны и скорости до
+  третьего знака те же; `helm_keys.py` (настоящие клавиши, Release, свой стол): E — штурвал взят, X — «dropped its anchor
+  at 60.47 119.25, 8.0 m of slack», чистый выход. Контроль (`ctl143b.py`: система не вешает `fixed`, шаг лодок не идёт) —
+  `helm` FAIL «rests at −122.216347 m»; файл возвращён побайтно. Заметки `boats_and_water.md`, `race.md`,
+  `play_and_physics.md` говорят, где это живёт теперь. Не покрыто живьём: гонка с ботами (пилоты, `PlaceVessel` на
+  старте) — только регрессией; Play с лодкой в Debug.
   - **R14.6** — игрок на покадровом хуке и новый проход гейта `player` через настоящий `World::Tick` при 60 и 300
     кадрах в секунду (контроль — в абзаце R14 выше).
 

@@ -5,17 +5,25 @@
 #include <functional>
 #include <string>
 #include <tuple>
+#include <memory>
 #include <utility>
 
 #include "physics/PhysicsBody.h"
 #include "physics/VesselBench.h"
-#include "physics/VesselModel.h"
+#include "app/scene/VesselModel.h"
+#include "app/scene/VesselSystem.h" // the helm's road (R14.3b)
+#include "core/task/TaskSystem.h"
+#include "core/threading/RenderThread.h"
+#include "core/threading/ThreadRole.h"
+#include "physics/WaterSurface.h"
+#include "rendering/renderables/RenderableObject.h"
 
 // R14.3a: the boat's gate, moved out of physics/PhysicsSelfTest.cpp with the boat's model (physics/VesselModel.h): it runs a
 // boat on physics::VesselBench -- a world of its own, no Jolt here -- through the same functions the world calls.
 namespace
 {
     using namespace physics;
+    using namespace boats;
 
     Math::float3 AxisX() { return Math::float3(1.0f, 0.0f, 0.0f); }
     Math::float3 AxisY() { return Math::float3(0.0f, 1.0f, 0.0f); }
@@ -370,9 +378,113 @@ namespace
             (failures.empty() ? "" : "; WRONG:" + failures);
         return failures.empty() ? 0 : 1;
     }
+
+    // ----------------------------------------------------------------------------------------------------------- helm
+    // The helm's road through a world (moved out of the physics' gate "world" by R14.3b with the boats): who is near a hull
+    // (its rectangle, not a circle of its length), taking it, the numbers by name, and a boat gone with its helm held -- a
+    // VesselSystem over a physics::World, a boat-shaped box as the object.
+    class GateObject final : public RenderableObject
+    {
+    public:
+        GateObject() : RenderableObject("", L"") {}
+        const std::string& GetGeometryPath() const override { return path_; }
+        bool IsSimpleRender() const override { return false; }
+
+    private:
+        std::string path_ = "gate"; // a custom shape reads no file; the world only wants a name
+    };
+
+    int GateHelm(std::string& detail)
+    {
+        const Settings saved = GameSettings();
+        const bool savedRenderThread = threading::g_renderThreadEnabled;
+        threading::g_renderThreadEnabled = true;
+        threading::RoleScope role(threading::ThreadRole::Game);
+        TaskSystem::Get().Start();
+        const auto finish = [&](int verdict)
+        {
+            GameSettings() = saved;
+            threading::g_renderThreadEnabled = savedRenderThread;
+            return verdict;
+        };
+        Settings& settings = GameSettings();
+        settings.async = true;
+        settings.threads = 2;
+        settings.simulate = true;
+        settings.stepDelayMs = 0.0f;
+        const auto frame = [](physics::World& world, float dt)
+        {
+            world.Tick(dt);
+            world.KickStep();
+            world.FinishStep();
+            world.SyncPoses();
+        };
+        auto boat = std::make_unique<GateObject>();
+        CollisionSettings shape;
+        shape.shape = ShapeKind::Custom;
+        CollisionPrimitive box;
+        box.kind = PrimitiveKind::Box;
+        box.halfExtents = Math::float3(5.0f, 1.35f, 1.17f);
+        shape.primitives.push_back(box);
+        boat->SetCollisionSettings(shape);
+        boat->SetVesselSettings(std::make_shared<VesselSettings>());
+        boat->SetBuoyant(true);
+        boat->SetPhysicsMotion(Motion::Dynamic);
+        physics::World world;
+        VesselSystem vessels(world);
+        frame(world, 1.0f / 60.0f);
+        const Stats made = world.GetStats();
+        const bool beside = vessels.FindVessel(Math::float3(0.0f, 0.0f, 3.5f), 3.0f) == boat.get();
+        const bool past = vessels.FindVessel(Math::float3(0.0f, 0.0f, 4.5f), 3.0f) == nullptr;
+        const bool taken = vessels.SetHelm(boat.get()) && vessels.GetHelm().exists;
+        vessels.SetHelmInput(VesselInput{ 1.0f, 1.0f });
+        frame(world, 1.0f / 60.0f);
+        const bool tuned = vessels.TuneVessels("thrust", 1000.0f) && !vessels.TuneVessels("nonsense", 1.0f);
+        boat.reset();
+        frame(world, 1.0f / 60.0f);
+        const bool gone = !vessels.GetHelm().exists && !vessels.SetHelm(nullptr);
+        detail = "helm: floating " + std::to_string(made.floatingBodies) + ", beside " + std::to_string(beside) + ", past " + std::to_string(past) + ", taken " + std::to_string(taken) +
+            ", tuned " + std::to_string(tuned) + ", gone " + std::to_string(gone);
+        if (made.floatingBodies != 1 || !beside || !past || !taken || !tuned || !gone) { return finish(1); }
+
+        // The boat's step through the system's hooks (the water measured, the step pushed, the pose shown): on a flat sea at
+        // y 0 a boat let go at y 0 settles at its draft; the arm, no water -- nothing holds it up, it falls.
+        struct FlatWater final : WaterSurface
+        {
+            bool Present() const override { return true; }
+            bool HasWaves() const override { return false; }
+            float Level() const override { return 0.0f; }
+            float SampleHeight(float, float, float) const override { return 0.0f; }
+        };
+        const auto settle = [&](bool sea)
+        {
+            FlatWater water;
+            auto hull = std::make_unique<GateObject>();
+            hull->SetCollisionSettings(shape);
+            hull->SetVesselSettings(std::make_shared<VesselSettings>());
+            hull->SetBuoyant(true);
+            hull->SetPhysicsMotion(Motion::Dynamic);
+            physics::World afloat;
+            VesselSystem boats(afloat);
+            for (int i = 0; i < 300; ++i)
+            {
+                afloat.SetWater(sea ? &water : nullptr);
+                frame(afloat, 1.0f / 60.0f);
+            }
+            std::vector<VesselHull> hulls;
+            boats.CollectHulls(hulls);
+            return hulls.size() == 1 ? hulls[0].position.y : 1.0e6f;
+        };
+        const float draft = VesselSettings{}.draft;
+        const float floated = settle(true);
+        const float sank = settle(false);
+        detail += "; let go on a flat sea it rests at " + std::to_string(floated) + " m (draft " + std::to_string(draft) + "), without the sea " + std::to_string(sank) + " m";
+        if (std::fabs(floated + draft) > 0.05f) { return finish(1); }
+        return finish(sank < floated - 1.0f ? 0 : 1); // the arm
+    }
 } // namespace
 
 std::vector<physics::ExtraGate> VesselGates()
 {
-    return { { "vessel", &GateVessel } };
+    return { { "vessel", &GateVessel }, { "helm", &GateHelm } };
 }

@@ -286,38 +286,11 @@ namespace physics
             float rolling = -1.0f;     // collision.rollingResistance; < 0 = the knob
             float rollingRadius = 0.1f;
             float velocityY = 0.0f;    // ApplyRollingResistance's memory
-            std::unique_ptr<VesselSettings> vessel; // mesh.json "vessel": a powered boat, its own copy for --set vessel.*
-            VesselState vesselState;   // the step's while one runs
-            VesselWater water;         // the step's while one runs
+            std::unique_ptr<VesselSettings> vessel; // mesh.json "vessel": what its shape and body were made by (the boat itself: app/scene/VesselSystem, R14.3b)
             float halfLength = 0.0f;
             float halfBeam = 0.0f;
-            JPH::Vec3 shownPosition = JPH::Vec3::sZero(); // as the last Display drew it, and the game's alone: who is near a boat asks every frame and must not wait for a step
-            JPH::Vec3 shownForward = JPH::Vec3::sAxisX();
-            JPH::Vec3 shownUp = JPH::Vec3::sAxisY();
-            float shownSpeed = 0.0f; // vesselState's speed as Display saw it: the game's alone
-            float shownThrottle = 0.0f; // and its engine and rudder
-            float shownRudder = 0.0f;
-            float shownImpact = 0.0f; // and its last slam (a share of the weight, fading): the spray's burst
-            float shownImmersion = 0.0f; // how deep it sits (1 = at rest): no spray off a hull in the air
-            float shownWaterHeight = 0.0f; // the surface under it: where its spray leaves and falls back to
-            JPH::Vec3 shownVelocity = JPH::Vec3::sZero(); // the last step's motion of the origin and its turn: the spray's root moves
-            JPH::Vec3 shownAngular = JPH::Vec3::sZero();  // with them, and a drop the side pushes leaves at least as fast
-            // The anchor (ToggleAnchor, after a Join; the step reads them): its rode on the bow, the stem of the hull's box at
-            // the draft in the body's space.
-            bool anchored = false;
-            JPH::Vec3 anchorPoint = JPH::Vec3::sZero();
-            JPH::Vec3 bowLocal = JPH::Vec3::sZero();
-            // A pilot other than the helm (World::SetPilot): pilotInput is the game's, stepPilotInput taken for the steps
-            // where they start, as the helm's.
+            JPH::Vec3 bowLocal = JPH::Vec3::sZero(); // the stem of the hull's box at the draft, in the body's space
             float rudderLever = 0.0f; // m the propeller lies aft of the centre of mass, along the hull
-            bool piloted = false;
-            VesselInput pilotInput;
-            VesselInput stepPilotInput;
-            bool stepPiloted = false;  // piloted, as it stood where the step started
-            // The hard mooring (HoldMooring): the step's. Moored once nobody steers it and it has slowed down, where it was then.
-            bool moored = false;
-            JPH::Vec3 mooredAt = JPH::Vec3::sZero();
-            float mooredHeading = 0.0f;
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -326,17 +299,11 @@ namespace physics
         std::vector<Entry*> awake;       // Dynamic bodies between waking and their last pose
         std::vector<Entry*> kinematics;
         std::vector<Entry*> floaters;
-        std::vector<Entry*> vessels;
-        Entry* helm = nullptr;
-        // R14.2: the game's FixedTicks, run before every step. Changed only on the game thread with no step in flight.
-        std::vector<std::pair<int, std::function<void(const FixedStep&)>>> fixedTicks;
-        int nextFixedTick = 1;
-        VesselInput helmInput;      // the game's
-        VesselInput stepHelmInput;  // taken for the steps where they start: the step's thread owns this
-        float stepMooring = 0.0f;   // physics.mooring* as they stood where the step started
-        float stepMooringTurn = 0.0f;
-        float stepMooringSettle = 0.0f;
-        HelmState helmShown;        // as the last Display drew it: nothing here is the step's
+        std::vector<Entry*> vessels;         // the boats' bodies (app/scene/VesselSystem runs them): CollectVesselBodies
+        std::uint64_t vesselsRevision = 0;   // up by one whenever `vessels` changes
+        // R14.2 / R14.3b: the game's hooks (AddStepHooks). Changed only on the game thread with no step in flight.
+        std::vector<std::pair<int, StepHooks>> hooks;
+        int nextHook = 1;
         const WaterSurface* surface = nullptr; // SetWater: read in Tick only
         std::unique_ptr<PlayerBody> player;
         bool playerWanted = false;
@@ -552,11 +519,7 @@ namespace physics
             if (entry.vessel)
             {
                 vessels.erase(std::remove(vessels.begin(), vessels.end(), &entry), vessels.end());
-                if (helm == &entry)
-                {
-                    helm = nullptr;
-                    helmShown = HelmState{};
-                }
+                ++vesselsRevision;
                 entry.vessel.reset();
             }
             if (entry.kinematic)
@@ -877,8 +840,6 @@ namespace physics
                 if (vesselSettings)
                 {
                     entry.vessel = std::make_unique<VesselSettings>(*vesselSettings);
-                    entry.vesselState = VesselState{};
-                    entry.water = VesselWater{};
                     entry.floatFactor = vesselFactor;
                     const JPH::Vec3 along = ToJolt(vesselSettings->forward).Normalized();
                     const JPH::Vec3 half = scaled->GetLocalBounds().GetExtent(); // the shape's own: a custom shape's bounds above are its parts' spheres
@@ -888,11 +849,8 @@ namespace physics
                     entry.bowLocal = JPH::Vec3(middle.GetX(), vesselSettings->draft * entry.scale.y, middle.GetZ()) + JPH::Vec3(along.GetX(), 0.0f, along.GetZ()) * entry.halfLength;
                     const JPH::Vec3 propeller(vesselSettings->propeller.x * entry.scale.x, vesselSettings->propeller.y * entry.scale.y, vesselSettings->propeller.z * entry.scale.z);
                     entry.rudderLever = (scaled->GetCenterOfMass() - propeller).Dot(along);
-                    entry.anchored = false;
-                    entry.shownPosition = pose.position;
-                    entry.shownForward = pose.rotation * along;
-                    entry.shownUp = pose.rotation * JPH::Vec3::sAxisY();
                     vessels.push_back(&entry);
+                    ++vesselsRevision;
                     LOG_INFO(logging::LogCategory::Physics, "physics: '{}' is a boat: {:.0f} kg, hull volume {:.1f} m3, {:.2f} m3 under still water (buoyancy factor {:.2f}), {:.1f} x {:.1f} m",
                         object.GetGeometryPath(), vesselSettings->mass, scaled->GetVolume(), scaled->GetVolume() / vesselFactor, vesselFactor, 2.0f * entry.halfLength, 2.0f * entry.halfBeam);
                 }
@@ -1050,28 +1008,9 @@ namespace physics
                 entry.kinematicValid = false;
                 entry.fellOut = false;
                 ClearOffset(entry);
-                if (entry.vessel)
-                {
-                    entry.object->SetLeavesGiProbes(false);
-                    entry.piloted = false;
-                    entry.pilotInput = VesselInput{};
-                    entry.stepPilotInput = VesselInput{};
-                    entry.vesselState = VesselState{};
-                    entry.water = VesselWater{};
-                    entry.shownPosition = entry.rest.position;
-                    entry.shownForward = entry.rest.rotation * ToJolt(entry.vessel->forward).Normalized();
-                    entry.shownUp = entry.rest.rotation * JPH::Vec3::sAxisY();
-                    entry.shownSpeed = 0.0f;
-                    entry.shownVelocity = JPH::Vec3::sZero();
-                    entry.shownAngular = JPH::Vec3::sZero();
-                    entry.anchored = false; // the session's, weighed with it
-                    entry.moored = false;   // and the mooring: the next session moors it where it is then
-                    entry.shownImpact = 0.0f;
-                    entry.shownImmersion = 0.0f;
-                    entry.shownWaterHeight = 0.0f;
-                }
             }
             stats.fellOut = 0;
+            for (const auto& hook : hooks) { if (hook.second.stopped) { hook.second.stopped(); } } // the boats' session (VesselSystem)
             LOG_INFO(logging::LogCategory::Physics, "physics: stopped, the bodies are back where the level put them");
         }
 
@@ -1104,7 +1043,7 @@ namespace physics
         // it. The same surface the boats and the renderer's vertices read (OceanReadback).
         void SampleWater(float elapsed)
         {
-            SampleVesselWater(elapsed);
+            for (const auto& hook : hooks) { if (hook.second.measure) { hook.second.measure(elapsed, surface); } } // the boats' water (VesselSystem)
             water.clear();
             if (floaters.empty() || !surface || !surface->Present()) { return; }
             const bool waves = surface->HasWaves();
@@ -1123,139 +1062,27 @@ namespace physics
             }
         }
 
-        void SampleVesselWater(float elapsed)
-        {
-            if (vessels.empty()) { return; }
-            const bool sea = surface && surface->Present();
-            const WaterSurface* readFrom = sea ? surface : nullptr; // the member `water` is the floaters' samples
-            const bool waves = sea && readFrom->HasWaves();
-            const float level = sea ? readFrom->Level() : 0.0f;
-            JPH::BodyInterface& bodies = system->GetBodyInterface();
-            for (Entry* entry : vessels)
-            {
-                if (!sea || entry->fellOut)
-                {
-                    entry->water.valid = false; // a push wakes it, and under the world it would sink for ever
-                    continue;
-                }
-                // The boats' wake (OceanWake), as the free height: a boat lying still does not float in its own hollow and
-                // rocks in another's wake. Under way it leaves the wake out -- its own bow wave and stern trough are what the
-                // hump, the planing and their trim already stand for, and taken twice they would trim it twice -- and so
-                // another boat's too, the price of one field for all of them. Read here, between the steps (no step runs).
-                const float speed = std::fabs(entry->vesselState.speed);
-                const float t = std::clamp((speed - 1.0f) / 2.0f, 0.0f, 1.0f);
-                const float wakeShare = 1.0f - t * t * (3.0f - 2.0f * t);
-                const std::function<float(float, float)> height = [readFrom, waves, level, wakeShare](float x, float z)
-                    { return waves ? readFrom->SampleHeight(x, z, wakeShare) : level; };
-                MeasureVesselWater(entry->water, height, FromJolt(JPH::Vec3(bodies.GetPosition(entry->body))), FromJolt(JPH::Vec3(bodies.GetCenterOfMassPosition(entry->body))),
-                    FromJolt(bodies.GetRotation(entry->body)),
-                    *entry->vessel, entry->scale, entry->halfLength, entry->halfBeam, elapsed);
-            }
-        }
-
-        // The orders as they stand where a step starts: the step's thread owns the copies.
-        void TakeHelmInputs()
-        {
-            stepHelmInput = helmInput;
-            for (Entry* entry : vessels)
-            {
-                entry->stepPilotInput = entry->piloted ? entry->pilotInput : VesselInput{};
-                entry->stepPiloted = entry->piloted;
-            }
-            const Settings& settings = GameSettings();
-            stepMooring = settings.mooring;
-            stepMooringTurn = settings.mooringTurn;
-            stepMooringSettle = settings.mooringSettle;
-        }
-
         void RunFixedTicks(float step)
         {
-            if (fixedTicks.empty()) { return; }
+            if (hooks.empty()) { return; }
             const FixedStep fixed(*system, step, FromJolt(system->GetGravity()));
-            for (const auto& tick : fixedTicks) { tick.second(fixed); }
+            for (const auto& hook : hooks) { if (hook.second.fixed) { hook.second.fixed(fixed); } }
         }
 
-        void PushVessels(float step)
+        // The orders as they stand where the steps start (the boats': VesselSystem takes them for the step's thread).
+        void StartSteps()
         {
-            if (vessels.empty()) { return; }
-            const JPH::BodyLockInterface& locks = system->GetBodyLockInterface();
-            const Math::float3 gravity = FromJolt(system->GetGravity());
-            for (Entry* entry : vessels)
-            {
-                if (!entry->water.valid) { continue; }
-                system->GetBodyInterface().ActivateBody(entry->body); // Body's own impulses wake nothing
-                JPH::BodyLockWrite lock(locks, entry->body);
-                if (!lock.Succeeded()) { continue; }
-                StepBody pushed(lock.GetBody());
-                PushVessel(pushed, *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : entry->stepPilotInput, entry->water, entry->floatFactor, gravity, step);
-                if (entry->anchored) { PullAnchor(pushed, *entry->vessel, FromJolt(entry->bowLocal), FromJolt(entry->anchorPoint), step); }
-                // Nobody steers it and its own anchor is up: the hard mooring, once it has slowed down, where it was then.
-                JPH::Body& body = lock.GetBody();
-                if (entry == helm || entry->stepPiloted || entry->anchored || (stepMooring <= 0.0f && stepMooringTurn <= 0.0f))
-                {
-                    entry->moored = false;
-                    continue;
-                }
-                if (!entry->moored)
-                {
-                    const JPH::Vec3 velocity = body.GetLinearVelocity();
-                    if (velocity.GetX() * velocity.GetX() + velocity.GetZ() * velocity.GetZ() > stepMooringSettle * stepMooringSettle) { continue; }
-                    const JPH::RVec3 position = body.GetPosition();
-                    const JPH::Vec3 bow = body.GetRotation() * ToJolt(entry->vessel->forward).Normalized();
-                    entry->moored = true;
-                    entry->mooredAt = JPH::Vec3(static_cast<float>(position.GetX()), 0.0f, static_cast<float>(position.GetZ()));
-                    entry->mooredHeading = std::atan2(bow.GetX(), bow.GetZ());
-                }
-                HoldMooring(pushed, *entry->vessel, FromJolt(entry->mooredAt), entry->mooredHeading, stepMooring, stepMooringTurn, step);
-            }
+            for (const auto& hook : hooks) { if (hook.second.start) { hook.second.start(); } }
         }
 
-        // Where the frame draws the boats, for whoever asks about them on the game's side.
-        void ShowVessels(float alpha)
+        Entry* EntryOf(BodyKey key) const
         {
-            for (Entry* entry : vessels)
-            {
-                entry->shownPosition = entry->previous.position + (entry->current.position - entry->previous.position) * alpha;
-                const JPH::Quat rotation = entry->previous.rotation.SLERP(entry->current.rotation, alpha).Normalized();
-                const JPH::Vec3 forward = (rotation * ToJolt(entry->vessel->forward)).Normalized();
-                entry->shownForward = forward;
-                entry->shownUp = rotation * JPH::Vec3::sAxisY();
-                entry->shownSpeed = entry->vesselState.speed;
-                entry->shownThrottle = entry->vesselState.throttle;
-                entry->shownRudder = entry->vesselState.rudder;
-                // The last step's motion, from its two poses (the step's own velocities are the step thread's).
-                const float step = static_cast<float>(StepSeconds());
-                entry->shownVelocity = (entry->current.position - entry->previous.position) / step;
-                JPH::Quat turn = (entry->current.rotation * entry->previous.rotation.Conjugated()).Normalized();
-                if (turn.GetW() < 0.0f) { turn = -turn; }
-                JPH::Vec3 axis = JPH::Vec3::sZero();
-                float angle = 0.0f;
-                turn.GetAxisAngle(axis, angle);
-                entry->shownAngular = angle > 1e-7f ? axis * (angle / step) : JPH::Vec3::sZero();
-                entry->shownImpact = entry->vesselState.impact;
-                entry->shownImmersion = entry->vesselState.immersion;
-                entry->shownWaterHeight = entry->vesselState.waterHeight;
-                // With a margin, so a boat crawling at the limit does not go in and out of them.
-                const float probeSpeed = entry->vessel->giProbeSpeed;
-                const float speed = std::fabs(entry->vesselState.speed);
-                if (probeSpeed > 0.0f && speed > probeSpeed) { entry->object->SetLeavesGiProbes(true); }
-                else if (probeSpeed <= 0.0f || speed < 0.7f * probeSpeed) { entry->object->SetLeavesGiProbes(false); }
-                if (entry != helm) { continue; }
-                helmShown.exists = true;
-                helmShown.object = entry->object;
-                helmShown.settings = entry->vessel.get();
-                helmShown.position = FromJolt(entry->shownPosition);
-                helmShown.rotation = FromJolt(rotation);
-                helmShown.forward = FromJolt(forward);
-                helmShown.scale = entry->scale;
-                const JPH::Vec3 up = rotation * JPH::Vec3::sAxisY();
-                helmShown.starboardY = up.Cross(forward).GetY();
-                helmShown.upY = up.GetY();
-                helmShown.halfLength = entry->halfLength;
-                helmShown.halfBeam = entry->halfBeam;
-                helmShown.anchored = entry->anchored;
-                helmShown.vessel = entry->vesselState;
-            }
+            if (key == kNoBody) { return nullptr; }
+            const JPH::BodyID id(key);
+            const JPH::uint index = id.GetIndex();
+            if (index >= byBodyIndex.size()) { return nullptr; }
+            Entry* entry = byBodyIndex[index];
+            return entry && entry->body == id ? entry : nullptr;
         }
 
         void PushWater(float step)
@@ -1424,7 +1251,6 @@ namespace physics
                 {
                     PushWater(batch.step); // the first step's went in where the steps were started: it may wake a body
                     RunFixedTicks(batch.step);
-                    PushVessels(batch.step);
                     if (i == 1)
                     {
                         // The first step took the boats there. Left alone they would go on at that speed, N times as far: at 20 fps they left the world.
@@ -1459,7 +1285,7 @@ namespace physics
         void Display(float alpha)
         {
             poseOwed = false;
-            ShowVessels(alpha);
+            for (const auto& hook : hooks) { if (hook.second.shown) { hook.second.shown(alpha); } } // where the boats are drawn (VesselSystem)
             if (awake.empty()) { return; }
             for (size_t i = 0; i < awake.size();)
             {
@@ -1502,11 +1328,10 @@ namespace physics
             Drain();
             if (!system || !simulating) { return; }
             const bool kinematicMoved = MoveKinematics(step);
-            TakeHelmInputs();
+            StartSteps();
             PushWater(step);
             RunFixedTicks(step);
-            PushVessels(step);
-            if (!kinematicMoved && fixedTicks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
+            if (!kinematicMoved && hooks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
             PrepareBatch(steps, step);
             stepInFlight = true;
             stepThread.Kick([this]() { RunBatch(); });
@@ -1558,11 +1383,10 @@ namespace physics
                     accumulator -= stepSeconds;
                     const bool kinematicMoved = MoveKinematics(step);
                     SampleWater(step);
-                    TakeHelmInputs();
+                    StartSteps();
                     PushWater(step);
                     RunFixedTicks(step);
-                    PushVessels(step);
-                    if (!kinematicMoved && fixedTicks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
+                    if (!kinematicMoved && hooks.empty() && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
                     PrepareBatch(1, step);
                     RunBatch();
                     MergeOutcome();
@@ -1691,19 +1515,115 @@ namespace physics
         return true;
     }
 
-    int World::AddFixedTick(std::function<void(const FixedStep&)> tick)
+    int World::AddStepHooks(StepHooks hooks)
     {
         impl_->Join();
-        const int id = impl_->nextFixedTick++;
-        impl_->fixedTicks.emplace_back(id, std::move(tick));
+        const int id = impl_->nextHook++;
+        impl_->hooks.emplace_back(id, std::move(hooks));
         return id;
     }
 
-    void World::RemoveFixedTick(int id)
+    void World::RemoveStepHooks(int id)
     {
         impl_->Join();
-        auto& ticks = impl_->fixedTicks;
-        ticks.erase(std::remove_if(ticks.begin(), ticks.end(), [id](const auto& tick) { return tick.first == id; }), ticks.end());
+        auto& hooks = impl_->hooks;
+        hooks.erase(std::remove_if(hooks.begin(), hooks.end(), [id](const auto& hook) { return hook.first == id; }), hooks.end());
+    }
+
+    int World::AddFixedTick(std::function<void(const FixedStep&)> tick)
+    {
+        StepHooks hooks;
+        hooks.fixed = std::move(tick);
+        return AddStepHooks(std::move(hooks));
+    }
+
+    void World::RemoveFixedTick(int id) { RemoveStepHooks(id); }
+
+    std::uint64_t World::VesselsRevision() const { return impl_->vesselsRevision; }
+
+    void World::CollectVesselBodies(std::vector<VesselBody>& out) const
+    {
+        out.clear();
+        for (const Impl::Entry* entry : impl_->vessels)
+        {
+            if (!entry->object || !entry->vessel || entry->body.IsInvalid()) { continue; }
+            VesselBody body;
+            body.object = entry->object;
+            body.key = entry->body.GetIndexAndSequenceNumber();
+            body.asset = *entry->vessel;
+            body.scale = entry->scale;
+            body.floatFactor = entry->floatFactor;
+            body.halfLength = entry->halfLength;
+            body.halfBeam = entry->halfBeam;
+            body.rudderLever = entry->rudderLever;
+            body.bowLocal = FromJolt(entry->bowLocal);
+            out.push_back(body);
+        }
+    }
+
+    bool World::BodyPose(BodyKey key, Math::float3& origin, Math::float3& centre, Math::quat& rotation) const
+    {
+        Impl& m = *impl_;
+        m.Join();
+        const Impl::Entry* entry = m.system ? m.EntryOf(key) : nullptr;
+        if (!entry || entry->fellOut) { return false; }
+        const JPH::BodyInterface& bodies = m.system->GetBodyInterface();
+        origin = FromJolt(JPH::Vec3(bodies.GetPosition(entry->body)));
+        centre = FromJolt(JPH::Vec3(bodies.GetCenterOfMassPosition(entry->body)));
+        rotation = FromJolt(bodies.GetRotation(entry->body));
+        return true;
+    }
+
+    bool World::BodyToWorld(BodyKey key, const Math::float3& local, Math::float3& out) const
+    {
+        Impl& m = *impl_;
+        m.Join();
+        const Impl::Entry* entry = m.system ? m.EntryOf(key) : nullptr;
+        if (!entry) { return false; }
+        const JPH::BodyInterface& bodies = m.system->GetBodyInterface();
+        const JPH::RVec3 point = bodies.GetPosition(entry->body) + bodies.GetRotation(entry->body) * ToJolt(local);
+        out = Math::float3(static_cast<float>(point.GetX()), static_cast<float>(point.GetY()), static_cast<float>(point.GetZ()));
+        return true;
+    }
+
+    bool World::ShowBody(BodyKey key, float alpha, const Math::float3& localForward, ShownBody& out) const
+    {
+        const Impl::Entry* entry = impl_->EntryOf(key);
+        if (!entry) { return false; }
+        const JPH::Vec3 position = entry->previous.position + (entry->current.position - entry->previous.position) * alpha;
+        const JPH::Quat rotation = entry->previous.rotation.SLERP(entry->current.rotation, alpha).Normalized();
+        out.position = FromJolt(position);
+        out.rotation = FromJolt(rotation);
+        out.forward = FromJolt((rotation * ToJolt(localForward)).Normalized());
+        out.up = FromJolt(rotation * JPH::Vec3::sAxisY());
+        // The last step's motion, from its two poses (the step's own velocities are the step thread's).
+        const float step = static_cast<float>(Impl::StepSeconds());
+        out.velocity = FromJolt((entry->current.position - entry->previous.position) / step);
+        JPH::Quat turn = (entry->current.rotation * entry->previous.rotation.Conjugated()).Normalized();
+        if (turn.GetW() < 0.0f) { turn = -turn; }
+        JPH::Vec3 axis = JPH::Vec3::sZero();
+        float angle = 0.0f;
+        turn.GetAxisAngle(axis, angle);
+        out.angular = angle > 1e-7f ? FromJolt(axis * (angle / step)) : Math::float3(0.0f, 0.0f, 0.0f);
+        return true;
+    }
+
+    bool World::PlaceBody(BodyKey key, const Math::float3& position, const Math::quat& rotation)
+    {
+        Impl& m = *impl_;
+        m.Join(); // the step owns the bodies and the entries' poses
+        Impl::Entry* entry = m.system ? m.EntryOf(key) : nullptr;
+        if (!entry) { return false; }
+        const JPH::Vec3 at(position.x, position.y, position.z);
+        const JPH::Quat turned = ToJolt(rotation);
+        JPH::BodyInterface& bodies = m.system->GetBodyInterface();
+        bodies.SetPositionAndRotation(entry->body, JPH::RVec3(at), turned, JPH::EActivation::Activate);
+        bodies.SetLinearAndAngularVelocity(entry->body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+        entry->previous.position = at;
+        entry->previous.rotation = turned;
+        entry->current = entry->previous;
+        entry->fellOut = false;
+        return true;
     }
 
     BodyKey World::BodyOf(const RenderableObject* object) const
@@ -1733,167 +1653,6 @@ namespace physics
         m.playerWanted = false;
         m.playerEyeValid = false;
         m.playerInput = PlayerInput{};
-    }
-
-    RenderableObject* World::FindVessel(const Math::float3& point, float reach) const
-    {
-        const Impl& m = *impl_;
-        RenderableObject* best = nullptr;
-        float bestDistance = reach;
-        for (const Impl::Entry* entry : m.vessels)
-        {
-            // To the rectangle of its hull on the water, not to its middle: a boat is long.
-            const float dx = point.x - entry->shownPosition.GetX();
-            const float dz = point.z - entry->shownPosition.GetZ();
-            const float fx = entry->shownForward.GetX();
-            const float fz = entry->shownForward.GetZ();
-            const float pastEnds = std::max(std::fabs(dx * fx + dz * fz) - entry->halfLength, 0.0f);
-            const float pastSides = std::max(std::fabs(dx * fz - dz * fx) - entry->halfBeam, 0.0f);
-            const float distance = std::sqrt(pastEnds * pastEnds + pastSides * pastSides);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = entry->object;
-            }
-        }
-        return best;
-    }
-
-    bool World::SetHelm(RenderableObject* vessel)
-    {
-        Impl& m = *impl_;
-        m.Join();
-        m.helm = nullptr;
-        m.helmInput = VesselInput{};
-        m.stepHelmInput = VesselInput{};
-        m.helmShown = HelmState{};
-        if (!vessel) { return false; }
-        for (Impl::Entry* entry : m.vessels)
-        {
-            if (entry->object != vessel) { continue; }
-            m.helm = entry;
-            m.ShowVessels(1.0f);
-            return true;
-        }
-        return false;
-    }
-
-    void World::SetHelmInput(const VesselInput& input) { impl_->helmInput = input; }
-
-    bool World::SetPilot(RenderableObject* vessel, const VesselInput* input)
-    {
-        // The game's own fields: no step reads them (TakeHelmInputs copies them where a step starts), so no Join.
-        for (Impl::Entry* entry : impl_->vessels)
-        {
-            if (entry->object != vessel) { continue; }
-            entry->piloted = input != nullptr;
-            entry->pilotInput = input ? *input : VesselInput{};
-            return true;
-        }
-        return false;
-    }
-
-    bool World::PlaceVessel(RenderableObject* vessel, const Math::float3& position, float heading)
-    {
-        Impl& m = *impl_;
-        m.Join(); // the step owns the bodies and the entries' poses
-        if (!m.system) { return false; }
-        for (Impl::Entry* entry : m.vessels)
-        {
-            if (entry->object != vessel) { continue; }
-            // About the vertical, by what takes the hull's own bow (its settings' forward) to the heading: a turn of t
-            // takes +z to (sin t, 0, cos t).
-            const JPH::Vec3 bow = ToJolt(entry->vessel->forward).Normalized();
-            const JPH::Quat rotation = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading - std::atan2(bow.GetX(), bow.GetZ()));
-            const JPH::Vec3 at(position.x, position.y, position.z);
-            JPH::BodyInterface& bodies = m.system->GetBodyInterface();
-            bodies.SetPositionAndRotation(entry->body, JPH::RVec3(at), rotation, JPH::EActivation::Activate);
-            bodies.SetLinearAndAngularVelocity(entry->body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
-            entry->previous.position = at;
-            entry->previous.rotation = rotation;
-            entry->current = entry->previous;
-            entry->vesselState = VesselState{};
-            entry->water = VesselWater{}; // measured afresh where it is now: the rates it followed were another place's
-            entry->anchored = false;
-            entry->moored = false; // moors again where it was put
-            entry->fellOut = false;
-            m.ShowVessels(1.0f);
-            return true;
-        }
-        return false;
-    }
-
-    bool World::ToggleAnchor(RenderableObject* vessel)
-    {
-        Impl& m = *impl_;
-        m.Join(); // the step reads the anchor
-        for (Impl::Entry* entry : m.vessels)
-        {
-            if (entry->object != vessel || !m.system) { continue; }
-            if (entry->anchored)
-            {
-                entry->anchored = false;
-                if (entry == m.helm) { m.helmShown.anchored = false; } // the HUD before the next Display
-                LOG_INFO(logging::LogCategory::Physics, "physics: '{}' weighed its anchor", vessel->GetGeometryPath());
-                return false;
-            }
-            // Dropped straight down from the bow, where it is now: the boat lays out its scope as it drifts back.
-            const JPH::BodyInterface& bodies = m.system->GetBodyInterface();
-            const JPH::RVec3 bow = bodies.GetPosition(entry->body) + bodies.GetRotation(entry->body) * entry->bowLocal;
-            entry->anchorPoint = JPH::Vec3(static_cast<float>(bow.GetX()), static_cast<float>(bow.GetY()), static_cast<float>(bow.GetZ()));
-            entry->anchored = true;
-            if (entry == m.helm) { m.helmShown.anchored = true; }
-            LOG_INFO(logging::LogCategory::Physics, "physics: '{}' dropped its anchor at {:.2f} {:.2f}, {:.1f} m of slack", vessel->GetGeometryPath(),
-                     entry->anchorPoint.GetX(), entry->anchorPoint.GetZ(), entry->vessel->anchorScope);
-            return true;
-        }
-        return false;
-    }
-
-    const HelmState& World::GetHelm() const { return impl_->helmShown; }
-
-    void World::CollectHulls(std::vector<VesselHull>& out) const
-    {
-        out.clear();
-        for (const Impl::Entry* entry : impl_->vessels)
-        {
-            if (!entry->object || !entry->vessel) { continue; }
-            VesselHull hull;
-            hull.object = entry->object;
-            hull.settings = entry->vessel.get();
-            hull.position = FromJolt(entry->shownPosition);
-            hull.forward = FromJolt(entry->shownForward);
-            hull.up = FromJolt(entry->shownUp);
-            hull.scale = entry->scale;
-            hull.speed = entry->shownSpeed;
-            hull.velocity = FromJolt(entry->shownVelocity);
-            hull.angularVelocity = FromJolt(entry->shownAngular);
-            hull.impact = entry->shownImpact;
-            hull.immersion = entry->shownImmersion;
-            hull.waterHeight = entry->shownWaterHeight;
-            hull.atHelm = entry == impl_->helm;
-            hull.anchored = entry->anchored;
-            hull.piloted = entry->piloted;
-            hull.halfLength = entry->halfLength;
-            hull.halfBeam = entry->halfBeam;
-            hull.rudderLever = entry->rudderLever;
-            hull.throttle = entry->shownThrottle;
-            hull.rudder = entry->shownRudder;
-            out.push_back(hull);
-        }
-    }
-
-    bool World::TuneVessels(const std::string& key, float value)
-    {
-        Impl& m = *impl_;
-        for (const VesselKey& entry : VesselKeys())
-        {
-            if (key != entry.key) { continue; }
-            m.Join();
-            for (Impl::Entry* vessel : m.vessels) { vessel->vessel.get()->*(entry.member) = std::clamp(value, entry.lo, entry.hi); }
-            return true;
-        }
-        return false;
     }
 
     void World::SetPlayerPossessed(bool possessed)

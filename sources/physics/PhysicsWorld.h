@@ -95,7 +95,7 @@ namespace physics
     enum class PlayerMode : std::uint8_t { Walking, Falling, Swimming };
     const char* PlayerModeName(PlayerMode mode);
 
-    // The boat at the helm as the frame shows it (World::GetHelm).
+    // The boat at the helm as the frame shows it (VesselSystem::GetHelm, app/scene).
     struct HelmState
     {
         bool exists = false;
@@ -109,11 +109,11 @@ namespace physics
         float upY = 1.0f;        // of its up: with starboardY, its roll whatever its pitch
         float halfLength = 0.0f;
         float halfBeam = 0.0f;
-        bool anchored = false;   // its anchor is down (World::ToggleAnchor)
+        bool anchored = false;   // its anchor is down (VesselSystem::ToggleAnchor)
         VesselState vessel;
     };
 
-    // A boat as the frame draws it (World::CollectHulls): what its wake on the water starts from.
+    // A boat as the frame draws it (VesselSystem::CollectHulls): what its wake on the water starts from.
     struct VesselHull
     {
         RenderableObject* object = nullptr;
@@ -130,7 +130,7 @@ namespace physics
         float waterHeight = 0.0f; // the surface under it (VesselState::waterHeight)
         bool atHelm = false;
         bool anchored = false;
-        bool piloted = false;     // a pilot other than the helm orders it (World::SetPilot)
+        bool piloted = false;     // a pilot other than the helm orders it (VesselSystem::SetPilot)
         float halfLength = 0.0f;  // of the hull's box along its way, m
         float halfBeam = 0.0f;
         float rudderLever = 0.0f; // m the propeller -- where the rudder pushes -- lies aft of the centre of mass
@@ -224,6 +224,30 @@ namespace physics
         Math::float3 rotationEulerRad;
     };
 
+    // A boat's body as the physics made it (R14.3b): what app/scene/VesselSystem runs it by.
+    struct VesselBody
+    {
+        RenderableObject* object = nullptr;
+        BodyKey key = kNoBody;
+        VesselSettings asset;     // mesh.json "vessel", as the body was made by it
+        Math::float3 scale;
+        float floatFactor = 1.0f; // what Jolt's buoyancy takes for its shape (MakeVesselShape)
+        float halfLength = 0.0f;  // of the hull's box along its way, m
+        float halfBeam = 0.0f;
+        float rudderLever = 0.0f; // m the propeller lies aft of the centre of mass, along the hull
+        Math::float3 bowLocal;    // the stem of the hull's box at the draft, in the body's space
+    };
+    // Where the frame shows a body (World::ShowBody).
+    struct ShownBody
+    {
+        Math::float3 position;
+        Math::quat rotation;
+        Math::float3 forward; // the asked local forward, turned and normalised
+        Math::float3 up;
+        Math::float3 velocity; // the last step's motion of the origin, m/s
+        Math::float3 angular;  // and its turn, rad/s
+    };
+
     class World
     {
     public:
@@ -237,7 +261,7 @@ namespace physics
         // Once a frame from the game loop, the moment the render thread's frame is done: starts the steps Tick counted.
         void KickStep();
         // Objects that left the scene just now (a race's spawned boats, Scene::Sync): their entries go at once, after any step in
-        // flight -- before CollectHulls or anything else hands out a pointer to them.
+        // flight -- before VesselSystem::CollectHulls or anything else hands out a pointer to them.
         void ForgetRemoved();
         // Once a frame from Scene::Sync, before the objects' transforms cross: the poses of the step KickStep started, if it is done. Never waits.
         void SyncPoses();
@@ -261,37 +285,50 @@ namespace physics
         // Where the eye stands after this frame's Tick. False = no player, or not possessed: the camera is free.
         bool PlayerEye(Math::float3& out) const;
         PlayerState GetPlayerState() const;
-        // The boats (mesh.json "vessel"): the nearest whose hull is within `reach` m of the point; who has the helm; what the helm says. A boat with nobody at the helm floats with its engine off.
-        RenderableObject* FindVessel(const Math::float3& point, float reach) const;
-        bool SetHelm(RenderableObject* vessel);
-        void SetHelmInput(const VesselInput& input);
-        // A pilot other than the helm (game::RaceBot): what it orders this boat, held until told again; null = nobody, the
-        // engine off. The helm, while it is this boat's, wins. Stop takes every pilot off. False = no such boat.
-        bool SetPilot(RenderableObject* vessel, const VesselInput* input);
-        // Puts a boat somewhere, at rest: its mesh's origin at `position`, its bow heading `heading` (radians from +z toward
-        // +x), level; its anchor weighed, its engine and rudder at nothing. A race's starting grid. The session's alone,
-        // as every pose is: Stop puts it back where the level has it. False = no such boat, or no world.
-        bool PlaceVessel(RenderableObject* vessel, const Math::float3& position, float heading);
-        // Drops the boat's anchor under its bow, or weighs it: what it is after (true = down). The world's, not the level's:
-        // Stop weighs every anchor with the rest of the session.
-        bool ToggleAnchor(RenderableObject* vessel);
-        const HelmState& GetHelm() const;
-        // Every boat as the last Display drew it -- the game's alone, never waits for a step (Scene::Sync hands them to
-        // the ocean's wake).
-        void CollectHulls(std::vector<VesselHull>& out) const;
-        // --set / MCP vessel.<key>: on every boat in the world, transient. False = no such key.
-        bool TuneVessels(const std::string& key, float value);
+        // The boats -- the helm, the pilots, the anchor, the mooring, where each is shown -- are app/scene/VesselSystem's (R14.3b),
+        // over the bodies, queries and hooks below.
 
         bool RayCast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out) const;
 
-        // R14.2: game code between the steps (a boat's engine, its anchor): `tick` runs before every step, on the step's thread
-        // (the game's when the world steps in line), with that step. It reaches bodies only through the FixedStep, and never an
-        // object (one may be gone by then), nor anything the game thread writes meanwhile. Waits for a step in flight. The id
-        // is RemoveFixedTick's.
+        // R14.2 / R14.3b: game code around the steps (app/scene/VesselSystem: the boats). Every hook may be empty.
+        struct StepHooks
+        {
+            // Game thread, where the steps owed are counted and no step runs: the water (null = none), and the time the steps cover.
+            std::function<void(float elapsed, const WaterSurface* water)> measure;
+            // Game thread, as the steps start (KickStep, or in line): what the game ordered, taken for them.
+            std::function<void()> start;
+            // Before every step, on the step's thread (the game's when the world steps in line), with that step. It reaches
+            // bodies only through the FixedStep, and never an object (one may be gone by then), nor anything the game thread
+            // writes meanwhile.
+            std::function<void(const FixedStep&)> fixed;
+            // Game thread, where the frame's poses are shown (the hand-over, or the end of an in-line Tick): `alpha`, where the
+            // frame stands between the last two steps.
+            std::function<void(float alpha)> shown;
+            // Game thread, after Stop put every body back where the level has it.
+            std::function<void()> stopped;
+        };
+        // Waits for a step in flight. The id is RemoveStepHooks'.
+        int AddStepHooks(StepHooks hooks);
+        void RemoveStepHooks(int id);
+        // A FixedTick alone (AddStepHooks with `fixed` only): a gate's. The id is RemoveFixedTick's.
         int AddFixedTick(std::function<void(const FixedStep&)> tick);
         void RemoveFixedTick(int id);
         // The object's body as a FixedTick names it; kNoBody until the world built one (the Tick after it was registered).
         BodyKey BodyOf(const RenderableObject* object) const;
+        // The boats' bodies (mesh.json "vessel"), and a number that moves whenever they change: what VesselSystem runs.
+        std::uint64_t VesselsRevision() const;
+        void CollectVesselBodies(std::vector<VesselBody>& out) const;
+        // A body's pose: its origin, centre of mass and rotation. Waits for a step in flight. False = no such body, or one
+        // fallen out of the world.
+        bool BodyPose(BodyKey key, Math::float3& origin, Math::float3& centre, Math::quat& rotation) const;
+        // A point in the body's own space, in the world's. Waits for a step in flight.
+        bool BodyToWorld(BodyKey key, const Math::float3& local, Math::float3& out) const;
+        // Where the frame shows a body between the last two steps (`alpha`), its `localForward` in the world, and the last
+        // step's motion -- the physics' own sums. Game thread with no step in flight (a hook, or after FinishStep).
+        bool ShowBody(BodyKey key, float alpha, const Math::float3& localForward, ShownBody& out) const;
+        // Puts a body somewhere at rest, woken: no speed, both last poses there (a race's grid). Waits for a step in flight.
+        // The session's: Stop puts it back where the level has it.
+        bool PlaceBody(BodyKey key, const Math::float3& position, const Math::quat& rotation);
 
         // The bodies that moved, as they stand (the editor's Keep).
         void CollectSimulatedPoses(std::vector<SimulatedPose>& out) const;

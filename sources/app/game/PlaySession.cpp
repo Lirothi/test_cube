@@ -322,8 +322,8 @@ void PlaySession::DrawBoatCard(Scene& scene)
     if (!onFoot.exists) { return; }
     constexpr float kCardReach = 16.0f; // m from the hull: nearer than this its card is up
     std::vector<physics::VesselHull> hulls;
-    world.CollectHulls(hulls);
-    RenderableObject* nearest = world.FindVessel(onFoot.feet, 3.0f); // the one E would take
+    scene.Vessels().CollectHulls(hulls);
+    RenderableObject* nearest = scene.Vessels().FindVessel(onFoot.feet, 3.0f); // the one E would take
     int card = 0;
     for (const physics::VesselHull& one : hulls)
     {

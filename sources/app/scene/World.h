@@ -19,6 +19,7 @@
 #include "ocean/OceanBuoyancy.h"
 #include "physics/PhysicsWorld.h"
 #include "app/scene/OceanWaterSurface.h" // R14.1: the ocean as the physics' water
+#include "app/scene/VesselSystem.h"      // R14.3b: the boats, over physics_
 #include "app/scene/TimeOfDay.h"
 #include "rendering/lighting/NightLamps.h"
 
@@ -133,6 +134,9 @@ public:
     // The collision world and the rigid bodies (docs/physics_plan.md).
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
+    // The boats (mesh.json "vessel"): the helm, the pilots, the anchor, where each is drawn (R14.3b; app/scene/VesselSystem).
+    VesselSystem& Vessels() { return vessels_; }
+    const VesselSystem& Vessels() const { return vessels_; }
     const vfx::VesselSpray& VesselSprayRef() const { return vesselSpray_; } // readouts (written at Sync)
 
 #if WITH_EDITOR
@@ -305,6 +309,7 @@ protected:
     std::function<void()> gameForget_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
     OceanWaterSurface oceanWater_; // the level's ocean as physics_' water, bound every TickPhysics
+    VesselSystem vessels_{ physics_ }; // the boats, on physics_' hooks (after it: gone before it)
     vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync
 
     DirectionalLight dirLight_;

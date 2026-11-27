@@ -25,6 +25,8 @@ class RenderableObjectBase;
 //              its first lap and `laps` times more. The race is the player's: it ends when they finish.
 //   Finished   the results are on screen; the bots still out run on to their own finish (90 s at the most). Closing the
 //              window frees everybody; the zone waits again once the player's boat has left it.
+class VesselSystem; // app/scene/VesselSystem.h (R14.3b: the boats)
+
 namespace game
 {
     // --set / MCP race.<key>, Developer Controls > Physics. One table (RaceKeys).
@@ -108,7 +110,7 @@ namespace game
         // Play starts (or the session goes on in a new level): the course as the level has it now.
         void Begin(const RaceCourse& course);
         // Stop: every pilot off its boat, the race's own boats to go.
-        void End(physics::World& world);
+        void End(VesselSystem& world);
         // The level is going (Scene::Clear): nothing of it is held any more.
         void Forget();
         // Scene::Sync, every frame: the boats to make, each answered by OnSpawned (null = it could not be made), and the race's
@@ -122,7 +124,7 @@ namespace game
             despawns_.clear();
         }
         // Every frame of a session, before the helm reads its keys.
-        void Tick(physics::World& world, float deltaTime);
+        void Tick(VesselSystem& world, float deltaTime);
         bool HasTrack() const { return !courses_.empty(); }
         // The course being raced (or the last one picked): its gates.
         const RaceTrack& Track() const { return track_; }
@@ -230,7 +232,7 @@ namespace game
         };
         std::vector<DrillStats> drillStats_;
         DrillStats& DrillOf(const std::string& vessel);
-        void Drill(physics::World& world, float deltaTime);
+        void Drill(VesselSystem& world, float deltaTime);
 
         // One of the level's courses: its gates and its start zone.
         struct Course
@@ -244,20 +246,20 @@ namespace game
         // The course whose start zone holds the point; courses_.size() = none.
         std::size_t ZoneAt(const Math::float2& point) const;
 
-        void Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const;
+        void Sound(VesselSystem& world, RaceBot& bot, const physics::VesselHull& hull) const;
         // Its boat's memory on this level (game::BotMemoryFor), what every bot at the helm of such a boat learns into.
         BotMemory* MemoryOf(const RenderableObject* vessel) const;
         const physics::VesselHull* HullOf(const RenderableObject* vessel) const;
         // A race asked for: its bot boats asked of the scene (Phase::Starting) -- the grid's, or the fleet's kinds in turn, three
         // beside the player, four alone (race.solo: one). FinishStart lays the grid once their hulls are in the world.
         void BeginStart(const RaceGrid* grid);
-        void FinishStart(physics::World& world);
+        void FinishStart(VesselSystem& world);
         // The race's boats out of the world (TakeDespawns), their entries gone.
-        void DespawnBots(physics::World& world);
-        void StopRace(physics::World& world, const char* why);
+        void DespawnBots(VesselSystem& world);
+        void StopRace(VesselSystem& world, const char* why);
         void UpdateRacers();
         // The thresholds: a boat a bot steers that is lost (far off its line, or held) is put back on the course.
-        void WatchRacers(physics::World& world, float deltaTime);
+        void WatchRacers(VesselSystem& world, float deltaTime);
         RaceBot* BotOf(const Racer& racer);
         // The race still runs: nobody has finished, or the first did less than finishWindow ago.
         bool WindowOpen() const;

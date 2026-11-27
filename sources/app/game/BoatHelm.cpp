@@ -19,9 +19,8 @@ namespace game
 {
 bool BoatHelm::Take(Scene& scene, RenderableObject* vessel)
 {
-    physics::World& world = scene.Physics();
-    if (!world.SetHelm(vessel)) { return false; }
-    world.RemovePlayer();
+    if (!scene.Vessels().SetHelm(vessel)) { return false; }
+    scene.Physics().RemovePlayer();
     world_.vesselCamera.Begin();
     scene.CameraRef().ResetHistory(); // a jump, not a pan
     LOG_INFO(logging::LogCategory::App, "play: at the helm");
@@ -30,9 +29,9 @@ bool BoatHelm::Take(Scene& scene, RenderableObject* vessel)
 
 std::optional<BodyPlacement> BoatHelm::Leave(Scene& scene, bool overTheSide)
 {
-    physics::World& world = scene.Physics();
-    const physics::HelmState helm = world.GetHelm(); // SetHelm clears it
-    world.SetHelm(nullptr);
+    VesselSystem& boats = scene.Vessels();
+    const physics::HelmState helm = boats.GetHelm(); // SetHelm clears it
+    boats.SetHelm(nullptr);
     world_.vesselCamera.End();
     LOG_INFO(logging::LogCategory::App, "play: left the helm");
     if (!overTheSide || !helm.exists) { return std::nullopt; }
@@ -47,14 +46,14 @@ std::optional<BodyPlacement> BoatHelm::Leave(Scene& scene, bool overTheSide)
 
 void BoatHelm::Forget(Scene& scene)
 {
-    scene.Physics().SetHelm(nullptr); // the boat went with the level
+    scene.Vessels().SetHelm(nullptr); // the boat went with the level
     world_.vesselCamera.End();
 }
 
 Controllable::Held BoatHelm::Tick(InputManager& input, Scene& scene, bool controls, float deltaTime)
 {
-    physics::World& world = scene.Physics();
-    const physics::HelmState& helm = world.GetHelm();
+    VesselSystem& boats = scene.Vessels();
+    const physics::HelmState& helm = boats.GetHelm();
     if (!helm.exists) // gone with its level, or physics.enabled:0
     {
         world_.vesselCamera.End();
@@ -78,7 +77,7 @@ Controllable::Held BoatHelm::Tick(InputManager& input, Scene& scene, bool contro
     }
     if (race.Autopilot()) { order = race.HelmOrder(); }
     if (race.HoldsHelm()) { order = physics::VesselInput{}; } // on the grid, the countdown running
-    world.SetHelmInput(order);
+    boats.SetHelmInput(order);
     game::VesselCamera& view = world_.vesselCamera;
     view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, game::ScriptCamera().orbit,
               game::ScriptCamera().orbitPitch, deltaTime);
@@ -92,7 +91,7 @@ Controllable::Held BoatHelm::Tick(InputManager& input, Scene& scene, bool contro
     // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
     if (input.TakeActionPress(actions::kAnchor))
     {
-        const bool down = world.ToggleAnchor(helm.object);
+        const bool down = boats.ToggleAnchor(helm.object);
         status_(down ? "Anchor down" : "Anchor up", 3.0);
     }
     if (input.TakeActionPress(actions::kInteract)) { return Held::LetGo; } // over the side (the session lets go)
@@ -102,7 +101,7 @@ Controllable::Held BoatHelm::Tick(InputManager& input, Scene& scene, bool contro
 std::wstring BoatHelm::HudLine(const Scene& scene) const
 {
     wchar_t line[256];
-    const physics::HelmState& helm = scene.Physics().GetHelm();
+    const physics::HelmState& helm = scene.Vessels().GetHelm();
     const physics::VesselState& vessel = helm.vessel;
     std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%%ls   W S throttle   A D rudder   V view: %hs   %ls   E leave",
                   vessel.speed * 1.94384f, vessel.throttle * 100.0f, vessel.rudder * 100.0f, helm.anchored ? L", ANCHORED" : L"",
@@ -112,6 +111,6 @@ std::wstring BoatHelm::HudLine(const Scene& scene) const
 
 RenderableObject* BoatHelm::InReach(Scene& scene, const Math::float3& feet) const
 {
-    return scene.Physics().FindVessel(feet, kHelmReach); // the way aboard: within a few metres of a hull
+    return scene.Vessels().FindVessel(feet, kHelmReach); // the way aboard: within a few metres of a hull
 }
 } // namespace game

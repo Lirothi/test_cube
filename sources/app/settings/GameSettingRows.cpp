@@ -148,7 +148,7 @@ const SettingFamily kGameFamilies[] = {
                           }
                           return false;
                       },
-                      [](SettingContext& c, std::string_view key, float value) { return c.scene.Physics().TuneVessels(std::string(key), value); },
+                      [](SettingContext& c, std::string_view key, float value) { return c.scene.Vessels().TuneVessels(std::string(key), value); },
                       nullptr,
                       [](std::vector<std::string>& out) { for (const physics::VesselKey& k : physics::VesselKeys()) { out.emplace_back(k.key); } }),
 };

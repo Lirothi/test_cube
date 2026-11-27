@@ -38,7 +38,6 @@
 
 #include "core/math/Math.h"
 #include "physics/PhysicsTypes.h"
-#include "physics/VesselModel.h" // R14.3a: the boat's model, without Jolt
 
 namespace physics
 {

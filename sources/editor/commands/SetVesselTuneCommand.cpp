@@ -86,7 +86,7 @@ bool SetVesselTuneCommand::ShapeOf(EditorContext& ctx, EditorObjectId id, HullSh
     const RenderableObject* object = base ? base->As<RenderableObject>() : nullptr;
     if (!object) { return false; }
     std::vector<physics::VesselHull> hulls;
-    ctx.scene.Physics().CollectHulls(hulls);
+    ctx.scene.Vessels().CollectHulls(hulls);
     for (const physics::VesselHull& hull : hulls)
     {
         if (hull.object != object || !hull.settings) { continue; }

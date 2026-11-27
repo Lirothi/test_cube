@@ -269,7 +269,7 @@ void Scene::Sync(Renderer* renderer)
     // its geometry once a shape, then a cache hit), to the ocean's render half -- parked here.
     if (OceanRenderable* ocean = FindOceanRenderable())
     {
-        physics_.CollectHulls(vesselHulls_);
+        vessels_.CollectHulls(vesselHulls_);
         // Their spray (vfx/VesselSpray): emitters made on a boat's first frame, placed and driven here, before the
         // objects' SyncSceneState below takes their positions and rates; where each hull's bow wave breaks goes to the
         // wake below (its foam arms).

@@ -1,4 +1,5 @@
 #include "app/game/Race.h"
+#include "app/scene/VesselSystem.h" // R14.3b: the boats
 #include "core/vfs/Vfs.h"
 
 #include <algorithm>
@@ -143,14 +144,14 @@ namespace game
         }
     }
 
-    void Race::End(physics::World& world)
+    void Race::End(VesselSystem& world)
     {
         SaveBotMemories(); // what the bots learned this session
         DespawnBots(world);
         Forget();
     }
 
-    void Race::DespawnBots(physics::World& world)
+    void Race::DespawnBots(VesselSystem& world)
     {
         for (Entry& entry : bots_)
         {
@@ -255,7 +256,7 @@ namespace game
         return nullptr;
     }
 
-    void Race::Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const
+    void Race::Sound(VesselSystem& world, RaceBot& bot, const physics::VesselHull& hull) const
     {
         CPU_SCOPE(ProfilerScopes::kRaceSound);
         // Where the bow will be in a couple of seconds, and 40 degrees to either side of that. Straight down from over
@@ -273,7 +274,7 @@ namespace game
             const Math::float2 way(forward.x * c + forward.y * s, forward.y * c - forward.x * s);
             const Math::float3 from(hull.position.x + way.x * reach, hull.waterHeight + 6.0f, hull.position.z + way.y * reach);
             physics::RayHit hit;
-            const bool met = world.RayCast(from, Math::float3(0.0f, -1.0f, 0.0f), 30.0f, hit) && !HullOf(hit.object);
+            const bool met = world.Physics().RayCast(from, Math::float3(0.0f, -1.0f, 0.0f), 30.0f, hit) && !HullOf(hit.object);
             depth[i] = met ? hull.waterHeight - hit.point.y : 1.0e3f;
         }
         bot.SetSoundings(depth[0], depth[1], depth[2]);
@@ -331,7 +332,7 @@ namespace game
                  playerRaces_ ? " beside the player's" : "");
     }
 
-    void Race::FinishStart(physics::World& world)
+    void Race::FinishStart(VesselSystem& world)
     {
         RaceSettings& settings = RaceSettingsRef();
         const float heading = std::atan2(start_.along.x, start_.along.y);
@@ -410,7 +411,7 @@ namespace game
                  playerRaces_ ? "the player's among them" : "bots alone", laps_, countdown_);
     }
 
-    void Race::StopRace(physics::World& world, const char* why)
+    void Race::StopRace(VesselSystem& world, const char* why)
     {
         for (const Racer& racer : racers_)
         {
@@ -479,7 +480,7 @@ namespace game
         return drillStats_.back();
     }
 
-    void Race::Drill(physics::World& world, float deltaTime)
+    void Race::Drill(VesselSystem& world, float deltaTime)
     {
         const RaceSettings& settings = RaceSettingsRef();
         const std::vector<RaceGate>& gates = track_.Gates();
@@ -596,7 +597,7 @@ namespace game
         if (moved) { world.CollectHulls(hulls_); }
     }
 
-    void Race::WatchRacers(physics::World& world, float deltaTime)
+    void Race::WatchRacers(VesselSystem& world, float deltaTime)
     {
         const RaceSettings& settings = RaceSettingsRef();
         if (settings.resetSeconds <= 0.0f) { return; }
@@ -677,7 +678,7 @@ namespace game
         return 0;
     }
 
-    void Race::Tick(physics::World& world, float deltaTime)
+    void Race::Tick(VesselSystem& world, float deltaTime)
     {
         if (!active_) { return; }
         CPU_SCOPE(ProfilerScopes::kRaceTick);

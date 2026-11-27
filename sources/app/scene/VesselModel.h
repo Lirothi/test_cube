@@ -5,12 +5,17 @@
 #include "core/math/Math.h"
 #include "physics/PhysicsTypes.h" // VesselSettings, VesselState, VesselInput
 
-// A boat's model (architecture plan R14.3a): the water under its hull and one step's forces on it, in the engine's types over
-// physics::StepBody -- no Jolt here, so the layer above that runs the boats can call it. The step's side of it:
-// physics/PhysicsVessel.cpp (the body's shape, MakeVesselShape, stays with the physics).
-namespace physics
+// A boat's model (architecture plan R14.3a, moved out of the physics by R14.3b): the water under its hull and one step's
+// forces on it, in the engine's types over physics::StepBody. app/scene/VesselModel.cpp; app/scene/VesselSystem runs it, the
+// vessel gate (app/scene/VesselGates) on physics::VesselBench. The body's shape (MakeVesselShape) stays with the physics.
+namespace physics { class StepBody; } // physics/PhysicsBody.h
+
+namespace boats
 {
-    class StepBody; // physics/PhysicsBody.h
+    using physics::StepBody;
+    using physics::VesselInput;
+    using physics::VesselSettings;
+    using physics::VesselState;
 
     // What the sea is doing under a boat, measured on the game's side, where the water can be read (MeasureVesselWater): the plane that fits the surface over the hull, which Jolt's buoyancy cuts the
     // hull with -- a wave shorter than the hull lifts it no more than a real one does --, and three stations along the hull for what one plane cannot say: a slope that differs at the bow and the
@@ -50,4 +55,4 @@ namespace physics
     // vertical) held by critically damped springs on the velocities, `stiffness` and `turn` rad/s their own frequencies
     // (physics.mooring*): it heaves, pitches and rolls on the waves and stays put.
     void HoldMooring(StepBody& body, const VesselSettings& settings, const Math::float3& at, float heading, float stiffness, float turn, float dt);
-} // namespace physics
+} // namespace boats
