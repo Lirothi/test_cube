@@ -20,7 +20,7 @@ namespace game
 bool BoatHelm::Take(Scene& scene, RenderableObject* vessel)
 {
     if (!scene.Vessels().SetHelm(vessel)) { return false; }
-    scene.Physics().RemovePlayer();
+    scene.Player().Remove();
     world_.vesselCamera.Begin();
     scene.CameraRef().ResetHistory(); // a jump, not a pan
     LOG_INFO(logging::LogCategory::App, "play: at the helm");

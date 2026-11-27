@@ -143,9 +143,6 @@ namespace physics
     // What its body is made with, past the shape.
     void SetVesselBody(JPH::BodyCreationSettings& creation, const VesselSettings& settings);
 
-    // A height no water reaches: no water here.
-    inline constexpr float kNoWater = -1.0e30f;
-
     // The player's capsule and UE's character movement over it. Its origin is at the feet.
     class PlayerBody
     {

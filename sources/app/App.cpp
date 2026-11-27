@@ -1142,7 +1142,7 @@ namespace
                               ps.fellOut,
                               static_cast<unsigned long long>(ps.handOversHeld), static_cast<unsigned long long>(ps.stepWaits), static_cast<unsigned long long>(ps.stepErrors));
                 out += physicsItem;
-                const physics::PlayerState player = scene_.Physics().GetPlayerState();
+                const physics::PlayerState player = scene_.Player().State();
                 char playerItem[256];
                 std::snprintf(playerItem, sizeof(playerItem),
                               ",\"player\":{\"exists\":%s,\"possessed\":%s,\"mode\":\"%s\",\"onGround\":%s,\"crouched\":%s,\"speed\":%.3f,\"feet\":[%.3f,%.3f,%.3f]}",

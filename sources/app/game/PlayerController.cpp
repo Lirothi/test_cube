@@ -5,9 +5,9 @@
 #include "app/camera/CameraController.h"
 #include "input/InputManager.h"
 #include "input/InputActions.h"
-#include "physics/PhysicsWorld.h"
+#include "app/scene/PlayerSystem.h"
 
-void PlayerController::Tick(InputManager& input, Camera& camera, CameraController& look, physics::World& world, bool hasControls, float deltaTime)
+void PlayerController::Tick(InputManager& input, Camera& camera, CameraController& look, PlayerSystem& player, bool hasControls, float deltaTime)
 {
     physics::PlayerInput out;
     if (hasControls) { look.AddLookInput(input); }
@@ -25,5 +25,5 @@ void PlayerController::Tick(InputManager& input, Camera& camera, CameraControlle
     out.crouch = input.IsActionDown(actions::kCrouch);
     out.sprint = input.IsActionDown(actions::kSprint) || input.IsActionDown(actions::kScriptSprint);
     look.TakeOwedLook(deltaTime); // the smoothing's tail runs out even as the mouse goes free
-    world.SetPlayerInput(out);
+    player.SetInput(out);
 }

@@ -532,6 +532,7 @@
     <ClCompile Include="sources/app/scene/World.cpp" />
     <ClCompile Include="sources/app/scene/OceanWaterSurface.cpp" />
     <ClCompile Include="sources/app/scene/PlayerGates.cpp" />
+    <ClCompile Include="sources/app/scene/PlayerSystem.cpp" />
     <ClCompile Include="sources/app/scene/VesselGates.cpp" />
     <ClCompile Include="sources/app/scene/VesselSystem.cpp" />
     <ClCompile Include="sources/app/scene/VesselModel.cpp" />
@@ -882,6 +883,7 @@
     <ClInclude Include="sources/app/scene/World.h" />
     <ClInclude Include="sources/app/scene/OceanWaterSurface.h" />
     <ClInclude Include="sources/app/scene/PlayerGates.h" />
+    <ClInclude Include="sources/app/scene/PlayerSystem.h" />
     <ClInclude Include="sources/app/scene/VesselGates.h" />
     <ClInclude Include="sources/app/scene/VesselSystem.h" />
     <ClInclude Include="sources/app/scene/VesselModel.h" />

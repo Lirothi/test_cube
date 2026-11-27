@@ -659,6 +659,9 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 
     // The bodies of everything this level built, in the load instead of its first frame.
     ctx.scene.Physics().LoadFinished();
+    // The player stood on the level that left: its capsule goes, and the play session says where the next one starts
+    // (AppController::OnLevelLoaded).
+    ctx.scene.Player().LevelLeft();
 }
 
 void JsonLevel::Unload(const LevelLoadContext& ctx)

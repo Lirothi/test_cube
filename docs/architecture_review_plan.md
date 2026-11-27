@@ -5614,6 +5614,31 @@ Debug, реестр настроек и таблица графики, вкла�
   `settings_names.py` 0; CRLF; обе регрессии PASS (в Debug — и физические гейты с новым проходом); `--physics-gate` все
   PASS (Release).
 
+  **Сделано R14.6b (2026-11-28).** Игрок ушёл из физики. `app/scene/PlayerSystem` — член `World` (`scene.Player()`, после
+  лодок): строка в строку из `TickPlayer` и API `World` — появление, уход, F8, ввод (нажатие прыжка держится до тика),
+  вода под ногами, `deltaTime` кадра в пределах 0.1 мс..1/30 с, `killY`, глаз, состояние; `LevelLeft` — капсула уходит с
+  уровнем (его зовёт `JsonLevel` после `LoadFinished`, где это делала физика). Физике — капсула без Jolt в API
+  (`AddCharacter`, `RemoveCharacter`, `HasCharacter`, `MoveCharacter`, `PlaceCharacter`, `GetCharacter` → `CharacterState`;
+  `kNoWater` — в публичном заголовке; мир ушёл — `DestroySystem` уносит капсулы, ключ больше ничего не называет, игрок
+  возвращается с миром) и покадровый крючок `StepHooks::frame(deltaTime, water)` — в `World::Tick` там, где был
+  `TickPlayer` (после `Collect`, до счёта шагов, и при стоящем мире). Потребители: `PlaySession`, `BoatHelm`,
+  `PlayerController` (берёт `PlayerSystem&`), камера в `World::TickPhysics`, показания `App`, вкладка Physics. Гейт
+  `player` слоя мира — через систему, и к нему сверка, которой не было: глаз системы против капсулы в своём мире, которую
+  двигают вручную тем же `deltaTime` и тем же вводом (как двигал `TickPlayer`). Числа: отпечатки траектории глаза
+  `1557b1a6bacffd97` / `a46852490b2d4a36` — те же, что у R14.6a на сегодняшнем коде (побайтно), расхождение с капсулой
+  0.000 / 0.000 мм в 241 / 1197 кадрах, разбег, остановка, прыжок, дорога — те же. Контроли на `PlayerSystem::Frame`
+  (`ctl146b.py`): шагом 1/60 с — при 300 кадрах глаз стоял 240 кадров бега из 300, нажатие не двигает глаз, прыжок
+  пропал, глаз не капсулы — FAIL; с глазом между двумя шагами — нажатие не двигает глаз в своём кадре ни при 60, ни при
+  300, глаз не капсулы — FAIL (расхождение в миллиметрах у обоих плеч огромное — 1650 / 4596 мм: их глаз между шагами
+  стартует с нуля; запаздывание само видно по кадру нажатия); файл возвращён побайтно. Проверено: Debug, Release_Editor,
+  Release, Shipping, Development, Cook (последние три — и за R14.6a: он тронул `BootTools.cpp`, а собран был без них);
+  `check_*.py` и `settings_names.py` 0 (храповик 31, слои — 0 находок); CRLF; обе регрессии PASS; `--physics-gate` все
+  PASS (Release). Живьём (`live_player.py`: свой редактор на своём столе, MCP 8176, wind_test, `play` от Player Start,
+  ход `player.testMoveX`, прыжок `player.testJump`): эталон (Release_Editor на R14.6a) и новый — стоит у Player Start
+  (31.31, 2.31, 69.67), камера на глазу (1.650 м над ногами), идёт 4.000 м/с, отпущенный стоит, прыгает 0.889 / 0.890 м;
+  файл уровня не тронут. Заметка `play_and_physics.md`: где живёт игрок и второй проход гейта `player`. Не покрыто
+  живьём: F8, выход на палубу из-за штурвала (`LetGo` → `Spawn`) и Play в Debug — только гейтом и регрессией.
+
   **Сделано R14.1 (2026-11-27).** `physics/WaterSurface.h`: `Present`, `HasWaves`, `Level`, `SampleHeight(x, z,
   wakeShare)`; `World::SetWater` вместо `SetOcean`, читается только в `Tick` (как раньше океан). `SampleWater`,
   `SampleVesselWater`, `TickPlayer` спрашивают поверхность. Переходник `app/scene/OceanWaterSurface` (океан уровня,

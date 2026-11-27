@@ -32,7 +32,7 @@ void DeveloperWindow::DrawPhysicsTab(Scene& scene)
         ps.hullShapes, ps.primitiveShapes, ps.lastBuildMs);
     ImGui::Text("%.1f MB held", static_cast<double>(ps.bytes) / (1024.0 * 1024.0));
     ImGui::SeparatorText("The player");
-    const physics::PlayerState player = scene.Physics().GetPlayerState();
+    const physics::PlayerState player = scene.Player().State();
     if (player.exists)
     {
         ImGui::Text("%s%s, %.2f m/s; the feet at %.2f %.2f %.2f", physics::PlayerModeName(player.mode), player.crouched ? ", crouched" : "", player.speed, player.feet.x, player.feet.y, player.feet.z);

@@ -80,7 +80,7 @@ namespace physics
         float maxSlopeDeg = 50.0f;    // a slope steeper than this is a wall
         float swimDepth = 1.3f;       // water deeper than this over the feet floats the body: the eye just over the surface, no more walking on the bottom
         // A script's keys (--set player.test*) are not here: they go through InputManager's channel (architecture plan
-        // R12.3), and the player's input comes in by SetPlayerInput as the keys' does.
+        // R12.3), and the player's input comes in by PlayerSystem::SetInput (app/scene) as the keys' does.
     };
 
     // What the keys say this frame.
@@ -94,6 +94,22 @@ namespace physics
 
     enum class PlayerMode : std::uint8_t { Walking, Falling, Swimming };
     const char* PlayerModeName(PlayerMode mode);
+
+    // A walking capsule as game code names it (World::AddCharacter, R14.6). kNoCharacter = none.
+    using CharacterKey = std::uint32_t;
+    inline constexpr CharacterKey kNoCharacter = 0;
+    // A height no water reaches: no water here (World::MoveCharacter).
+    inline constexpr float kNoWater = -1.0e30f;
+    // Where a capsule stands and how it goes (World::GetCharacter).
+    struct CharacterState
+    {
+        Math::float3 feet;        // its origin
+        Math::float3 eye;         // the settings' eye over the feet, as it eases up a step and down to a crouch
+        PlayerMode mode = PlayerMode::Falling;
+        bool onGround = false;
+        bool crouched = false;
+        float speed = 0.0f;       // m/s, along the ground
+    };
 
     // The boat at the helm as the frame shows it (VesselSystem::GetHelm, app/scene).
     struct HelmState
@@ -138,6 +154,7 @@ namespace physics
         float rudder = 0.0f;
     };
 
+    // The player as the game reads it (app/scene/PlayerSystem::State).
     struct PlayerState
     {
         bool exists = false;
@@ -275,24 +292,36 @@ namespace physics
         // The water for the "buoyant" Dynamic bodies, the boats and the player's swim (R14.1: the physics names no ocean). Null = none.
         // Read in Tick only; the caller keeps it alive till the next SetWater.
         void SetWater(const WaterSurface* water);
-        // The player: a body from `feet` on, falling if there is nothing under them; below physics.killY it comes back there. A world gone (physics.enabled:0) brings it back with
-        // the world. On the frame's clock, in Tick: it is the camera, and a camera moves every frame.
-        void SpawnPlayer(const Math::float3& feet);
-        void RemovePlayer();
-        // False = F8: the body stands where it is, takes no keys, and PlayerEye says nothing.
-        void SetPlayerPossessed(bool possessed);
-        void SetPlayerInput(const PlayerInput& input);
-        // Where the eye stands after this frame's Tick. False = no player, or not possessed: the camera is free.
-        bool PlayerEye(Math::float3& out) const;
-        PlayerState GetPlayerState() const;
+        // R14.6: walking capsules -- UE's character movement over Jolt's CharacterVirtual (PhysicsCharacter.cpp). Not bodies:
+        // collision queries, and bodies pushed by impulses as one goes. Game code moves one once a frame on the frame's clock
+        // (StepHooks::frame); the player -- where it comes in, its keys, physics.killY, its eye -- is app/scene/PlayerSystem's.
+        // A world gone (physics.enabled:0) takes them with it: a key then names nothing. Game thread.
+        // A capsule standing at `feet` (its height, crouchHeight and radius are read here). kNoCharacter: no world. Waits for a
+        // step in flight.
+        CharacterKey AddCharacter(const Math::float3& feet, const PlayerSettings& settings);
+        void RemoveCharacter(CharacterKey key);
+        bool HasCharacter(CharacterKey key) const;
+        // One frame of its movement: `dt` as given, the keys, the tuning, the water's height under its feet (kNoWater: none).
+        // Waits for a step in flight: its queries and pushes must not meet one. False = no such capsule.
+        bool MoveCharacter(CharacterKey key, float dt, const PlayerInput& input, const PlayerSettings& settings, float waterHeight);
+        // A teleport: the speed goes too. Waits for a step in flight.
+        bool PlaceCharacter(CharacterKey key, const Math::float3& feet);
+        // Where it stands and how it goes; `settings` for its eye. False = no such capsule.
+        bool GetCharacter(CharacterKey key, const PlayerSettings& settings, CharacterState& out) const;
         // The boats -- the helm, the pilots, the anchor, the mooring, where each is shown -- are app/scene/VesselSystem's (R14.3b),
         // over the bodies, queries and hooks below.
 
         bool RayCast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out) const;
 
-        // R14.2 / R14.3b: game code around the steps (app/scene/VesselSystem: the boats). Every hook may be empty.
+        // R14.2 / R14.3b / R14.6: game code around the steps (app/scene/VesselSystem: the boats; app/scene/PlayerSystem: the
+        // player). Every hook may be empty.
         struct StepHooks
         {
+            // Game thread, once a frame in Tick on the frame's own clock, before the steps are counted and whether or not the
+            // world simulates: the frame's time and the water (null = none). Not while there is no world (physics.enabled:0).
+            // The player's (R14.6): it is the camera, and a camera moves every frame -- under `fixed`, at 300 frames a second
+            // its eye would stand four frames of five. A step still in flight runs on: what reaches the world waits for it.
+            std::function<void(float deltaTime, const WaterSurface* water)> frame;
             // Game thread, where the steps owed are counted and no step runs: the water (null = none), and the time the steps cover.
             std::function<void(float elapsed, const WaterSurface* water)> measure;
             // Game thread, as the steps start (KickStep, or in line): what the game ordered, taken for them.

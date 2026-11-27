@@ -762,6 +762,9 @@
     <ClCompile Include="sources/app/scene/PlayerGates.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/PlayerSystem.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/VesselGates.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -1686,6 +1689,9 @@
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/PlayerGates.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/PlayerSystem.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/VesselGates.h">

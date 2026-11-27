@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "app/scene/PlayerSystem.h"
 #include "app/scene/VesselGates.h"
 #include "core/task/TaskSystem.h"
 #include "core/threading/RenderThread.h"
@@ -20,7 +21,9 @@
 // frames a second, the road the game takes: a spawn, the keys set before the Tick, the eye read after it. The physics' gate
 // "player" moves the capsule by hand and sees nothing of the world's schedule; a player moved on the fixed step would pass
 // it. Here the run-up, the stop and the jump must come out the same at both rates, the eye must move in every frame of a
-// run and in the very frame of a press.
+// run and in the very frame of a press, and it must be the eye of a capsule moved by hand with the frame's own time, frame
+// for frame (what World::TickPlayer did before R14.6b; a player stepped on the fixed step, or shown between two steps as the
+// bodies are, is not).
 namespace
 {
     using namespace physics;
@@ -57,19 +60,6 @@ namespace
         float SampleHeight(float, float, float) const override { return level; }
     };
 
-    // The player's road as the game takes it (R14.6a: physics::World's own player).
-    struct Walker
-    {
-        physics::World& world;
-        void Spawn(const Math::float3& feet) { world.SpawnPlayer(feet); }
-        void Remove() { world.RemovePlayer(); }
-        void SetPossessed(bool possessed) { world.SetPlayerPossessed(possessed); }
-        void SetInput(const PlayerInput& input) { world.SetPlayerInput(input); }
-        bool Eye(Math::float3& out) const { return world.PlayerEye(out); }
-        PlayerState State() const { return world.GetPlayerState(); }
-        void LevelLeft() { world.LoadFinished(); }
-    };
-
     // One frame as the game runs it: the Tick (the player in it), the step kicked where the render thread's frame ends,
     // the hand-over.
     void Frame(physics::World& world, float dt)
@@ -90,6 +80,8 @@ namespace
         bool onFloor = false;
         bool pressMoved = false; // the eye moved in the frame the walk was pressed
         bool jumpMoved = false;  // and in the frame of the jump's press
+        float gap = 0.0f;        // m, the farthest the eye stood from the capsule moved by hand
+        int compared = 0;        // frames it was compared in
         std::uint64_t digest = 1469598103934665603ull; // FNV-1a over every frame's eye
     };
 
@@ -100,7 +92,14 @@ namespace
         const PlayerSettings tuning = GameSettings().player;
         const auto floor = std::make_unique<FloorObject>();
         physics::World world;
-        Walker walker{ world };
+        PlayerSystem walker(world);
+        Frame(world, dt); // the floor's body is this world's: the objects' queue goes to the world that drains it first
+        // The capsule moved by hand with the frame's own time (World::MoveCharacter, as TickPlayer did), in a world of its own.
+        const auto directFloor = std::make_unique<FloorObject>();
+        physics::World direct;
+        Frame(direct, dt);
+        CharacterKey reference = kNoCharacter;
+        bool pendingJump = false; // a press the player holds until its Tick takes it
         Math::float3 eye(0.0f, 0.0f, 0.0f);
         bool seen = false;
         const auto frame = [&](const PlayerInput& input)
@@ -112,6 +111,17 @@ namespace
             const unsigned char* bytes = reinterpret_cast<const unsigned char*>(values);
             for (std::size_t i = 0; i < sizeof(values); ++i) { out.digest = (out.digest ^ bytes[i]) * 1099511628211ull; }
             ++out.frames;
+            PlayerInput taken = input;
+            taken.jump = taken.jump || pendingJump;
+            pendingJump = false;
+            Frame(direct, dt);
+            direct.MoveCharacter(reference, std::clamp(dt, 1.0e-4f, 1.0f / 30.0f), taken, tuning, kNoWater);
+            CharacterState by;
+            if (seen && direct.GetCharacter(reference, tuning, by))
+            {
+                out.gap = std::max(out.gap, (eye - by.eye).Length());
+                ++out.compared;
+            }
         };
         const auto frames = [fps](float seconds) { return static_cast<int>(seconds * static_cast<float>(fps) + 0.5f); };
         const PlayerInput none;
@@ -119,6 +129,7 @@ namespace
         forward.move = Math::float3(1.0f, 0.0f, 0.0f);
 
         walker.Spawn(Math::float3(0.0f, 0.0f, 0.0f));
+        reference = direct.AddCharacter(Math::float3(0.0f, 0.0f, 0.0f), tuning);
         for (int i = 0; i < frames(0.3f); ++i) { frame(none); }
         out.onFloor = walker.State().onGround;
 
@@ -154,6 +165,7 @@ namespace
         PlayerInput press;
         press.jump = true;
         walker.SetInput(press);
+        pendingJump = true;
         frame(none);
         out.jumpMoved = seen && eye.y > before.y;
         float top = walker.State().feet.y;
@@ -213,7 +225,8 @@ namespace
         detail = "the world's frame, 60 / 300 fps: run-up " + Num(at60.runUp) + " / " + Num(at300.runUp) + " s (" + Num(runUp) + "), stops in " + Num(at60.stop) + " / " +
             Num(at300.stop) + " m (0.20), jumps " + Num(at60.jump) + " / " + Num(at300.jump) + " m (" + Num(jump) + "), frames of a run the eye stood " +
             std::to_string(at60.still) + " / " + std::to_string(at300.still) + ", the eye moved in the press's frame " + std::to_string(at60.pressMoved) + std::to_string(at60.jumpMoved) +
-            " / " + std::to_string(at300.pressMoved) + std::to_string(at300.jumpMoved) + "; the eye's road " + Hex(at60.digest) + " / " + Hex(at300.digest) + " (" +
+            " / " + std::to_string(at300.pressMoved) + std::to_string(at300.jumpMoved) + "; off a capsule moved by hand " + Num(at60.gap * 1000.0f) + " / " + Num(at300.gap * 1000.0f) + " mm in " +
+            std::to_string(at60.compared) + " / " + std::to_string(at300.compared) + " frames; the eye's road " + Hex(at60.digest) + " / " + Hex(at300.digest) + " (" +
             std::to_string(at60.frames) + " / " + std::to_string(at300.frames) + " frames)";
         for (const RateRun* run : { &at60, &at300 })
         {
@@ -225,6 +238,7 @@ namespace
             check(run->still == 0, fps + " fps: the eye stood in frames of a run");
             check(run->pressMoved, fps + " fps: the walk's press did not move the eye in its frame");
             check(run->jumpMoved, fps + " fps: the jump's press did not move the eye in its frame");
+            check(run->compared == run->frames && run->gap <= 0.001f, fps + " fps: the eye is not the capsule's moved by the frame's own time");
         }
         // The same at both rates, to what a 60 Hz frame's integration allows. Both rates err the same way and 300 the less, so
         // the gap is at most 60's own error: the run-up counts whole frames (1/60 + 1/300 s); the stop is short by at most one
@@ -238,7 +252,7 @@ namespace
         {
             const auto floor = std::make_unique<FloorObject>();
             physics::World world;
-            Walker walker{ world };
+            PlayerSystem walker(world);
             FlatWater water;
             water.level = 2.0f;
             bool wet = false;

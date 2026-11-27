@@ -305,13 +305,9 @@ namespace physics
         std::vector<std::pair<int, StepHooks>> hooks;
         int nextHook = 1;
         const WaterSurface* surface = nullptr; // SetWater: read in Tick only
-        std::unique_ptr<PlayerBody> player;
-        bool playerWanted = false;
-        bool playerPossessed = true;
-        Math::float3 playerSpawn;
-        PlayerInput playerInput;
-        Math::float3 playerEye;
-        bool playerEyeValid = false;
+        // R14.6: the walking capsules (AddCharacter) -- the player's is app/scene/PlayerSystem's. The game thread's alone.
+        std::unordered_map<CharacterKey, std::unique_ptr<PlayerBody>> characters;
+        CharacterKey nextCharacter = 1; // never kNoCharacter, and a key once used never again
         std::unordered_set<RenderableObjectBase*> dirty;
         std::vector<Event> eventScratch;
         JPH::BodyIDVector activeScratch;
@@ -452,8 +448,7 @@ namespace physics
             poseOwed = false;
             stepsOwed = 0;
             lines.reset();
-            player.reset(); // playerWanted stays: the world's return brings it back
-            playerEyeValid = false;
+            characters.clear(); // their keys name nothing now: the player comes back with the world (PlayerSystem)
             floaters.clear();
             for (auto& [key, entry] : entries)
             {
@@ -1098,43 +1093,17 @@ namespace physics
             }
         }
 
-        // The player. On the frame's own clock, not the fixed step: it is the camera, and a camera moves every frame.
-        void TickPlayer(float deltaTime)
+        // The game's frame hooks (the player: app/scene/PlayerSystem, R14.6). On the frame's own clock, not the fixed step: it
+        // is the camera, and a camera moves every frame.
+        void RunFrameHooks(float deltaTime)
         {
-            if (!playerWanted && !player) { return; }
-            Join(); // a character's queries and pushes must not meet a step
-            if (!playerWanted)
-            {
-                player.reset();
-                playerEyeValid = false;
-                return;
-            }
-            Settings& settings = GameSettings();
-            PlayerSettings& tuning = settings.player;
-            if (!player)
-            {
-                MEM_SCOPE(MemTag::Physics);
-                player = std::make_unique<PlayerBody>(*system, ToJolt(playerSpawn), tuning);
-                LOG_INFO(logging::LogCategory::Physics, "player: a body at {:.2f} {:.2f} {:.2f}", playerSpawn.x, playerSpawn.y, playerSpawn.z);
-            }
-            PlayerInput input = playerPossessed ? playerInput : PlayerInput{};
-            playerInput.jump = false;
+            for (const auto& hook : hooks) { if (hook.second.frame) { hook.second.frame(deltaTime, surface); } }
+        }
 
-            float water = kNoWater;
-            if (surface && surface->Present())
-            {
-                const JPH::Vec3 feet = player->Feet();
-                water = surface->HasWaves() ? surface->SampleHeight(feet.GetX(), feet.GetZ(), 1.0f) : surface->Level();
-            }
-            player->Update(std::clamp(deltaTime, 1.0e-4f, 1.0f / 30.0f), input, tuning, water, *temp);
-            // UE's KillZ, for the one thing nothing else stops: no ground and no water under it.
-            if (player->Feet().GetY() < settings.killY)
-            {
-                LOG_WARNING(logging::LogCategory::Physics, "player: fell out of the world at {:.1f} {:.1f}, back at the start", player->Feet().GetX(), player->Feet().GetZ());
-                player->SetFeet(ToJolt(playerSpawn));
-            }
-            playerEye = FromJolt(player->Eye(tuning));
-            playerEyeValid = playerPossessed;
+        PlayerBody* CharacterOf(CharacterKey key) const
+        {
+            const auto it = characters.find(key);
+            return it == characters.end() ? nullptr : it->second.get();
         }
 
         bool Cast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out)
@@ -1437,7 +1406,7 @@ namespace physics
         if (!settings.enabled || !m.system) { return; }
         m.SetSimulating(settings.simulate);
         // These two read the world, and a step about to start would make them wait for all of it.
-        m.TickPlayer(deltaTime);
+        m.RunFrameHooks(deltaTime); // the player (app/scene/PlayerSystem)
         m.DrawDebug(camera_, debugDraw_);
         if (m.simulating) { m.Simulate(deltaTime); }
     }
@@ -1479,9 +1448,6 @@ namespace physics
         m.Drain();
         if (!m.system) { return; }
         m.Join();
-        // The player stands on the level that left: its capsule goes, and the play session says where the next one starts (AppController::OnLevelLoaded).
-        m.player.reset();
-        m.playerEyeValid = false;
         // What the level that left held. What stays is what a reload would build again.
         m.EvictUnusedShapes();
         if (m.layoutChanged)
@@ -1633,61 +1599,59 @@ namespace physics
         return it->second.body.GetIndexAndSequenceNumber();
     }
 
-    void World::SpawnPlayer(const Math::float3& feet)
+    CharacterKey World::AddCharacter(const Math::float3& feet, const PlayerSettings& settings)
     {
         Impl& m = *impl_;
-        m.Join();
-        m.player.reset();
-        m.playerWanted = true;
-        m.playerPossessed = true;
-        m.playerSpawn = feet;
-        m.playerEyeValid = false;
-        m.playerInput = PlayerInput{};
+        m.Join(); // a character's queries and pushes must not meet a step
+        if (!m.system) { return kNoCharacter; }
+        MEM_SCOPE(MemTag::Physics);
+        const CharacterKey key = m.nextCharacter++;
+        m.characters.emplace(key, std::make_unique<PlayerBody>(*m.system, ToJolt(feet), settings));
+        return key;
     }
 
-    void World::RemovePlayer()
+    void World::RemoveCharacter(CharacterKey key)
     {
         Impl& m = *impl_;
+        const auto it = m.characters.find(key);
+        if (it == m.characters.end()) { return; }
         m.Join();
-        m.player.reset();
-        m.playerWanted = false;
-        m.playerEyeValid = false;
-        m.playerInput = PlayerInput{};
+        m.characters.erase(it);
     }
 
-    void World::SetPlayerPossessed(bool possessed)
-    {
-        impl_->playerPossessed = possessed;
-        impl_->playerEyeValid = impl_->playerEyeValid && possessed;
-    }
+    bool World::HasCharacter(CharacterKey key) const { return impl_->CharacterOf(key) != nullptr; }
 
-    void World::SetPlayerInput(const PlayerInput& input)
+    bool World::MoveCharacter(CharacterKey key, float dt, const PlayerInput& input, const PlayerSettings& settings, float waterHeight)
     {
-        const bool jump = impl_->playerInput.jump || input.jump; // a press stays until a Tick has taken it
-        impl_->playerInput = input;
-        impl_->playerInput.jump = jump;
-    }
-
-    bool World::PlayerEye(Math::float3& out) const
-    {
-        if (!impl_->playerEyeValid) { return false; }
-        out = impl_->playerEye;
+        Impl& m = *impl_;
+        PlayerBody* body = m.CharacterOf(key);
+        if (!body) { return false; }
+        m.Join(); // a character's queries and pushes must not meet a step
+        body->Update(dt, input, settings, waterHeight, *m.temp);
         return true;
     }
 
-    PlayerState World::GetPlayerState() const
+    bool World::PlaceCharacter(CharacterKey key, const Math::float3& feet)
     {
-        const Impl& m = *impl_;
-        PlayerState state;
-        if (!m.player) { return state; }
-        state.exists = true;
-        state.possessed = m.playerPossessed;
-        state.onGround = m.player->OnGround();
-        state.crouched = m.player->Crouched();
-        state.mode = m.player->Mode();
-        state.speed = m.player->HorizontalSpeed();
-        state.feet = FromJolt(m.player->Feet());
-        return state;
+        Impl& m = *impl_;
+        PlayerBody* body = m.CharacterOf(key);
+        if (!body) { return false; }
+        m.Join();
+        body->SetFeet(ToJolt(feet));
+        return true;
+    }
+
+    bool World::GetCharacter(CharacterKey key, const PlayerSettings& settings, CharacterState& out) const
+    {
+        const PlayerBody* body = impl_->CharacterOf(key);
+        if (!body) { return false; }
+        out.feet = FromJolt(body->Feet());
+        out.eye = FromJolt(body->Eye(settings));
+        out.mode = body->Mode();
+        out.onGround = body->OnGround();
+        out.crouched = body->Crouched();
+        out.speed = body->HorizontalSpeed();
+        return true;
     }
 
     void World::CollectSimulatedPoses(std::vector<SimulatedPose>& out) const

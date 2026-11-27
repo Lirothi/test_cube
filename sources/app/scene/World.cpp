@@ -560,7 +560,7 @@ void World::TickPhysics(float deltaTime, Renderer& renderer)
     physics_.SetDebugDraw(renderer.GetDebugDrawSystem());
     physics_.Tick(deltaTime);
     Math::float3 eye;
-    if (physics_.PlayerEye(eye)) { camera_.SetPosition(eye); } // the player: the hand-over takes this frame's pose
+    if (player_.Eye(eye)) { camera_.SetPosition(eye); } // the player (its frame hook ran in the Tick): the hand-over takes this frame's pose
 }
 
 void World::TickNightLamps(float deltaTime)

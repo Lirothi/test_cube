@@ -51,7 +51,7 @@ void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::Pla
     const Math::float3 feet = start ? start->feet : Math::float3(camera.GetPosition().x, camera.GetPosition().y - settings.eyeHeight, camera.GetPosition().z);
     const float yaw = start ? start->yawRad : camera.GetYaw();
     const float pitch = start ? start->pitchRad : camera.GetPitch();
-    scene.Physics().SpawnPlayer(feet);
+    scene.Player().Spawn(feet);
     camera.SetPosition(Math::float3(feet.x, feet.y + settings.eyeHeight, feet.z));
     camera.SetYawPitchRoll(yaw, pitch, 0.0f);
     camera.CalcMatrices(&renderer);
@@ -92,7 +92,7 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     LetGo(scene, false); // R13.5
     for (game::GameSystem* system : world_.Systems()) { system->OnSessionEnd(scene); } // R13.2: the race's pilots off, its boats to go
     scene.CloseSessionJournal(); // R13.3: what the session made and left goes at the next hand-over, after the systems' own
-    scene.Physics().RemovePlayer();
+    scene.Player().Remove();
     physics::GameSettings().player = settingsBefore_;
     game::ScriptCamera() = scriptCameraBefore_;
     input.ClearInjected(); // a script's keys end with the session, as the player's test* fields did until R12.3
@@ -120,7 +120,7 @@ void PlaySession::LetGo(Scene& scene, bool overTheSide)
     if (!controlled) { return; }
     const std::optional<game::BodyPlacement> body = controlled->Leave(scene, overTheSide);
     if (!body) { return; }
-    scene.Physics().SpawnPlayer(body->feet);
+    scene.Player().Spawn(body->feet);
     possessed_ = true;
     justSpawned_ = true;
     Camera& camera = scene.CameraRef();
@@ -144,7 +144,7 @@ void PlaySession::TogglePossess(Scene& scene)
 {
     if (!playing_ || controlled_) { return; }
     possessed_ = !possessed_;
-    scene.Physics().SetPlayerPossessed(possessed_);
+    scene.Player().SetPossessed(possessed_);
     LOG_INFO(logging::LogCategory::App, "play: {}", possessed_ ? "possessed" : "ejected, the camera is free");
 }
 
@@ -163,7 +163,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     InputManager::KeysScope keys(input, controls);
 
     Camera& camera = scene.CameraRef();
-    physics::World& world = scene.Physics();
+    PlayerSystem& player = scene.Player();
     // R13.2: the systems' frame (the race: the bots' orders, and the helm's on autopilot -- before the helm reads its keys;
     // the boats put on the grid are a cut).
     for (game::GameSystem* system : world_.Systems()) { system->OnFrame(scene, deltaTime); }
@@ -188,7 +188,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     }
     // The way aboard (R13.5: whatever within reach the key hands the player to control -- a boat's helm, within a few
     // metres of its hull, today).
-    const physics::PlayerState onFoot = world.GetPlayerState();
+    const physics::PlayerState onFoot = player.State();
     game::Interactable* reached = nullptr;
     RenderableObject* target = nullptr;
     if (possessed_ && onFoot.exists)
@@ -211,17 +211,17 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
         }
     }
     // No body and none coming (an empty level has no world, physics.enabled:0): the camera flies, as ejected.
-    const bool hasBody = possessed_ && (justSpawned_ || world.GetPlayerState().exists);
+    const bool hasBody = possessed_ && (justSpawned_ || player.State().exists);
     justSpawned_ = false;
     // Watching a bot the player stands: the mouse moving over the panel does not turn their head meanwhile.
     if (hasBody)
     {
         InputManager::KeysScope playerKeys(input, controls && !watching);
-        controller_.Tick(input, camera, scene.CameraControllerRef(), world, controls && !watching, deltaTime);
+        controller_.Tick(input, camera, scene.CameraControllerRef(), player, controls && !watching, deltaTime);
     }
     else
     {
-        world.SetPlayerInput(physics::PlayerInput{});
+        player.SetInput(physics::PlayerInput{});
         if (controls && !watching) { scene.CameraControllerRef().UpdateFromInput(input, deltaTime, true); }
     }
 }
@@ -251,7 +251,7 @@ void PlaySession::StopForLevel(Scene& scene, InputManager& input)
     playing_ = false;
     possessed_ = false;
     scene.CloseSessionJournal(); // R13.3: the level took what the session made with it; nothing is left to write down
-    scene.Physics().RemovePlayer();
+    scene.Player().Remove();
     physics::GameSettings().player = settingsBefore_;
     game::ScriptCamera() = scriptCameraBefore_;
     input.ClearInjected();
@@ -317,8 +317,7 @@ void PlaySession::DebugDraw(DebugDrawSystem& draw) const
 void PlaySession::DrawBoatCard(Scene& scene)
 {
     if (!playing_ || controlled_ || !possessed_ || world_.race.WatchedVessel()) { return; }
-    physics::World& world = scene.Physics();
-    const physics::PlayerState onFoot = world.GetPlayerState();
+    const physics::PlayerState onFoot = scene.Player().State();
     if (!onFoot.exists) { return; }
     constexpr float kCardReach = 16.0f; // m from the hull: nearer than this its card is up
     std::vector<physics::VesselHull> hulls;
@@ -415,7 +414,7 @@ std::wstring PlaySession::HudLine(const Scene& scene) const
     if (!playing_) { return {}; }
     const double nowSeconds = SessionClock(); // R13.2: the session's clock (the caller's ImGui::GetTime() before)
     wchar_t line[256];
-    const physics::PlayerState state = scene.Physics().GetPlayerState();
+    const physics::PlayerState state = scene.Player().State();
     std::wstring controlledLine;
     if (controlled_)
     {
