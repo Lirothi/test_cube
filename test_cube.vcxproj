@@ -641,6 +641,7 @@
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObjectBase.cpp" />
     <ClCompile Include="sources/rendering/shadows/ShadowGpuData.cpp" />
+    <ClCompile Include="sources/rendering/shadows/ShadowViewPlanner.cpp" />
     <ClCompile Include="sources/rendering/shadows/CascadeHzb.cpp" />
     <ClCompile Include="sources/rendering/shadows/VirtualShadowMap.cpp" />
     <ClCompile Include="sources/rendering/shadows/SdsmShadows.cpp" />
@@ -1026,6 +1027,7 @@
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />
     <ClInclude Include="sources/rendering/shadows/CascadeHzb.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h" />
+    <ClInclude Include="sources/rendering/shadows/ShadowViewPlanner.h" />
     <ClInclude Include="sources/rendering/shadows/TessySettings.h" />
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h" />
     <ClInclude Include="sources/rhi/GbvListMode.h" />
