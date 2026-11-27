@@ -1,15 +1,15 @@
 #include "vfx/VesselSpray.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
 
-#include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "ocean/BuoyancyLayout.h"
 #include "physics/PhysicsWorld.h"
-#include "rendering/core/UploadBatch.h"
+#include "rendering/renderables/RuntimeObjects.h" // R13.1: the hand-over's road (Scene before)
 #include "vfx/ParticleEmitterObject.h"
 #include "vfx/ParticlePresets.h"
 
@@ -102,11 +102,10 @@ VesselSpray::Root VesselSpray::FindRoot(const buoyancy::HullFootprint& footprint
     return root;
 }
 
-bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
+bool VesselSpray::Create(RuntimeObjects& objects, Set& set)
 {
-    if (!renderer) { return false; }
-    UploadBatch uploads;
-    if (!uploads.Begin(renderer)) { return false; }
+    // R13.1: into the world through the hand-over's road (its one upload batch, sent once the hand-over's objects are
+    // made) -- the boat's own batch and GPU wait before.
     bool ok = true;
     auto make = [&](const char* preset, uint32_t seed) -> ParticleEmitterObject* {
         nlohmann::json j = nlohmann::json::object();
@@ -116,7 +115,7 @@ bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
         desc.spawnRate = 0.0f;
         auto emitter = std::make_unique<ParticleEmitterObject>(desc);
         ParticleEmitterObject* raw = emitter.get();
-        if (!scene.AddInitializedObject(*renderer, uploads, std::move(emitter))) { ok = false; return nullptr; }
+        if (!objects.Spawn(std::move(emitter))) { ok = false; return nullptr; }
         return raw;
     };
     const uint32_t base = static_cast<uint32_t>(sets_.size()) * 16u + 7u;
@@ -125,7 +124,6 @@ bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
         set.sheet[side] = make(kSheetPreset, base + static_cast<uint32_t>(side));
         set.mist[side] = make(kMistPreset, base + 2u + static_cast<uint32_t>(side));
     }
-    uploads.SubmitAndWait(renderer);
     for (int k = 0; k < 4; ++k)
     {
         set.sheetAlpha[k] = set.sheet[0] ? set.sheet[0]->Desc().colorKeys[k].w : 0.0f;
@@ -133,7 +131,14 @@ bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
     }
     if (set.sheet[0]) { set.sheetSize[0] = set.sheet[0]->Desc().sizeStart; set.sheetSize[1] = set.sheet[0]->Desc().sizeEnd; }
     if (set.mist[0]) { set.mistSize[0] = set.mist[0]->Desc().sizeStart; set.mistSize[1] = set.mist[0]->Desc().sizeEnd; }
-    LOG_INFO(logging::LogCategory::Vfx, "vessel spray: emitters for boat {} ({})", sets_.size(), ok ? "made" : "FAILED");
+    if (ok) { LOG_INFO(logging::LogCategory::Vfx, "vessel spray: emitters for boat {} (made)", sets_.size()); }
+    else
+    {
+        // Tried again every frame the boat is seen (Sync): one line in five seconds, not one a frame -- with the hand-over's
+        // road refusing (R13.1's control) the spray wrote 47088 in a minute.
+        LOG_WARNING_THROTTLED(std::chrono::seconds(5), logging::LogCategory::Vfx,
+                              "vessel spray: emitters for boat {} (FAILED; tried again while it is seen)", sets_.size());
+    }
     return ok;
 }
 
@@ -153,7 +158,7 @@ bool VesselSpray::BowWaveOf(const void* vessel, Math::float2 (&roots)[2], float&
     return false;
 }
 
-void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physics::VesselHull>& hulls, const SprayParams& params)
+void VesselSpray::Sync(RuntimeObjects& objects, const std::vector<physics::VesselHull>& hulls, const SprayParams& params)
 {
     sheetAlive_ = sheetCapacity_ = mistAlive_ = mistCapacity_ = 0u;
     hullEntries_ = 0u;
@@ -192,7 +197,7 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
         {
             Set set;
             set.vessel = hull.object;
-            if (!Create(scene, renderer, set)) { continue; }
+            if (!Create(objects, set)) { continue; }
             sets_.push_back(set);
             it = sets_.end() - 1;
         }

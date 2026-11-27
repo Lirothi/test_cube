@@ -2150,6 +2150,9 @@
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/RuntimeObjects.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>

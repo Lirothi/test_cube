@@ -13,8 +13,8 @@
 #include "app/scene/SceneObjectRegistry.h"
 #include "core/logging/Log.h"
 #include "ocean/OceanRenderable.h"
-#include "rendering/core/UploadBatch.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/renderables/RuntimeObjects.h" // R13.1
 #include "third_party/json/json.hpp"
 
 namespace game
@@ -27,9 +27,9 @@ PlayWorld* g_activePlayWorld = nullptr;
 PlayWorld* ActivePlayWorld() { return g_activePlayWorld; }
 void SetActivePlayWorld(PlayWorld* world) { g_activePlayWorld = world; }
 
-void PlayWorld::HandOver(Scene& scene, Renderer* renderer)
+void PlayWorld::HandOver(Scene& scene, Renderer* renderer, RuntimeObjects& objects)
 {
-    SyncRaceBoats(scene, renderer);
+    SyncRaceBoats(scene, renderer, objects);
     Camera& camera = scene.CameraRef();
     if (vesselCamera.Active() && !game::ScriptCamera().free)
     {
@@ -105,7 +105,7 @@ void PlayWorld::Forget()
     race.DropSpawned();  // and the race's own boats, made or asked for
 }
 
-void PlayWorld::SyncRaceBoats(Scene& scene, Renderer* renderer)
+void PlayWorld::SyncRaceBoats(Scene& scene, Renderer* renderer, RuntimeObjects& objects)
 {
     std::vector<const RenderableObjectBase*> gone = race.TakeDespawns();
     std::vector<game::RaceSpawn> spawns = race.TakeSpawns();
@@ -114,20 +114,15 @@ void PlayWorld::SyncRaceBoats(Scene& scene, Renderer* renderer)
         for (const game::RaceSpawn& spawn : spawns) { race.OnSpawned(spawn.ticket, nullptr); }
         return;
     }
+    // R13.1: in and out of the world by the hand-over's road (RuntimeObjects) -- its one upload batch, sent once the
+    // hand-over's objects are made; the grid's own batch and GPU wait before.
     if (!gone.empty())
     {
-        const std::size_t removed = scene.RemoveRuntimeObjects(*renderer, gone);
+        const std::size_t removed = objects.Despawn(gone);
         LOG_INFO(logging::LogCategory::Scene, "race: {} of its boat(s) taken out of the world", removed);
     }
     if (spawns.empty()) { return; }
-    UploadBatch uploads;
-    if (!uploads.Begin(renderer))
-    {
-        for (const game::RaceSpawn& spawn : spawns) { race.OnSpawned(spawn.ticket, nullptr); }
-        return;
-    }
     SceneObjectRegistry registry = SceneObjectRegistry::CreateWithBuiltins();
-    std::vector<std::pair<std::uint64_t, RenderableObject*>> made;
     for (const game::RaceSpawn& spawn : spawns)
     {
         // A level object as the editor would place it: the asset, where the grid has it. Its bow (the asset's forward, +x for
@@ -142,20 +137,15 @@ void PlayWorld::SyncRaceBoats(Scene& scene, Renderer* renderer)
             { "scale", { 1.0f, 1.0f, 1.0f } },
         };
         SceneObjectRegistry::CreationContext creation{ scene };
-        SceneObjectRegistry::ObjectList objects = registry.Create("staticMesh", creation, object);
+        SceneObjectRegistry::ObjectList made = registry.Create("staticMesh", creation, object);
         RenderableObject* vessel = nullptr;
-        for (std::unique_ptr<RenderableObjectBase>& one : objects)
+        for (std::unique_ptr<RenderableObjectBase>& one : made)
         {
             if (!one) { continue; }
             RenderableObject* renderable = one->AsRenderableObject();
-            if (scene.AddInitializedObject(*renderer, uploads, std::move(one)) && !vessel) { vessel = renderable; }
+            if (objects.Spawn(std::move(one)) && !vessel) { vessel = renderable; }
         }
-        made.emplace_back(spawn.ticket, vessel);
-    }
-    uploads.SubmitAndWait(renderer);
-    for (const auto& [ticket, vessel] : made)
-    {
-        race.OnSpawned(ticket, vessel);
+        race.OnSpawned(spawn.ticket, vessel);
         LOG_INFO(logging::LogCategory::Scene, "race: a boat {} for the grid", vessel ? "made" : "NOT made");
     }
 }

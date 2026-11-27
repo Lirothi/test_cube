@@ -16,6 +16,7 @@
 
 class RenderableObject;
 class Renderer;
+class RuntimeObjects; // R13.1
 class Scene;
 
 namespace game
@@ -34,10 +35,10 @@ struct PlayWorld final : LevelGameSink
     RenderableObject* spectated = nullptr;
 
     // The game's part of the hand-over (Scene::Sync, right after the physics poses are synced, the render half parked):
-    // the race's own boats made where its grid is or taken out after (game::Race::TakeSpawns / TakeDespawns), then the
-    // camera of the boat at the helm or of the watched bot's boat, from the pose this frame draws the hull at -- before
-    // the render half takes the camera's.
-    void HandOver(Scene& scene, Renderer* renderer);
+    // the race's own boats made where its grid is or taken out after (game::Race::TakeSpawns / TakeDespawns) by the
+    // hand-over's road (R13.1, `objects`), then the camera of the boat at the helm or of the watched bot's boat, from the
+    // pose this frame draws the hull at -- before the render half takes the camera's.
+    void HandOver(Scene& scene, Renderer* renderer, RuntimeObjects& objects);
     // The level's objects went (Scene::Clear): the race's boats were among them.
     void Forget();
 
@@ -47,7 +48,7 @@ struct PlayWorld final : LevelGameSink
     void EndLevel() override;
 
 private:
-    void SyncRaceBoats(Scene& scene, Renderer* renderer);
+    void SyncRaceBoats(Scene& scene, Renderer* renderer, RuntimeObjects& objects);
     RaceCourse loadingCourse_; // the course the level being loaded builds, the level's once it was read to its end
     std::string loadingPath_;
 };

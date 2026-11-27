@@ -5,8 +5,7 @@
 
 #include "core/math/Math.h"
 
-class Renderer;
-class Scene;
+class RuntimeObjects; // R13.1: rendering/renderables/RuntimeObjects.h -- the hand-over's road for its emitters
 class ParticleEmitterObject;
 namespace physics { struct VesselHull; }
 namespace buoyancy { struct HullFootprint; }
@@ -40,8 +39,9 @@ class VesselSpray
 {
 public:
     // At the hand-over (Scene::Sync), before the objects' SyncSceneState: places and drives every boat's emitters,
-    // making a new boat's on its first frame. The drops leave and die at the water's surface under each hull.
-    void Sync(Scene& scene, Renderer* renderer, const std::vector<physics::VesselHull>& hulls, const SprayParams& params);
+    // making a new boat's on its first frame through `objects` (R13.1: the hand-over's one upload batch, sent once the
+    // hand-over's objects are made). The drops leave and die at the water's surface under each hull.
+    void Sync(RuntimeObjects& objects, const std::vector<physics::VesselHull>& hulls, const SprayParams& params);
     // The breaking bow wave a boat throws this frame (the wake's two foam arms, ocean/OceanWake's fronts): where it
     // leaves each side of the waterline (world XZ; [0] port, [1] starboard), how much of the bow is in the water (0 =
     // in the air .. 1 -- the spray's own immersion gate, whatever spray.enabled says; the wake gates by speed itself)
@@ -92,7 +92,7 @@ private:
         bool seen = false;
     };
     static Root FindRoot(const buoyancy::HullFootprint& footprint, int side);
-    bool Create(Scene& scene, Renderer* renderer, Set& set);
+    bool Create(RuntimeObjects& objects, Set& set);
 
     std::vector<Set> sets_;
     float rate_ = 0.0f;

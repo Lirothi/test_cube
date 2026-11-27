@@ -34,6 +34,5 @@ rendering/streaming/StreamingBounds.cpp -> rendering/renderables/RenderableObjec
 rendering/streaming/StreamingBounds.cpp -> rendering/scene/SceneFrameData.h
 rendering/streaming/TextureStreamingManager.cpp -> rendering/scene/SceneFrameData.h
 vfx/ParticleEmitterObject.cpp -> ocean/WaterMask.h
-vfx/VesselSpray.cpp -> app/scene/Scene.h
 vfx/VesselSpray.cpp -> ocean/BuoyancyLayout.h
 vfx/VesselSpray.cpp -> physics/PhysicsWorld.h

@@ -24,6 +24,7 @@
 class Renderer;
 class UploadBatch;
 class OceanRenderable;
+class RuntimeObjects; // R13.1: rendering/renderables/RuntimeObjects.h
 
 // Architecture plan R6.4b: the game half of the scene -- the objects (and their editor ids), the lights, the sky, the
 // game camera and what steers it, the time of day and the night lamps, the wind, the buoyancy, the physics, the boats'
@@ -113,9 +114,10 @@ public:
     // once the frames in flight are done (RetireRemovedObject). How many went.
     std::size_t RemoveRuntimeObjects(Renderer& renderer, const std::vector<const RenderableObjectBase*>& gone);
     // R6.2a: the game's part of the hand-over (game::PlayWorld::HandOver: the race's own boats, the helm's and the
-    // spectator's camera) -- Sync calls it right after the physics poses are synced, the render half parked -- and what
-    // Clear tells the game (its boats were among the objects). Set by the play session; unset, the scene has no game.
-    void SetGameHooks(std::function<void(Renderer*)> handOver, std::function<void()> forget)
+    // spectator's camera) -- Sync calls it right after the physics poses are synced, the render half parked, with the
+    // road its objects come and go by (R13.1, RuntimeObjects) -- and what Clear tells the game (its boats were among the
+    // objects). Set by the play session; unset, the scene has no game.
+    void SetGameHooks(std::function<void(Renderer*, RuntimeObjects&)> handOver, std::function<void()> forget)
     {
         gameHandOver_ = std::move(handOver);
         gameForget_ = std::move(forget);
@@ -298,7 +300,7 @@ protected:
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
-    std::function<void(Renderer*)> gameHandOver_; // R6.2a: SetGameHooks
+    std::function<void(Renderer*, RuntimeObjects&)> gameHandOver_; // R6.2a: SetGameHooks
     std::function<void()> gameForget_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
     vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync

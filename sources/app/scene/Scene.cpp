@@ -17,6 +17,8 @@
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h" // g_cleanCapture
+#include "rendering/core/UploadBatch.h"
+#include "rendering/renderables/RuntimeObjects.h" // R13.1: the hand-over's road for objects made and taken out
 #include "ocean/BuoyancyLayout.h" // the boats' hull footprints, for their wake
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
@@ -170,6 +172,56 @@ bool Scene::ScribbleFrozenStateForAudit()
     return false;
 }
 
+namespace
+{
+// Architecture plan R13.1: the hand-over's road for objects made and taken out while the world runs (RuntimeObjects.h).
+// Every object made in one hand-over goes into one upload batch, submitted and waited for once (Flush), before anything
+// draws them -- the race's grid had a batch of its own and the spray one for every boat.
+class HandOverObjects final : public RuntimeObjects
+{
+public:
+    HandOverObjects(World& world, Renderer* renderer) : world_(world), renderer_(renderer) {}
+    HandOverObjects(const HandOverObjects&) = delete;
+    HandOverObjects& operator=(const HandOverObjects&) = delete;
+    ~HandOverObjects() { Flush(); }
+
+    RenderableObjectBase* Spawn(std::unique_ptr<RenderableObjectBase> object) override
+    {
+        if (!renderer_ || !object || flushed_) { return nullptr; }
+        if (!begun_)
+        {
+            if (failed_ || !uploads_.Begin(renderer_)) { failed_ = true; return nullptr; }
+            begun_ = true;
+        }
+        RenderableObjectBase* raw = object.get();
+        return world_.AddInitializedObject(*renderer_, uploads_, std::move(object)) ? raw : nullptr;
+    }
+
+    std::size_t Despawn(const std::vector<const RenderableObjectBase*>& gone) override
+    {
+        // As the race's own road did: no renderer (a tool's scene), nothing goes.
+        if (!renderer_ || gone.empty()) { return 0; }
+        return world_.RemoveRuntimeObjects(*renderer_, gone);
+    }
+
+    // The hand-over's objects to the GPU, waited for: once, after the last one that may come (the spray's).
+    void Flush()
+    {
+        if (begun_) { uploads_.SubmitAndWait(renderer_); }
+        begun_ = false;
+        flushed_ = true;
+    }
+
+private:
+    World& world_;
+    Renderer* renderer_ = nullptr;
+    UploadBatch uploads_;
+    bool begun_ = false;
+    bool failed_ = false;
+    bool flushed_ = false;
+};
+} // namespace
+
 // Game thread plan G1: the frame's values that come from GAME state -- the level's settings, the time of day's
 // tints and night camera, the sun's transmittance, the selection -- copied into frameData_ at the hand-over, where
 // nothing else runs (docs/game_thread_plan.md section 3.3). PrepareViews publishes the render side's own pointers.
@@ -188,7 +240,8 @@ void Scene::Sync(Renderer* renderer)
     // they read the frame's CalcMatrices before.
     physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
     // The race's own boats (game::Race): made for a race where its grid is, gone when it is over -- here, the render half parked.
-    if (gameHandOver_) { gameHandOver_(renderer); } // R6.2a: the game's part (game::PlayWorld::HandOver)
+    HandOverObjects runtimeObjects(*this, renderer); // R13.1: the one road objects come and go by while the world runs
+    if (gameHandOver_) { gameHandOver_(renderer, runtimeObjects); } // R6.2a: the game's part (game::PlayWorld::HandOver)
     // The boats' wake on the water (ocean/OceanWake): every hull as this frame draws it, with its footprint (resolved from
     // its geometry once a shape, then a cache hit), to the ocean's render half -- parked here.
     if (OceanRenderable* ocean = FindOceanRenderable())
@@ -216,7 +269,7 @@ void Scene::Sync(Renderer* renderer)
             spray.opacity = cfg.sprayOpacity;
             spray.softFade = cfg.spraySoftFade;
         }
-        vesselSpray_.Sync(*this, renderer, vesselHulls_, spray);
+        vesselSpray_.Sync(runtimeObjects, vesselHulls_, spray);
         std::vector<ocean::WakeHull> hulls;
         hulls.reserve(vesselHulls_.size());
         for (const physics::VesselHull& vessel : vesselHulls_)
@@ -244,6 +297,7 @@ void Scene::Sync(Renderer* renderer)
         ocean::watermask::Collect(masks);
         ocean->SetWaterMasks(std::move(masks));
     }
+    runtimeObjects.Flush(); // R13.1: what the game and the spray made this hand-over, to the GPU once, before anything draws it
     render_.renderCameraCut_ |= render_.renderCamera_.TakePose(camera_);
     if (renderer) { camera_.CalcMatrices(renderer); }
     // G4: every object's transform, bounds and move flag (SyncSceneState -- the step PostTick used to run), its

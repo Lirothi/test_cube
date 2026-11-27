@@ -25,7 +25,8 @@
 void PlaySession::AttachTo(Scene& scene)
 {
     // R6.2a: what Scene::Sync did with the race's boats and the boat cameras, and what its Clear dropped, is the game's.
-    scene.SetGameHooks([this, &scene](Renderer* renderer) { world_.HandOver(scene, renderer); }, [this]() { world_.Forget(); });
+    scene.SetGameHooks([this, &scene](Renderer* renderer, RuntimeObjects& objects) { world_.HandOver(scene, renderer, objects); },
+                       [this]() { world_.Forget(); });
 }
 
 void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start)
