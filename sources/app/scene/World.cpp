@@ -126,7 +126,7 @@ bool World::RemoveOceanObjects()
     bool removed = false;
     for (size_t i = 0; i < objects_.size();)
     {
-        if (objects_[i] && objects_[i]->AsOceanRenderable())
+        if (objects_[i] && objects_[i]->As<OceanRenderable>())
         {
             objects_.erase(objects_.begin() + static_cast<ptrdiff_t>(i));
 #if WITH_EDITOR
@@ -150,7 +150,7 @@ void World::SetOceanVisible(bool visible)
     bool changed = false;
     for (std::unique_ptr<RenderableObjectBase>& obj : objects_)
     {
-        if (obj && obj->AsOceanRenderable())
+        if (obj && obj->As<OceanRenderable>())
         {
             changed |= obj->IsVisibleGame() != visible;
             obj->SetVisible(visible);
@@ -650,7 +650,7 @@ AABB World::ComputeStaticBounds() const
     float3 mn(0, 0, 0), mx(0, 0, 0);
     for (const auto& obj : objects_)
     {
-        if (!obj || obj->AsOceanRenderable()) { continue; }
+        if (!obj || obj->As<OceanRenderable>()) { continue; }
         const AABB& b = obj->GetWorldBounds();
         if (!b.IsValid()) { continue; }
         const float3 bmn = b.GetMin(), bmx = b.GetMax();

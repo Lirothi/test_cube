@@ -63,7 +63,7 @@ bool SetMaterialSlotCommand::Apply(EditorContext& ctx, const std::string& materi
     size_t slotCount = static_cast<size_t>(slot_) + 1;
     if (RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id_.value))
     {
-        if (GBufferRenderable* gb = runtime->AsGBufferRenderable())
+        if (GBufferRenderable* gb = runtime->As<GBufferRenderable>())
         {
             slotCount = std::max(slotCount, gb->SlotCount());
         }

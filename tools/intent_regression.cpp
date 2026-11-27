@@ -6921,7 +6921,7 @@ void TestWholeObjectMaterial(const EditorActionContext& actionCtx)
     {
         std::unique_ptr<RenderableObjectBase> runtime =
             SceneObjectFactory::CreateStaticMeshFromJson(EditorSceneDocument::ObjectToJson(*document.Find({ 2 })));
-        GBufferRenderable* gb = runtime ? runtime->AsGBufferRenderable() : nullptr;
+        GBufferRenderable* gb = runtime ? runtime->As<GBufferRenderable>() : nullptr;
         Check(gb != nullptr, "the tent builds");
         for (size_t slot = 0; slot < 3; ++slot)
         {

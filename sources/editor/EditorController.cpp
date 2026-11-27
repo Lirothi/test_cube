@@ -4006,7 +4006,7 @@ void EditorController::Draw(
                 {
                     const EditorObject* snapObject = document_.Find(id);
                     const RenderableObjectBase* snapRuntime = scene.FindEditorObject(id.value);
-                    if (snapObject && snapRuntime && snapRuntime->AsRenderableObject())
+                    if (snapObject && snapRuntime && snapRuntime->As<RenderableObject>())
                     {
                         canSnapBelow = true;
                         break;

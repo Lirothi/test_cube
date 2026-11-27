@@ -786,7 +786,7 @@ namespace
             }
             const EditorObject* obj = document.Find(id);
             RenderableObjectBase* runtime = obj ? actionCtx.editor.scene.FindEditorObject(id.value) : nullptr;
-            const GBufferRenderable* gb = runtime ? runtime->AsGBufferRenderable() : nullptr;
+            const GBufferRenderable* gb = runtime ? runtime->As<GBufferRenderable>() : nullptr;
             if (!obj || obj->type != "staticMesh" || !gb || !gb->HasEmissive())
             {
                 ++skipped; // a mesh that does not glow, a zone, the ocean: nothing to switch
@@ -2354,7 +2354,7 @@ namespace
         {
             EditorObject* object = ctx.document.Find(id);
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
-            RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
+            RenderableObject* renderable = runtime ? runtime->As<RenderableObject>() : nullptr;
             if (!object || !renderable)
             {
                 continue;

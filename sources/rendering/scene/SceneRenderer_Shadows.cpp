@@ -349,7 +349,7 @@ namespace
     // not select this frame, and these loops iterate the SHADOW view's visible set, not the camera's.
     UINT ReceiverCasterLod(const RenderableObjectBase* obj, const Math::float3& cameraPos)
     {
-        const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+        const RenderableObject* ro = obj ? obj->As<RenderableObject>() : nullptr;
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
         if (!mesh) { return 0u; }
         return mesh->ClampExplicitLod(

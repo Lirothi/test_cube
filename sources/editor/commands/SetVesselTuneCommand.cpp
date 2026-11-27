@@ -83,7 +83,7 @@ physics::VesselSettings SetVesselTuneCommand::EffectiveSettings(const EditorObje
 bool SetVesselTuneCommand::ShapeOf(EditorContext& ctx, EditorObjectId id, HullShape& out)
 {
     RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
-    const RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+    const RenderableObject* object = base ? base->As<RenderableObject>() : nullptr;
     if (!object) { return false; }
     std::vector<physics::VesselHull> hulls;
     ctx.scene.Physics().CollectHulls(hulls);
@@ -133,7 +133,7 @@ void SetVesselTuneCommand::Apply(EditorContext& ctx, EditorObjectId id, const nl
     // The running copy: the same numbers the factory would give it, and the world rebuilds its body from them.
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
-        RenderableObject* object = base->AsRenderableObject();
+        RenderableObject* object = base->As<RenderableObject>();
         if (object && object->GetVesselSettings())
         {
             object->SetVesselSettings(std::make_shared<const physics::VesselSettings>(EffectiveSettings(*obj)));

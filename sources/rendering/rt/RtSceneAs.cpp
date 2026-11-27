@@ -217,7 +217,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
             // submesh with THAT slot's albedo/MR/params, so palms reflect bark + green fronds
             // instead of slot-0 everywhere. Hit shaders already index per (InstanceID +
             // GeometryIndex). Single-slot objects and GI instance clouds keep the slot-0 path.
-            GBufferRenderable* gb = obj->AsGBufferRenderable();
+            GBufferRenderable* gb = obj->As<GBufferRenderable>();
             const bool perSlot = bindless_.Ready() && gb && gb->MultiSlotDraw();
             // Cache unchanged multi-slot objects, but never share mutable material records between
             // owners: editing one palm must not change its neighbours. BindlessTable independently

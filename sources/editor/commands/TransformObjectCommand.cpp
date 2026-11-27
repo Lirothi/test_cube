@@ -22,7 +22,7 @@ void TransformObjectCommand::ApplyTransform(EditorContext& ctx, EditorObjectId i
     // Runtime objects derived from RenderableObject get the live transform.
     // Non-mesh document entries may still have no RenderableObject runtime.
     RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
-    if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
+    if (RenderableObject* ro = runtime ? runtime->As<RenderableObject>() : nullptr)
     {
         ro->SetPosition(t.position);
         ro->SetRotationEulerDeg(t.rotationDeg);

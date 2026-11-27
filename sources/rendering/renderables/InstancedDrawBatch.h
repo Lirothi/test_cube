@@ -40,7 +40,11 @@ public:
     const AABB& GetWorldBounds() const override { return bounds_; }
 
     size_t InstanceCount() const { return members_.size(); }
-    const InstancedDrawBatch* AsInstancedDrawBatch() const override { return this; }
+    TC_RENDERABLE_CAPABILITY(InstancedDrawBatch); // R7.3: As<InstancedDrawBatch>()
+    void* QueryCapability(const void* tag) override
+    {
+        return tag == &kCapabilityTag ? static_cast<void*>(this) : RenderableObjectBase::QueryCapability(tag);
+    }
 
 private:
     struct SlotBindingScratch

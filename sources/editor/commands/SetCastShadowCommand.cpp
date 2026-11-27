@@ -27,7 +27,7 @@ void SetCastShadowCommand::Apply(EditorContext& ctx, EditorObjectId id, bool cas
     }
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
-        if (RenderableObject* object = base->AsRenderableObject())
+        if (RenderableObject* object = base->As<RenderableObject>())
         {
             const bool changed = object->CastsShadowGame() != castShadow;
             object->SetCastsShadow(castShadow);

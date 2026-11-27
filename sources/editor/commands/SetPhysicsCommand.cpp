@@ -22,7 +22,7 @@ SetPhysicsCommand::SetPhysicsCommand(EditorObjectId id, physics::Motion motion, 
 bool SetPhysicsCommand::VesselAsset(EditorContext& ctx, EditorObjectId id)
 {
     const RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
-    const RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+    const RenderableObject* object = base ? base->As<RenderableObject>() : nullptr;
     return object && object->GetVesselSettings() != nullptr;
 }
 
@@ -53,7 +53,7 @@ void SetPhysicsCommand::Apply(EditorContext& ctx, EditorObjectId id, physics::Mo
     }
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
-        if (RenderableObject* object = base->AsRenderableObject())
+        if (RenderableObject* object = base->As<RenderableObject>())
         {
             physics::CollisionSettings collision = object->GetCollisionSettings();
             if (collision.mass != mass)

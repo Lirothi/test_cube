@@ -239,7 +239,7 @@ void RaceSystem::OnHandOver(Scene& scene, Renderer* renderer, RuntimeObjects& ob
         for (std::unique_ptr<RenderableObjectBase>& one : made)
         {
             if (!one) { continue; }
-            RenderableObject* renderable = one->AsRenderableObject();
+            RenderableObject* renderable = one->As<RenderableObject>();
             // R13.3: the session's -- the race takes its boats out itself (Race::End), the journal after it if it did not.
             if (objects.Spawn(std::move(one), RuntimeObjects::Lifetime::Session) && !vessel) { vessel = renderable; }
         }

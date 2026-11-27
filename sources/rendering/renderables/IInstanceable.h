@@ -7,13 +7,18 @@ class MaterialData;
 struct MaterialParams;
 
 // Optional capability (Step 5c): a renderable that can be drawn instanced exposes this via
-// RenderableObjectBase::AsInstanceable(). Keeps the instancing surface off the base
+// RenderableObjectBase::As<IInstanceable>(). Keeps the instancing surface off the base
 // interface — only renderables with a CPU-instanced shader variant implement it. A run of
-// objects with the same RenderBatchKey() that all return non-null AsInstanceable() collapses
+// objects with the same RenderBatchKey() that all return non-null As<IInstanceable>() collapses
 // into one DrawInstanced per pass.
 class IInstanceable
 {
 public:
+    // Architecture plan R7.3: As<IInstanceable>() (RenderableObjectBase::QueryCapability) -- TC_RENDERABLE_CAPABILITY's
+    // two lines, spelled out: this header does not include the base's.
+    using CapabilityOwner = IInstanceable;
+    static inline const char kCapabilityTag = 0;
+
     virtual ~IInstanceable() = default;
 
     // Instanced (cbuffer-array) material variants of this object's gbuffer + shadow materials.

@@ -622,7 +622,7 @@ void ShadowViewPlanner::UpdateCascades(const ShadowPlanInputs& in, const Camera&
             const Frustum& otherPrev = in.cascadeConfig.accurateCasterCull ? cascadeBoxPrev_[idx] : cascadeAccPrev_[idx];
             const auto settledCaster = [](const RenderableObjectBase* o)
             {
-                const RenderableObject* ro = o->AsRenderableObject();
+                const RenderableObject* ro = o->As<RenderableObject>();
                 return !o->IsDynamicCaster() && !(ro && ro->MovedThisFrame());
             };
             const bool listSurvivors = previousCascadeQueuesCurrent && render::g_csmDumpReadout &&
@@ -644,7 +644,7 @@ void ShadowViewPlanner::UpdateCascades(const ShadowPlanInputs& in, const Camera&
                             char line[200];
                             const float3 mn = b.IsValid() ? b.GetMin() : float3(0, 0, 0);
                             const float3 mx = b.IsValid() ? b.GetMax() : float3(0, 0, 0);
-                            const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                            const InstancedDrawBatch* batch = obj->As<InstancedDrawBatch>();
                             std::snprintf(line, sizeof(line), "  c0 %p members=%u valid=%d box=%d acc=%d min=(%.1f,%.1f,%.1f) max=(%.1f,%.1f,%.1f)\n",
                                           static_cast<const void*>(obj), batch ? static_cast<unsigned>(batch->InstanceCount()) : 1u,
                                           b.IsValid() ? 1 : 0,
@@ -685,7 +685,7 @@ void ShadowViewPlanner::UpdateCascades(const ShadowPlanInputs& in, const Camera&
                         if (!leak) { ++staleLogged; }
                         const float3 mn = b.GetMin(), mx = b.GetMax();
                         const float3 cam = camera.GetPosition();
-                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                        const InstancedDrawBatch* batch = obj->As<InstancedDrawBatch>();
                         char line[400];
                         std::snprintf(line, sizeof(line),
                                       "S14 cascade %zu: %s obj %p members=%u settled=%d dyn=%d boxPrev=%d accPrev=%d boxNow=%d accNow=%d "
@@ -819,7 +819,7 @@ void ShadowViewPlanner::UpdateCascades(const ShadowPlanInputs& in, const Camera&
                     for (const RenderableObjectBase* obj : bucket)
                     {
                         if (!obj) { continue; }
-                        const InstancedDrawBatch* batch = obj->AsInstancedDrawBatch();
+                        const InstancedDrawBatch* batch = obj->As<InstancedDrawBatch>();
                         seen += batch ? static_cast<std::uint32_t>(batch->InstanceCount()) : 1u;
                     }
                 }

@@ -101,7 +101,7 @@ public:
         UpdateUniform(owner, cbHandles_.prevWorld, material, owner.GetPreviousModelMatrix(), cbData);
 
         // B2: pull the params of the slot being recorded (slot 0 outside the multi-slot loop).
-        const GBufferRenderable* gb = owner.AsGBufferRenderable();
+        const GBufferRenderable* gb = owner.As<GBufferRenderable>();
         const MaterialParams defaults{};
         const auto& p = gb ? gb->CurrentDrawParams() : defaults;
         UpdateUniform(owner, cbHandles_.baseColor, material, p.baseColor, cbData);
@@ -134,7 +134,7 @@ public:
         // W5: the CPU-fallback shadow VS reads windStrength from this b0. RenderShadow does NOT
         // clear the dynamic CB allocation, so leaving it unwritten feeds the sway garbage from
         // recycled frame-ring memory (observed as a stray, wildly displaced shadow). Write it.
-        const GBufferRenderable* gb = owner.AsGBufferRenderable();
+        const GBufferRenderable* gb = owner.As<GBufferRenderable>();
         const MaterialParams shadowDefaults{};
         const auto& sp = gb ? gb->DrawParamsForSlot(slot) : shadowDefaults; // plan S8: the caller's slot, never shared state
         UpdateUniform(owner, shadowHandles_.windStrength, material,

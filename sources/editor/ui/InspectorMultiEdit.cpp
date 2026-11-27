@@ -188,7 +188,7 @@ InspectorMultiEdit::Snapshot InspectorMultiEdit::Capture(
                 break;
             }
         }
-        if (const auto* gb = runtime->AsGBufferRenderable())
+        if (const auto* gb = runtime->As<GBufferRenderable>())
         {
             const auto& mp = gb->MaterialParamsRef();
             values["texOffsScale"] = Vector(mp.texOffsScale);
@@ -224,7 +224,7 @@ InspectorMultiEdit::Snapshot InspectorMultiEdit::Capture(
         }
         result.authored.erase("overrides");
         values = result.authored;
-        if (const auto* emitter = runtime ? runtime->AsParticleEmitter() : nullptr)
+        if (const auto* emitter = runtime ? runtime->As<ParticleEmitterObject>() : nullptr)
         {
             const auto& d = emitter->Desc();
             values["spawnRate"] = d.spawnRate;
@@ -307,7 +307,7 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
             for (std::size_t i = 0; i < count; ++i) { if (!a[i].is_number()) { return nullptr; } }
             return &a;
         };
-        if (auto* gb = runtime->AsGBufferRenderable())
+        if (auto* gb = runtime->As<GBufferRenderable>())
         {
             // Every surface key reaches all of the object's material slots (GBufferRenderable::SetObject*).
             if (const Json* v = numbers("texOffsScale", 4)) { gb->SetObjectTexOffsScale(Float4(*v)); }
@@ -341,7 +341,7 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
                 ctx.scene.NotifyEditorShadowCasterVisibilityChanged();
             }
         }
-        if (auto* glass = runtime->AsTransparentStaticMesh())
+        if (auto* glass = runtime->As<TransparentStaticMesh>())
         {
             if (const Json* v = numbers("tint", 3)) { glass->SetTint(Float3(*v)); }
             if (const Json* v = numbers("absorption", 3)) { glass->SetAbsorption(Float3(*v)); }
@@ -351,7 +351,7 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
             if (const auto v = number("roughness")) { glass->SetRoughness(*v); }
             if (const auto v = number("ior")) { glass->SetIor(*v); }
         }
-        if (auto* emitter = runtime->AsParticleEmitter())
+        if (auto* emitter = runtime->As<ParticleEmitterObject>())
         {
             auto& d = emitter->DescRef();
             if (const auto v = number("spawnRate")) { d.spawnRate = *v; }

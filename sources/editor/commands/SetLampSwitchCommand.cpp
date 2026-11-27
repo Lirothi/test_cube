@@ -21,7 +21,7 @@ void SetLampSwitchCommand::Apply(EditorContext& ctx, EditorObjectId id, LampSwit
     }
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
-        if (GBufferRenderable* object = base->AsGBufferRenderable())
+        if (GBufferRenderable* object = base->As<GBufferRenderable>())
         {
             object->SetLampSwitch(lampSwitch);
         }

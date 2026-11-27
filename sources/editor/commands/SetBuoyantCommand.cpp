@@ -30,7 +30,7 @@ void SetBuoyantCommand::Apply(EditorContext& ctx, EditorObjectId id, bool buoyan
     }
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
-        if (RenderableObject* object = base->AsRenderableObject())
+        if (RenderableObject* object = base->As<RenderableObject>())
         {
             object->SetBuoyant(buoyant);
         }

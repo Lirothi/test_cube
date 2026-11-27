@@ -151,7 +151,7 @@ void DrawLodDebug(Renderer* renderer,
         const RenderableObjectBase* base = objPtr.get();
         if (base == nullptr) { continue; }
         if (selectedOnly && !isSelected(base)) { continue; }
-        const RenderableObject* ro = base->AsRenderableObject();
+        const RenderableObject* ro = base->As<RenderableObject>();
         if (ro == nullptr) { continue; }
         const Mesh* mesh = ro->GetMesh();
         if (mesh == nullptr) { continue; }

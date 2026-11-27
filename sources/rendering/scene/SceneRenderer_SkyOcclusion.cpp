@@ -47,7 +47,7 @@ static_assert(sizeof(SkyOcclusionConstants) == 4 * 64 + 5 * 16, "SkyOcclusionCon
 UINT MapLod(const RenderableObjectBase* obj, bool terrain)
 {
     if (terrain || !obj || obj->IsGpuInstancedCaster()) { return 0u; }
-    const RenderableObject* ro = obj->AsRenderableObject();
+    const RenderableObject* ro = obj->As<RenderableObject>();
     const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
     return mesh ? mesh->ClampExplicitLod(2u) : 0u;
 }

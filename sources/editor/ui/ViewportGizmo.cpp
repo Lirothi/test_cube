@@ -260,7 +260,7 @@ namespace
         if (g_spawnPreview.alive && g_spawnPreview.assetKey == record.id.key)
         {
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(kSpawnPreviewId);
-            if (RenderableObject* ro = runtime ? runtime->AsRenderableObject() : nullptr)
+            if (RenderableObject* ro = runtime ? runtime->As<RenderableObject>() : nullptr)
             {
                 // The cheap path: every frame of the drag lands here. Position only -- visibility is
                 // never touched during a drag, see HideSpawnPreview.
@@ -282,7 +282,7 @@ namespace
             return false;
         }
         // Only something to look at: under Simulate a body would push what it floats through and stand in the walk's way.
-        if (RenderableObject* ghost = runtime->AsRenderableObject()) { ghost->SetPhysicsMotion(physics::Motion::None); }
+        if (RenderableObject* ghost = runtime->As<RenderableObject>()) { ghost->SetPhysicsMotion(physics::Motion::None); }
         // The preview casts a shadow like any other object again. It was taken OUT of the caster set
         // as a workaround while one moving caster still forced the whole VSM page pool to re-render;
         // Step 4 of docs/vsm_page_caching_plan.md removed that, so a mover now dirties only its own
@@ -929,7 +929,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
         for (const EditorObjectId id : ctx.selection.Ordered())
         {
             RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
-            RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+            RenderableObject* object = base ? base->As<RenderableObject>() : nullptr;
             if (!object || !ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons)) { continue; }
             for (const Math::float4& p : pontoons)
             {
@@ -1142,7 +1142,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
             if (EditorObject* object = ctx.document.Find(id))
             {
                 RenderableObjectBase* runtime = ctx.scene.FindEditorObject(id.value);
-                RenderableObject* renderable = runtime ? runtime->AsRenderableObject() : nullptr;
+                RenderableObject* renderable = runtime ? runtime->As<RenderableObject>() : nullptr;
 
                 DragSnapshot snapshot;
                 snapshot.id = id;
@@ -1284,7 +1284,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
     const EditorObjectId primary = ctx.selection.Primary();
     EditorObject* primaryObject = ctx.document.Find(primary);
     RenderableObjectBase* primaryRuntime = primaryObject ? ctx.scene.FindEditorObject(primary.value) : nullptr;
-    RenderableObject* primaryRenderable = primaryRuntime ? primaryRuntime->AsRenderableObject() : nullptr;
+    RenderableObject* primaryRenderable = primaryRuntime ? primaryRuntime->As<RenderableObject>() : nullptr;
     EditorObject* primaryEnvironment = nullptr;
     if (!primaryObject)
     {

@@ -90,14 +90,14 @@ void TestMultiEdit(EditorContext& ctx)
     {
         Check(edit.Begin(ctx, history), "gesture continuation");
         doc.Find({1})->properties["metalRough"] = { 0.2f, value };
-        ctx.scene.FindEditorObject(1)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y = value;
+        ctx.scene.FindEditorObject(1)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y = value;
         doc.SetDirty(true);
         edit.End(ctx, history, true);
         Check(history.HistorySize() == 0, "no undo spam during drag");
         const auto& other = *doc.Find({2});
         Check(Near(other.properties["metalRough"][0].get<float>(), 0.8f), "metallic preserved");
         Check(Near(other.properties["metalRough"][1].get<float>(), value), "roughness broadcast");
-        Check(Near(ctx.scene.FindEditorObject(2)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y, value),
+        Check(Near(ctx.scene.FindEditorObject(2)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y, value),
             "live material updated");
         Check(Near(doc.Find({3})->properties["metalRough"][1].get<float>(), 0.1f), "unselected object unchanged");
     }
@@ -106,7 +106,7 @@ void TestMultiEdit(EditorContext& ctx)
     Check(history.HistorySize() == 1, "one undo entry for entire gesture");
     history.Undo(ctx);
     Check(!doc.Find({1})->properties.contains("metalRough"), "undo restores inherited field absence");
-    Check(Near(ctx.scene.FindEditorObject(1)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y, 0.4f),
+    Check(Near(ctx.scene.FindEditorObject(1)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y, 0.4f),
         "undo restores inherited runtime material");
     Check(Near(doc.Find({2})->properties["metalRough"][1].get<float>(), 0.7f), "undo restores second object");
     history.Redo(ctx);
@@ -145,15 +145,15 @@ void TestMultiEdit(EditorContext& ctx)
     ctx.selection.SetOrdered({ EditorObjectId{4}, EditorObjectId{5} }, {4});
     Check(edit.Begin(ctx, history), "mixed preset/inline emitter selection");
     doc.Find({4})->properties["overrides"]["lifetime"] = { 1.0f, 9.0f };
-    ctx.scene.FindEditorObject(4)->AsParticleEmitter()->DescRef().lifetimeMax = 9;
+    ctx.scene.FindEditorObject(4)->As<ParticleEmitterObject>()->DescRef().lifetimeMax = 9;
     doc.SetDirty(true);
     edit.End(ctx, history, false);
     Check(!doc.Find({5})->properties.contains("overrides") &&
         doc.Find({5})->properties["lifetime"] == Json{3.0f, 9.0f}, "emitter override paths and components");
-    Check(ctx.scene.FindEditorObject(5)->AsParticleEmitter()->Desc().lifetimeMax == 9, "emitter runtime");
+    Check(ctx.scene.FindEditorObject(5)->As<ParticleEmitterObject>()->Desc().lifetimeMax == 9, "emitter runtime");
     history.Undo(ctx);
     Check(!doc.Find({4})->properties.contains("overrides") &&
-        ctx.scene.FindEditorObject(5)->AsParticleEmitter()->Desc().lifetimeMax == 4, "emitter undo");
+        ctx.scene.FindEditorObject(5)->As<ParticleEmitterObject>()->Desc().lifetimeMax == 4, "emitter undo");
     std::puts("PASS: preset/inline emitters");
 
     doc.Environment().push_back(MakeObject(6, "pointLight", { { "radius", 5.0f } }));
@@ -215,7 +215,7 @@ public:
     std::string_view Type() const override { return "staticMesh"; }
     void Draw(EditorContext& ctx, EditorCommandStack&, const AssetRegistry&, EditorObject& object) const override
     {
-        auto& mp = ctx.scene.FindEditorObject(object.id.value)->AsGBufferRenderable()->MaterialParamsRef();
+        auto& mp = ctx.scene.FindEditorObject(object.id.value)->As<GBufferRenderable>()->MaterialParamsRef();
         float roughness = mp.metalRough.y;
         if (ImGui::DragFloat("Probe Roughness", &roughness, 0.01f, 0.0f, 1.0f))
         {
@@ -255,7 +255,7 @@ void TestMouseGesture(EditorContext& ctx)
     io.AddMouseButtonEvent(0, true);
     frame();
     Check(ImGui::IsAnyItemActive(), "mouse activates actual inspector widget");
-    const float before = ctx.scene.FindEditorObject(1)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y;
+    const float before = ctx.scene.FindEditorObject(1)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y;
     for (int i = 1; i <= 4; ++i)
     {
         io.AddMousePosEvent(x + i * 5, y);
@@ -264,13 +264,13 @@ void TestMouseGesture(EditorContext& ctx)
     }
     io.AddMouseButtonEvent(0, false);
     frame(); frame();
-    const float after = ctx.scene.FindEditorObject(1)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y;
+    const float after = ctx.scene.FindEditorObject(1)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y;
     Check(!Near(before, after), "actual mouse drag changes roughness");
-    Check(Near(ctx.scene.FindEditorObject(2)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y, after),
+    Check(Near(ctx.scene.FindEditorObject(2)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y, after),
         "actual inspector UI broadcasts changes");
     Check(history.HistorySize() == 1, "mouse release commits one batch undo");
     history.Undo(ctx);
-    Check(Near(ctx.scene.FindEditorObject(1)->AsGBufferRenderable()->MaterialParamsRef().metalRough.y, before),
+    Check(Near(ctx.scene.FindEditorObject(1)->As<GBufferRenderable>()->MaterialParamsRef().metalRough.y, before),
         "actual UI gesture undo");
     std::puts("PASS: ImGui mouse drag -> existing InspectorPanel -> all selected objects -> one undo");
 }

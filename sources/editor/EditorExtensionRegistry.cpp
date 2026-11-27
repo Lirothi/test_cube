@@ -452,7 +452,7 @@ namespace
             EditorObject& obj) const override
         {
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
-            GBufferRenderable* gbMat = runtime ? runtime->AsGBufferRenderable() : nullptr;
+            GBufferRenderable* gbMat = runtime ? runtime->As<GBufferRenderable>() : nullptr;
             size_t slotCount = gbMat ? gbMat->SlotCount() : 0;
 
             // Per-slot material list for multi-material (glTF) objects; a single "Material" combo
@@ -465,7 +465,7 @@ namespace
                 for (const auto id : ctx.selection.Ordered())
                 {
                     auto* other = ctx.scene.FindEditorObject(id.value);
-                    const auto* gb = other ? other->AsGBufferRenderable() : nullptr;
+                    const auto* gb = other ? other->As<GBufferRenderable>() : nullptr;
                     const size_t count = gb ? gb->SlotCount() : 0;
                     multiSlot |= count > 1;
                     slotCount = std::min(slotCount, count);
@@ -546,7 +546,7 @@ namespace
                 ImGui::EndCombo();
             }
 
-            GBufferRenderable* gb = runtime ? runtime->AsGBufferRenderable() : nullptr;
+            GBufferRenderable* gb = runtime ? runtime->As<GBufferRenderable>() : nullptr;
             if (!gb)
             {
                 ImGui::TextDisabled("Material params editable on spawned objects.");
@@ -630,7 +630,7 @@ namespace
         // its card in Play and a race bot count on, against its asset's; it follows a drag before the drag is let go.
         static void DrawBoat(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj, RenderableObjectBase* runtime)
         {
-            RenderableObject* object = runtime ? runtime->AsRenderableObject() : nullptr;
+            RenderableObject* object = runtime ? runtime->As<RenderableObject>() : nullptr;
             const physics::VesselSettings* live = object ? object->GetVesselSettings() : nullptr;
             if (!live) { return; }
             ImGui::SeparatorText("Boat");
@@ -1054,7 +1054,7 @@ namespace
                 {
                     const EditorObject* selected = ctx.document.Find(id);
                     RenderableObjectBase* runtime = selected ? ctx.scene.FindEditorObject(id.value) : nullptr;
-                    const GBufferRenderable* other = runtime ? runtime->AsGBufferRenderable() : nullptr;
+                    const GBufferRenderable* other = runtime ? runtime->As<GBufferRenderable>() : nullptr;
                     if (selected && selected->type == "staticMesh" && other && other->HasEmissive())
                     {
                         composite->Add(std::make_unique<SetLampSwitchCommand>(id, lampSwitch));
@@ -1128,7 +1128,7 @@ namespace
                     : "Floats in Play: the physics world, by its body's volume. Pontoons are not used.");
                 return;
             }
-            RenderableObject* object = runtime ? runtime->AsRenderableObject() : nullptr;
+            RenderableObject* object = runtime ? runtime->As<RenderableObject>() : nullptr;
             std::vector<Math::float4> pontoons;
             if (object && ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons))
             {
@@ -1163,7 +1163,7 @@ namespace
             (void)registry;
 
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
-            TransparentStaticMesh* glass = runtime ? runtime->AsTransparentStaticMesh() : nullptr;
+            TransparentStaticMesh* glass = runtime ? runtime->As<TransparentStaticMesh>() : nullptr;
 
             const Math::float3 tint = JsonFloat3(obj.properties, "tint", Math::float3(0.85f, 0.93f, 1.0f));
             float tintv[3] = { tint.x, tint.y, tint.z };
@@ -1242,7 +1242,7 @@ namespace
             (void)registry;
 
             RenderableObjectBase* runtime = ctx.scene.FindEditorObject(obj.id.value);
-            ParticleEmitterObject* emitter = runtime ? runtime->AsParticleEmitter() : nullptr;
+            ParticleEmitterObject* emitter = runtime ? runtime->As<ParticleEmitterObject>() : nullptr;
             if (!emitter)
             {
                 ImGui::TextDisabled("Particle properties editable on spawned emitters.");

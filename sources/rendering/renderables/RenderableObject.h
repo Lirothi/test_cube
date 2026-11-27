@@ -60,8 +60,11 @@ public:
     virtual ~RenderableObject();
     void DetachFromWorld() override; // buoyancy, water mask, physics (the destructor's three)
 
-    RenderableObject* AsRenderableObject() override { return this; }
-    const RenderableObject* AsRenderableObject() const override { return this; }
+    TC_RENDERABLE_CAPABILITY(RenderableObject); // R7.3: As<RenderableObject>()
+    void* QueryCapability(const void* tag) override
+    {
+        return tag == &kCapabilityTag ? static_cast<void*>(this) : RenderableObjectBase::QueryCapability(tag);
+    }
 
     // Lifecycle
     virtual void Init(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);

@@ -36,7 +36,7 @@ void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_ite
     leadInst_ = nullptr;
     if (mesh_ && mesh_->GetSubmeshCount() > 1 && !members_.empty() && members_[0])
     {
-        const IInstanceable* inst = members_[0]->AsInstanceable();
+        const IInstanceable* inst = members_[0]->As<IInstanceable>();
         if (inst && inst->InstanceSlotCount() > 1)
         {
             leadInst_ = inst;
@@ -205,7 +205,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         for (UINT i = 0; i < count; ++i)
         {
             // Members are guaranteed instanceable by the detection in SceneRenderQueue.
-            if (const IInstanceable* inst = members[base + i]->AsInstanceable())
+            if (const IInstanceable* inst = members[base + i]->As<IInstanceable>())
             {
                 inst->FillInstanceData(dst[i]);
             }

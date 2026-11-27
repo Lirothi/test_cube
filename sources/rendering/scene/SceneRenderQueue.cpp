@@ -296,14 +296,14 @@ void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& b
         // are contiguous. BatchKey only carries slot 0, so multi-slot objects (B2b) must
         // additionally match the lead's full slot set (textures + params bind once per batch).
         const RenderBatchKey leadKey = lead ? lead->BatchKey() : RenderBatchKey{};
-        const IInstanceable* leadInst = lead ? lead->AsInstanceable() : nullptr;
+        const IInstanceable* leadInst = lead ? lead->As<IInstanceable>() : nullptr;
         size_t j = i + 1;
         if (leadInst)
         {
             while (j < bucket.size())
             {
                 RenderableObjectBase* o = bucket[j];
-                const IInstanceable* oInst = o ? o->AsInstanceable() : nullptr;
+                const IInstanceable* oInst = o ? o->As<IInstanceable>() : nullptr;
                 if (!oInst || o->BatchKey() != leadKey || !leadInst->SameInstanceSlots(*oInst))
                 {
                     break;

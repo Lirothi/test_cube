@@ -5421,7 +5421,32 @@ Debug, реестр настроек и таблица графики, вкла�
   fast_boat_13, police_boat ... read the bake»). Контроль A: `Set` не регистрирует — 0 корпусов. Контроль B: связь маски
   ничего не вычёркивает при уходе объекта — Debug-стресс падает на первой смене уровня (0xC0000005, `watermask::Collect`
   читает удалённый корпус: `IsVisibleGame`, `WaterMask.cpp:1789` из `Scene::Sync`); файл возвращён побайтно, Debug и
-  Release пересобраны.
+  Release пересобраны. Коммит `8120bdf4`.
+
+  **R7.2b–d — после R14 (решение 2026-11-27).** Сверено по коду: данные плавучести, физики и судна у объекта читают оба
+  модуля одного слоя (world-side 3.5) друг у друга — `OceanBuoyancy.cpp:329` спрашивает режим тела (`GetPhysicsMotion`:
+  динамическое тело водит физика), `WaterMask.cpp:1772` — осадку судна (`GetVesselSettings`), `PhysicsWorld.cpp:724-854` —
+  плавает ли объект (`IsBuoyant`: кинематическое тело за водой или плавающее динамическое). Таблица в любом из двух модулей
+  заставит другой включать её заголовок вбок — новая строка храповика (`OceanBuoyancy.cpp -> physics/`,
+  `PhysicsWorld.cpp -> ocean/OceanBuoyancy.h`), то есть находку. R14 (физика — сервис игры, «поверхность воды» вместо
+  `OceanRenderable`, лодка и якорь — в игровом слое поверх API) снимает эти встречные чтения; тогда таблицы модулей ложатся
+  без новых рёбер. Порядок волны: R7.3 сейчас, затем R8, R14, R7.2b–d, R10, R11. Механизм связей R7.2a готов для них.
+
+  **Сделано R7.3 (2026-11-27).** Семь семейств виртуальных даункастов базового класса (`AsRenderableObject`,
+  `AsGBufferRenderable`, `AsTransparentStaticMesh`, `AsOceanRenderable`, `AsParticleEmitter`, `AsInstancedDrawBatch`,
+  `AsInstanceable`) — один вопрос `RenderableObjectBase::QueryCapability(tag)` и шаблон `As<T>()`: метка класса — адрес
+  его `kCapabilityTag` (`TC_RENDERABLE_CAPABILITY`, без общего списка типов и без `dynamic_cast`), `As<T>` через
+  `static_assert` отказывает типу, чья метка унаследована от базы. Отвечают шесть классов и интерфейс `IInstanceable`
+  (`GBufferRenderable` отвечает за него, пока построен вариант шейдера для инстансинга — условие прежнего
+  `AsInstanceable`). Базовый класс больше не объявляет `OceanRenderable`, `ParticleEmitterObject`,
+  `TransparentStaticMesh`, `GBufferRenderable`, `InstancedDrawBatch`, `IInstanceable` — нижний слой не называет верхние.
+  94 вызова в 33 файлах заменены механически (`r73_caps.py` рабочей папки), сборка прошла с первого раза. Проверено: Debug,
+  Release_Editor, Release; `check_*.py` и `settings_names.py` 0; CRLF; обе регрессии PASS; виды (эталон / после по очереди:
+  lagoon пол 0.0007 / 0.022 %, эталон-после 0.021 / 0.0005 %; bath 0.056 / 0.026 % и 0.060 / 0.027 %; море 0.061 / 0.0003 %
+  и 0.0012 / 0.062 % — в шуме); Release `--scene-stress=150 --rt-audit` CLEAN, PASS; Debug `--scene-stress=12` CLEAN,
+  ошибок 0. Контроль: океан не отвечает на свою метку — сцена его не находит (каустики, след, плавучесть): lagoon
+  новый-контроль 1.81 / 1.78 % при поле 0.022 %, море 8.89 / 8.90 % при 0.0003 % (на дне нет каустик); файл возвращён
+  побайтно, пересобранный Release — 0.014 и 0.068 %. R7: R7.1, R7.2a, R7.3 сделаны; R7.2b–d — после R14.
 - **R8. Фичи графа и одна точка простоя** (после R4, R6, R16). `SceneRenderer_Graph.cpp` — 3125 строк;
   `ShadowGpuData.cpp` — 5808; `VirtualShadowMap.cpp` — 3410.
 - **R10. Редактор и dev-UI.** **R10.1**: список `drawPanel` (`EditorController.cpp:4704-4785`, 12 вызовов) →

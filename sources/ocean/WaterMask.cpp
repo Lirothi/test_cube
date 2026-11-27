@@ -1734,7 +1734,7 @@ namespace watermask
     {
     public:
         const char* Name() const override { return "water mask"; }
-        void ObjectDetached(RenderableObjectBase& object) override { Unregister(static_cast<const void*>(object.AsRenderableObject())); }
+        void ObjectDetached(RenderableObjectBase& object) override { Unregister(static_cast<const void*>(object.As<RenderableObject>())); }
     };
 
     unsigned LinkBit()

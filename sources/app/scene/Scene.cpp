@@ -159,7 +159,7 @@ bool Scene::ScribbleFrozenStateForAudit()
 {
     for (const auto& obj : objects_)
     {
-        RenderableObject* r = obj ? obj->AsRenderableObject() : nullptr;
+        RenderableObject* r = obj ? obj->As<RenderableObject>() : nullptr;
         if (r)
         {
             // R7.1: every field of the frozen copy in turn (ObjectRenderState), not the model matrix alone -- the audit
@@ -331,7 +331,7 @@ void Scene::Sync(Renderer* renderer)
                 objects_[index]->SyncSwitchesToRender();
                 // The sky occlusion map's (SkyOcclusionMap): a static caster moved (an editor drag) -- not a mover
                 // that animates or rides a render offset (physics, buoyancy), which would redraw it every frame.
-                if (const RenderableObject* ro = objects_[index]->AsRenderableObject();
+                if (const RenderableObject* ro = objects_[index]->As<RenderableObject>();
                     ro && ro->MovedThisFrame() && !ro->HasRenderOffset() && !ro->IsDynamicCaster())
                 {
                     render_.staticCasterMoved_.store(true, std::memory_order_relaxed);

@@ -59,7 +59,7 @@ OceanRenderable* RenderScene::FindOcean(const std::vector<std::unique_ptr<Render
     {
         if (obj)
         {
-            if (OceanRenderable* ocean = obj->AsOceanRenderable())
+            if (OceanRenderable* ocean = obj->As<OceanRenderable>())
             {
                 return ocean;
             }
@@ -167,7 +167,7 @@ void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQu
             const UINT gi = cameraView ? obj->GetCameraInstanceCount() : obj->GetInstanceCasterCount();
             const std::uint32_t instances = gi > 0u ? static_cast<std::uint32_t>(gi) : 1u;
             c.instancesDrawn += instances;
-            const RenderableObject* ro = obj->AsRenderableObject();
+            const RenderableObject* ro = obj->As<RenderableObject>();
             const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
             if (!mesh) { continue; }
             const UINT lodCount = std::max(1u, mesh->GetLodCount());
@@ -471,7 +471,7 @@ void RenderScene::ApplyOcclusion(SceneView& view, std::uint32_t& objectsOccluded
                 ++gpuOwned;
                 return false;
             }
-            RenderableObject* ro = obj->AsRenderableObject();
+            RenderableObject* ro = obj->As<RenderableObject>();
             const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
             if (mesh && mesh->IsChunkedSubmeshes() && !ro->ChunkCameraVisible().empty())
             {

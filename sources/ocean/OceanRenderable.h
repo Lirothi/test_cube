@@ -209,7 +209,11 @@ public:
     // Runs before the render graph — see OceanSimulation::EnsureFrameResources.
     void EnsureSimulationResources(Renderer* renderer);
     void OnMaterialHotReload(Renderer* renderer) override;
-    OceanRenderable* AsOceanRenderable() override { return this; }
+    TC_RENDERABLE_CAPABILITY(OceanRenderable); // R7.3: As<OceanRenderable>()
+    void* QueryCapability(const void* tag) override
+    {
+        return tag == &kCapabilityTag ? static_cast<void*>(this) : RenderableObject::QueryCapability(tag);
+    }
 
     OceanSimulation* GetSimulation() { return simulation_; }
     const OceanSimulation* GetSimulation() const { return simulation_; }

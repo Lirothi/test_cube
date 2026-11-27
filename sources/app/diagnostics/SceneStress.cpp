@@ -560,7 +560,7 @@ private:
         {
 #if WITH_EDITOR
             auto* object = scene_.FindEditorObject(722);
-            auto* gb = object ? object->AsGBufferRenderable() : nullptr;
+            auto* gb = object ? object->As<GBufferRenderable>() : nullptr;
             if (!gb)
             {
                 std::snprintf(faultDetail_, sizeof(faultDetail_), "wind_test sphere #722 missing");

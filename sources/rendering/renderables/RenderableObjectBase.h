@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef> // offsetof: ObjectRenderState's field table (R7.1)
 #include <cstdint>
+#include <type_traits> // As<T>: the capability's owner (R7.3)
 #include <vector>
 #include <d3d12.h>
 
@@ -53,15 +54,15 @@ class Camera;
 class Material;
 class MaterialData;
 class Mesh;
-class IInstanceable;
 class RenderableObject;
 class RenderableObjectBase;
 namespace physics { void NotifyChanged(RenderableObjectBase* object); }
-class InstancedDrawBatch;
-class GBufferRenderable;
-class TransparentStaticMesh;
-class OceanRenderable;
-class ParticleEmitterObject;
+
+// Architecture plan R7.3: a class that answers As<Class>() (RenderableObjectBase::QueryCapability) -- its tag (one address
+// a class, no central list of types) and its name as the owner of that tag (As<T> refuses a T whose tag is a base's).
+#define TC_RENDERABLE_CAPABILITY(Class) \
+    using CapabilityOwner = Class;      \
+    static inline const char kCapabilityTag = 0
 
 enum class SceneObjectSyncReason
 {
@@ -232,10 +233,8 @@ public:
     // instances). Such casters are excluded from the GPU cull / ExecuteIndirect path and keep
     // drawing through their own RenderShadow even when indirect shadows are enabled.
     virtual bool IsGpuInstancedCaster() const { return false; }
-    // Internal RTTI (the engine forbids dynamic_cast): non-null only for an InstancedDrawBatch,
-    // the queue's stand-in for a run of identical objects. A count of queue ENTRIES sees one where
-    // there are InstanceCount() casters; anything that counts casters has to look through it.
-    virtual const InstancedDrawBatch* AsInstancedDrawBatch() const { return nullptr; }
+    // An InstancedDrawBatch (As<InstancedDrawBatch>, R7.3) is the queue's stand-in for a run of identical objects: a count
+    // of queue ENTRIES sees one where there are InstanceCount() casters; anything that counts casters has to look through it.
 
     // GI→VSM (Step 1): access to a GPU-instanced caster's own per-instance transform buffer, so
     // the GI-scatter compute can fold each instance into the consolidated ShadowGpuData caster
@@ -280,22 +279,26 @@ public:
     // (mesh-less / transient renderables sort together). See RenderBatchKey above.
     virtual RenderBatchKey BatchKey() const { return {}; }
 
-    // Step 4/5c: auto-instancing capability. Non-null only for renderables that have a
-    // CPU-instanced shader variant. A run of objects sharing BatchKey() that all return
-    // non-null collapses into one DrawInstanced per pass. Returned pointer is owned by the
-    // renderable; valid for the object's lifetime. See IInstanceable.
-    virtual const IInstanceable* AsInstanceable() const { return nullptr; }
-
-    // Internal RTTI: checked downcast to RenderableObject without C++ runtime
-    // type info (mirrors AsInstanceable). Null for renderables not derived from
-    // RenderableObject.
-    virtual RenderableObject* AsRenderableObject() { return nullptr; }
-    virtual const RenderableObject* AsRenderableObject() const { return nullptr; }
-    virtual GBufferRenderable* AsGBufferRenderable() { return nullptr; }
-    virtual const GBufferRenderable* AsGBufferRenderable() const { return nullptr; }
-    virtual TransparentStaticMesh* AsTransparentStaticMesh() { return nullptr; }
-    virtual OceanRenderable* AsOceanRenderable() { return nullptr; }
-    virtual ParticleEmitterObject* AsParticleEmitter() { return nullptr; } // E3: editor inspector
+    // Architecture plan R7.3: what this object is beyond the base -- one question for every type (a capability), asked by
+    // the tag of the class that answers (TC_RENDERABLE_CAPABILITY): As<RenderableObject>(), As<OceanRenderable>(),
+    // As<ParticleEmitterObject>() (the editor's inspector), As<InstancedDrawBatch>() (the queue's stand-in for a run of
+    // identical objects: anything that counts casters looks through it), As<IInstanceable>() (Step 4/5c: auto-instancing,
+    // non-null only with a CPU-instanced shader variant; a run sharing BatchKey() that all answer collapses into one
+    // DrawInstanced per pass) ... -- null when it is not one. The engine forbids dynamic_cast; the base names none of the
+    // types (seven As* families named them before, the ocean's and the particles' among them).
+    virtual void* QueryCapability(const void* tag) { (void)tag; return nullptr; }
+    template <class T>
+    T* As()
+    {
+        static_assert(std::is_same_v<typename T::CapabilityOwner, T>, "As<T>: T answers no capability of its own (TC_RENDERABLE_CAPABILITY)");
+        return static_cast<T*>(QueryCapability(&T::kCapabilityTag));
+    }
+    template <class T>
+    const T* As() const
+    {
+        static_assert(std::is_same_v<typename T::CapabilityOwner, T>, "As<T>: T answers no capability of its own (TC_RENDERABLE_CAPABILITY)");
+        return static_cast<const T*>(const_cast<RenderableObjectBase*>(this)->QueryCapability(&T::kCapabilityTag));
+    }
 
     virtual const AABB& GetWorldBounds() const
     {

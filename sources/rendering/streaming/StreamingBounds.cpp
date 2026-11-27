@@ -36,8 +36,8 @@ bool BoundsBuilder::Step(const SceneFrameData& frame, const Frustum& frustum, fl
     {
         const RenderableObjectBase* base = (*frame.objects)[cursor_].get();
         if (!base) { continue; }
-        const GBufferRenderable* gb = base->AsGBufferRenderable();
-        const RenderableObject* ro = base->AsRenderableObject();
+        const GBufferRenderable* gb = base->As<GBufferRenderable>();
+        const RenderableObject* ro = base->As<RenderableObject>();
         if (!gb || !ro) { continue; }
         const AABB& box = base->GetWorldBounds();
         if (!box.IsValid()) { continue; }

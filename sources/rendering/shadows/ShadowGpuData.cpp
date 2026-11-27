@@ -268,7 +268,7 @@ static_assert(sizeof(ShadowCullCB) == 48 + sizeof(ShadowGpuData::ViewMask),
 // keep the exact pre-B3 one-slot layout.
 static size_t CasterSlots(const RenderableObjectBase* obj)
 {
-    const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+    const RenderableObject* ro = obj ? obj->As<RenderableObject>() : nullptr;
     const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
     const size_t n = mesh ? mesh->GetSubmeshCount() : 1u;
     return n > 0 ? n : 1u;
@@ -287,7 +287,7 @@ bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
     // Only the switch: a type that never casts (the ocean) stays out -- its mesh would make the merged caster VB/IB
     // heterogeneous and turn VSM's single-draw page render off (measured: the per-page loop, 45 ms CPU on wind_test).
     if (!obj || !obj->IsVisible() || obj->IsGpuInstancedCaster()) { return false; }
-    const RenderableObject* ro = obj->AsRenderableObject();
+    const RenderableObject* ro = obj->As<RenderableObject>();
     if (!ro || ro->GetMesh() == nullptr) { return false; }
     return obj->CastsShadow() || ro->ShadowSwitchedOff();
 }
@@ -298,7 +298,7 @@ bool ShadowGpuData::IsGiFoldable(const RenderableObjectBase* obj)
     // shadow, exposes a per-instance transform SRV + non-zero instance count, and has a mesh.
     if (!obj || !obj->IsVisible() || !obj->CastsShadow() || !obj->IsGpuInstancedCaster()) { return false; }
     if (obj->GetInstanceCasterSrv().ptr == 0 || obj->GetInstanceCasterCount() == 0) { return false; }
-    const RenderableObject* ro = obj->AsRenderableObject();
+    const RenderableObject* ro = obj->As<RenderableObject>();
     return ro && ro->GetMesh() != nullptr;
 }
 
@@ -309,14 +309,14 @@ void ShadowGpuData::FillInstance(const RenderableObjectBase* obj, render::Instan
 
     // Instanceable casters carry the full per-instance payload; use it so the entry matches
     // the CPU-marshalled path byte-for-byte.
-    if (const IInstanceable* inst = obj->AsInstanceable())
+    if (const IInstanceable* inst = obj->As<IInstanceable>())
     {
         inst->FillInstanceData(out);
         return;
     }
 
     // Other casters: shadows are depth-only, so only world/prevWorld matter.
-    if (const RenderableObject* ro = obj->AsRenderableObject())
+    if (const RenderableObject* ro = obj->As<RenderableObject>())
     {
         out.world = ro->GetModelMatrix().m;
         out.prevWorld = ro->GetPreviousModelMatrix().m;
@@ -336,8 +336,8 @@ std::uint32_t ShadowGpuData::MaterialSlotOf(const Mesh* mesh, size_t ordinal, si
 
 void ShadowGpuData::FillInstanceSlot(const RenderableObjectBase* obj, size_t ordinal, render::InstancePerObject& out)
 {
-    const GBufferRenderable* gb = obj ? obj->AsGBufferRenderable() : nullptr;
-    const RenderableObject* ro = obj ? obj->AsRenderableObject() : nullptr;
+    const GBufferRenderable* gb = obj ? obj->As<GBufferRenderable>() : nullptr;
+    const RenderableObject* ro = obj ? obj->As<RenderableObject>() : nullptr;
     if (gb && ro)
     {
         std::memset(&out, 0, sizeof(out));
@@ -364,7 +364,7 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
 {
     std::memset(&out, 0, sizeof(out));
     if (!obj) { return; }
-    const RenderableObject* ro = obj->AsRenderableObject();
+    const RenderableObject* ro = obj->As<RenderableObject>();
     if (!ro) { return; }
 
     const AABB& b = ro->GetWorldBounds();
@@ -506,7 +506,7 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
         if (!IsCaster(obj)) { continue; }
         const std::uint32_t slots = static_cast<std::uint32_t>(CasterSlots(obj));
         if (idx + slots > casterLod_.size()) { break; }
-        const RenderableObject* ro = obj->AsRenderableObject();
+        const RenderableObject* ro = obj->As<RenderableObject>();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
         if (!mesh) { idx += slots; continue; }
 
@@ -2037,7 +2037,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         RenderableObjectBase* obj = objPtr.get();
         if (!IsCaster(obj)) { continue; }
-        const RenderableObject* ro = obj->AsRenderableObject();
+        const RenderableObject* ro = obj->As<RenderableObject>();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsCaster requires it
         const size_t slots = CasterSlots(obj);
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
@@ -2045,7 +2045,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             meshToGroup.emplace(mesh, nextGroup);
             meshPath.emplace(mesh, ro ? ro->GetGeometryPath() : std::string()); // Tessy N2: named when it has no clusters
             if (mesh->IsChunkedSubmeshes()) { ++chunkedMeshes; }
-            GBufferRenderable* gb = obj->AsGBufferRenderable();
+            GBufferRenderable* gb = obj->As<GBufferRenderable>();
             for (size_t s = 0; s < slots; ++s)
             {
                 // S4: the group's G-buffer identity = this FIRST object's material slot for the
@@ -2093,7 +2093,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
         render::InstancePerObject inst{};
         render::CasterBounds bnd{};
-        const GBufferRenderable* gbFoliage = obj->AsGBufferRenderable();
+        const GBufferRenderable* gbFoliage = obj->As<GBufferRenderable>();
         FillInstance(obj, inst);
         FillBounds(obj, bnd);
         // W5: a wind caster animates in the VERTEX shader — its transform never changes, so the
@@ -2150,7 +2150,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             // rebuild would see a mismatch on EVERY caster and re-fill the whole scene once.
             if (idx < cpuMaterialVersion_.size())
             {
-                const GBufferRenderable* gbVer = obj->AsGBufferRenderable();
+                const GBufferRenderable* gbVer = obj->As<GBufferRenderable>();
                 cpuMaterialVersion_[idx] = gbVer ? gbVer->MaterialContentVersion() : 0u;
             }
             casterMesh[idx] = mesh;
@@ -2187,7 +2187,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         const std::uint32_t giCount = obj->GetInstanceCasterCount();
         giFoldableInstances_ += giCount;
         if (numGroups >= kMaxGroups) { giCapped = true; continue; } // over cap -> CPU tail (Step 5)
-        const RenderableObject* ro = obj->AsRenderableObject();
+        const RenderableObject* ro = obj->As<RenderableObject>();
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr; // non-null: IsGiFoldable requires it
         if (!mesh) { continue; }
 
@@ -2203,7 +2203,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             gc.aabbCenter = DirectX::XMFLOAT4(c.x, c.y, c.z, 0.0f);
             gc.aabbExtent = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
         }
-        if (const GBufferRenderable* giGb = obj->AsGBufferRenderable())
+        if (const GBufferRenderable* giGb = obj->As<GBufferRenderable>())
         {
             if (giGb->CurrentDrawParams().windStrength > 0.0f) // W5
             {
@@ -2736,7 +2736,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
             const size_t slots = CasterSlots(obj); // B3: an object owns `slots` consecutive caster ids
             casterWalk_.push_back(CasterWalk{ obj, static_cast<std::uint32_t>(newStatic), static_cast<std::uint32_t>(slots) });
             newStatic += slots;
-            const RenderableObject* ro = obj->AsRenderableObject();
+            const RenderableObject* ro = obj->As<RenderableObject>();
             if (ro && ro->MovedThisFrame()) { ++movers; }
         }
         else if (IsGiFoldable(obj)) { newGiInstances += obj->GetInstanceCasterCount(); }
@@ -2798,11 +2798,11 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // Step 7: only movers are recomputed + re-uploaded. A static caster is skipped entirely
         // (no fill, no compare) — the per-frame cost is O(movers), not O(casters). The move
         // signal tracks transform changes, which is all a depth-only shadow entry depends on.
-        const RenderableObject* ro = obj->AsRenderableObject();
+        const RenderableObject* ro = obj->As<RenderableObject>();
         bool windFadeChanged = false;
         if (windFadeActive)
         {
-            const GBufferRenderable* gbW = obj->AsGBufferRenderable();
+            const GBufferRenderable* gbW = obj->As<GBufferRenderable>();
             if (gbW && gbW->GetWindStrength() > 0.0f)
             {
                 // Quantised so a slowly panning camera does not re-upload every caster every frame
@@ -2817,7 +2817,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // re-uploaded and never appeared. One integer compare per caster; the O(movers) property
         // that Step 7 exists for is about the FILL and the UPLOAD, and both still only happen on a
         // real change.
-        const GBufferRenderable* gbMat = obj->AsGBufferRenderable();
+        const GBufferRenderable* gbMat = obj->As<GBufferRenderable>();
         const std::uint32_t matVersion = gbMat ? gbMat->MaterialContentVersion() : 0u;
         const bool materialChanged = idx < cpuMaterialVersion_.size() &&
                                      cpuMaterialVersion_[idx] != matVersion;
@@ -3787,12 +3787,12 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                 const D3D12_CPU_DESCRIPTOR_HANDLE giSrv = gc.obj->GetInstanceCasterSrv();
                 // Fold in the object's model matrix so the stored world matches gbuffer_inst_csm's
                 // mul(instanceWorld, objectWorld); read the object's transform fresh each frame.
-                const RenderableObject* ro = gc.obj->AsRenderableObject();
+                const RenderableObject* ro = gc.obj->As<RenderableObject>();
                 DirectX::XMFLOAT4X4 objWorld = ro ? ro->GetModelMatrix().m : DirectX::XMFLOAT4X4{};
                 if (!ro) { DirectX::XMStoreFloat4x4(&objWorld, DirectX::XMMatrixIdentity()); }
                 // W5: the same per-object windStrength gbuffer_inst.hlsl feeds its BaseVS, so a
                 // flagged GPU-instanced object sways identically in the gbuffer and in shadow.
-                const GBufferRenderable* giGb = gc.obj->AsGBufferRenderable();
+                const GBufferRenderable* giGb = gc.obj->As<GBufferRenderable>();
                 const float giWind = giGb
                     ? giGb->EffectiveWindStrength(giGb->CurrentDrawParams().windStrength) : 0.0f;
                 const float giFoliage = giGb ? giGb->FoliageForSlot(0) : 0.0f;

@@ -779,7 +779,7 @@ void SceneRenderer::Pass_GlassReflGbuffer(Renderer* renderer, RenderGraphPassCon
                 // Only glass (TransparentStaticMesh) samples glassReflection — skip the ocean
                 // and any other transparent renderable so they don't flood the glass G-buffer.
                 if (!base || !base->UsesGlassReflection()) { continue; }
-                auto* ro = base->AsRenderableObject();
+                auto* ro = base->As<RenderableObject>();
                 if (!ro || !ro->GetMesh()) { continue; }
                 Math::mat4 world = ro->GetModelMatrix();
                 auto ocb = renderer->GetFrameResource()->AllocDynamic(sizeof(world), render::kConstantBufferAlignment);

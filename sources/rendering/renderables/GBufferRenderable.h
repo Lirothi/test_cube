@@ -22,8 +22,19 @@ public:
     // Game thread plan G4c: the transform's hand-over plus the material params' (SyncMaterialsToRender).
     void SyncSceneState(SceneObjectSyncReason reason) override;
 
-    GBufferRenderable* AsGBufferRenderable() override { return this; }
-    const GBufferRenderable* AsGBufferRenderable() const override { return this; }
+    // R7.3: As<GBufferRenderable>(), and As<IInstanceable>() while an instanced shader variant was built at Init (the
+    // default gbuffer shader; B2b: multi-slot objects instance too -- their variant carries INSTCB_SLOT_PARAMS and the
+    // batch loops submeshes, InstancedDrawBatch::RecordInstanced).
+    TC_RENDERABLE_CAPABILITY(GBufferRenderable);
+    void* QueryCapability(const void* tag) override
+    {
+        if (tag == &kCapabilityTag) { return static_cast<void*>(this); }
+        if (tag == &IInstanceable::kCapabilityTag)
+        {
+            return instancedGraphicsMaterial_ ? static_cast<void*>(static_cast<IInstanceable*>(this)) : nullptr;
+        }
+        return RenderableObject::QueryCapability(tag);
+    }
 
     // A counter the GPU-side instance mirror watches, bumped by every mutable path into
     // `matParamses_` below.
@@ -262,14 +273,7 @@ public:
     // merges differing slot sets.
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), GetGraphicsMaterial(), GetMaterialData() }; }
 
-    // Step 5c: auto-instancing capability via IInstanceable. Non-null only when an instanced
-    // shader variant was built at Init (i.e. the default gbuffer shader). B2b: multi-slot
-    // objects instance too — their variant carries INSTCB_SLOT_PARAMS and the batch loops
-    // submeshes (see InstancedDrawBatch::RecordInstanced).
-    const IInstanceable* AsInstanceable() const override
-    {
-        return instancedGraphicsMaterial_ ? this : nullptr;
-    }
+    // Step 5c: the auto-instancing capability is As<IInstanceable>() (QueryCapability above, R7.3).
     Material* InstancedGraphicsMaterial() const override { return instancedGraphicsMaterial_.get(); }
     Material* InstancedShadowMaterial() const override { return instancedShadowMaterial_.get(); }
 

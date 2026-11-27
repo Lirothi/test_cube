@@ -22,7 +22,11 @@ public:
 
     void Tick(float deltaTime) override;
 
-    TransparentStaticMesh* AsTransparentStaticMesh() override { return this; }
+    TC_RENDERABLE_CAPABILITY(TransparentStaticMesh); // R7.3: As<TransparentStaticMesh>()
+    void* QueryCapability(const void* tag) override
+    {
+        return tag == &kCapabilityTag ? static_cast<void*>(this) : RenderableObject::QueryCapability(tag);
+    }
 
     void SetTint(const float3& tint) { tint_ = tint; }
     void SetAbsorption(const float3& absorption) { absorption_ = absorption; }
