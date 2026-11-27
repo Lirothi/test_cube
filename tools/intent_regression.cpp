@@ -3496,6 +3496,94 @@ void TestEnvironmentSectionsWriteAsBefore()
     }
 }
 
+// Architecture plan R9.6a: jsonfield::Value / As read a level's field exactly as value() / get<T>() do -- the same
+// conversions, so the editor shows and applies what the loader read -- and give the fallback exactly where those throw;
+// inside a StrictScope (the level loader) they throw as before. Every case is checked against the library itself.
+struct LevelFieldTally
+{
+    int reads = 0;
+    int libraryThrows = 0;
+    std::string mismatch;
+};
+
+template <class T>
+void CheckLevelField(const Json& object, const char* key, T fallback, const char* type, LevelFieldTally& tally)
+{
+    const auto fail = [&](const char* what) {
+        if (tally.mismatch.empty()) { tally.mismatch = std::string(type) + " '" + key + "': " + what; }
+    };
+    ++tally.reads;
+    bool throws = false;
+    T expected = fallback;
+    try { expected = object.value(key, fallback); }
+    catch (const Json::exception&) { throws = true; }
+    tally.libraryThrows += throws ? 1 : 0;
+    if (!(jsonfield::Value(object, key, fallback) == (throws ? fallback : expected)))
+    {
+        fail("the editor's read is neither value()'s nor the fallback");
+    }
+    bool strictThrows = false;
+    T strict = fallback;
+    {
+        jsonfield::StrictScope scope;
+        try { strict = jsonfield::Value(object, key, fallback); }
+        catch (const Json::exception&) { strictThrows = true; }
+    }
+    if (strictThrows != throws || (!throws && !(strict == expected))) { fail("the loader's read is not value()'s"); }
+    if (object.is_object() && object.contains(key))
+    {
+        const Json& element = object.at(key);
+        bool getThrows = false;
+        T got = fallback;
+        try { got = element.get<T>(); }
+        catch (const Json::exception&) { getThrows = true; }
+        if (!(jsonfield::As(element, fallback) == (getThrows ? fallback : got))) { fail("As is neither get<T>()'s nor the fallback"); }
+        bool asStrictThrows = false;
+        {
+            jsonfield::StrictScope scope;
+            try { (void)jsonfield::As(element, fallback); }
+            catch (const Json::exception&) { asStrictThrows = true; }
+        }
+        if (asStrictThrows != getThrows) { fail("As under the loader's scope does not throw where get<T>() does"); }
+    }
+}
+
+enum class LevelFieldEnum : int { A = 0, B = 3 };
+
+void TestALevelFieldReadsAsValueDid()
+{
+    const Json level = Json::parse(R"({"t": true, "f": false, "i": 3, "n": -2, "u": 4000000000, "x": 3.7, "s": "text",
+                                       "z": null, "a": [1, 2], "o": {"k": 1}})");
+    LevelFieldTally tally;
+    const char* keys[] = { "t", "f", "i", "n", "u", "x", "s", "z", "a", "o", "absent" };
+    for (const Json* object : { &level, &level.at("a"), &level.at("s") }) // an object, and two that are not
+    {
+        for (const char* key : keys)
+        {
+            CheckLevelField<bool>(*object, key, true, "bool", tally);
+            CheckLevelField<int>(*object, key, -7, "int", tally);
+            CheckLevelField<std::uint32_t>(*object, key, 9u, "uint32", tally);
+            CheckLevelField<float>(*object, key, 0.25f, "float", tally);
+            CheckLevelField<double>(*object, key, 0.5, "double", tally);
+            CheckLevelField<std::int64_t>(*object, key, -9, "int64", tally);
+            CheckLevelField<std::uint64_t>(*object, key, 11u, "uint64", tally);
+            CheckLevelField<LevelFieldEnum>(*object, key, LevelFieldEnum::B, "enum", tally);
+            CheckLevelField<std::string>(*object, key, std::string("fb"), "string", tally);
+            CheckLevelField<Json>(*object, key, Json("fb"), "json", tally);
+        }
+    }
+    Check(tally.mismatch.empty(), "a level's field reads as value() / get<T>() did, the fallback where they throw -- " +
+                                      tally.mismatch);
+    Check(tally.libraryThrows >= 50 && tally.reads - tally.libraryThrows >= 50,
+          "the matrix holds both reads the library converts and reads it throws on");
+    Check(jsonfield::Value(level, "x", 0) == 3 && jsonfield::Value(level, "t", 0.0f) == 1.0f &&
+              jsonfield::Value(level, "t", 0.5) == 0.5,
+          "value()'s own conversions: 3.7 is 3 as an int, true is 1 as a float, true is no double");
+    Check(jsonfield::Value(level, "s", "fb") == "text" && jsonfield::Value(level, "i", "fb") == "fb",
+          "a literal fallback reads a string");
+    Check(!jsonfield::StrictScope::Active(), "the loader's scope ends with its block");
+}
+
 void TestJsonFieldsAreReadWithoutThrowing()
 {
     const Json h = Json::parse(R"({"build": 4, "zip": null, "version": 1.5, "published": 1, "levels": "a.json",
@@ -6696,6 +6784,7 @@ int main(int argc, char** argv)
         TestKeyTableReadsAsTheHandCodeDid(); // R9.1
         TestEnvironmentSectionsWriteAsBefore(); // R9.2
         TestJsonFieldsAreReadWithoutThrowing();
+        TestALevelFieldReadsAsValueDid(); // R9.6a
         TestSettingsSeriesRestores();
         TestModelRepliesOfAnyShape();
         TestTheModelServersEndpointAnswerAndStop();

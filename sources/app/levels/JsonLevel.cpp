@@ -4,6 +4,7 @@
 #include "app/levels/LevelEnvironment.h" // R9.4: the environment's one road
 
 #include "core/diagnostics/BootProfile.h"
+#include "core/JsonField.h" // R9.6: StrictScope
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 
@@ -181,6 +182,10 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     // made before it stays (the caller still finalizes and submits it), the editor's document already holds the whole
     // file (ResetFromLevelJson runs first), so nothing is lost by saving. Only nlohmann's own exceptions: a loader's
     // failure (a device, a file) is not a malformed level and goes on up as before.
+    // R9.6: the readers this load shares with the editor (jsonfield::Value / As -- the key tables, the object factory,
+    // the lights) give a key of another type its fallback in the editor's frame; inside this scope they throw, as
+    // value() always did, so the load still stops at that key with the file named.
+    jsonfield::StrictScope strict;
     try
     {
         LoadFromSource_(ctx);

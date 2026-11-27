@@ -4822,7 +4822,54 @@ Debug, реестр настроек и таблица графики, вкла�
   `settings_names` 0, CRLF, обе регрессии PASS; Release `--scene-stress=150 --rt-audit` — CLEAN, `rt audit: PASS` (455 кадров, 74
   объекта), 604 простоя GPU — как у эталона, строки миграции в логе на каждой загрузке старого уровня.
   Не покрыто: уровень с ключом локальной экспозиции только в `colorPipeline` и вне зажимов камеры (таких нет);
-  правка Post Process в живом редакторе на таком уровне — только тестом документа.
+  правка Post Process в живом редакторе на таком уровне — только тестом документа. Коммит `bfea2e3b`.
+
+  **Подшаги R9.6 (2026-11-27).** Опись (`r96_inventory.py` рабочей папки): 392 вызова `value(ключ, умолчание)` в
+  39 файлах (на 11-18 — 770 в 53; часть ушла в 10.18, M-шагах и R9.1-R9.5). Под перехватом, который называет файл,
+  уже сейчас: загрузка уровня (`JsonLevel::Load` — свои 25 вызовов и всё, что он зовёт), материал
+  (`MaterialDataManager`, 27), профиль кука (`Cook.cpp`, 18), таблица scalability (7), память бота
+  (`BotMemory::Load`, 6); частицы — M6. Опасное — то же чтение данных уровня ВНЕ загрузчика: редактор держит JSON
+  уровня в документе и читает его в кадре (панели; `EnvironmentRuntime` → `levelenv::Apply*` → таблицы ключей;
+  фабрика объектов в командах вставки, отмены удаления, порождения), где бросок — `std::terminate` вместе с
+  несохранённым уровнем. `jsonfield::Get` этим чтениям не годится: целое из `3.0` у него — умолчание, а `value()`
+  загрузчика даёт 3, и редактор показал бы и применил не то, что загрузил рантайм. Поэтому:
+  - **R9.6a** — `jsonfield::Value(object, key, fallback)` и `jsonfield::As<T>(element, fallback)`: преобразования
+    `value()` / `get<T>()` в точности (int из 3.7 — 3; `float` и `int` из `true` — 1; `double` из `true` — бросок),
+    но там, где они бросили бы, — умолчание; кроме потока внутри `jsonfield::StrictScope` — там бросок, как был.
+    Область открывает загрузчик уровня, поэтому ключ чужого типа по-прежнему останавливает загрузку с именем
+    файла. Тест: матрица значений JSON × типов против самого `value()`.
+  - **R9.6b** — общие читатели уровня, которых зовут и загрузчик, и редактор: `KeyTable` (строки Bool, Int, UInt,
+    Float, String; `get<float>` в Float3), `Custom`-строки секций (`SkyAtmosphere`, `VolumetricCloud`,
+    `FinishCamera`), `levelenv` (свет: параметр `JsonRead` уходит — режим даёт область), `SceneObjectFactory`,
+    `SceneObjectRegistry`, `CollisionJson`. Гейт — тест «дороги редактора»: секции и объект, где каждый ключ чужого
+    типа, читаются без броска; под областью загрузчика — бросок.
+  - **R9.6c** — читатели документа в редакторе: Inspector, Outliner, гизмо, кадрирование, зоны, команды,
+    `EditorController`, `EditorSceneDocument`, `EnvironmentRuntime`, `EditorExtensionRegistry`; файлы ассетов,
+    которые редактор читает в кадре: `mesh.json` (Mesh Editor, `CollisionEditorTab`, `LodSwitchReport`,
+    `MeshRestPose`, `MeshManager`), материал (Material Editor), манифест импорта (`ImportPanel`, `AssetRegistry`).
+  - **R9.6d** — входы от программ вне уровня: MCP (`EditorMcpServer`, 41), действия модели (`EditorActionRegistry`,
+    `EditorIntentResolver`, `EditorSceneQuery`), `App.cpp` (`ReplicateLevelObjects`), `BootTools`. Где запрос уже
+    под перехватом, который отвечает ошибкой, — `value()` остаётся (неверный аргумент MCP — ошибка вызывающему, а
+    не молчаливое умолчание); остальное — `Value`.
+  Готово для каждого подшага: процедура R9.0 (байты сохранения 16 уровней = эталон), дампы реестра 16 уровней =
+  эталон, `check_gate.py`; тесты `TestAMaterialOfTheWrongTypeIsAnErrorNotACrash` и
+  `TestJsonFieldsAreReadWithoutThrowing` проходят без правки; картинка — где менялся читатель кадра.
+
+  **Сделано R9.6a (2026-11-27).** `core/JsonField.h`: `jsonfield::Value(object, key, fallback)` (и строковый литерал
+  как умолчание), `jsonfield::As(element, fallback)`, `jsonfield::StrictScope` (счётчик на поток). Какие значения
+  `get<T>()` берёт без броска — по `from_json` нашего `json.hpp`, сверено по тексту: `bool` — только boolean;
+  собственные числовые типы библиотеки (`double`, `std::int64_t`, `std::uint64_t`) и перечисление — только число;
+  прочие арифметические (`float`, `int`, `std::uint32_t`) — число или boolean; строка — только строка; `json` —
+  что угодно. `JsonLevel::Load` открывает область на время `LoadFromSource_`. `jsonfield::Get` не тронут: у него
+  другое правило (целое — только целое) и свой тест. Тест `TestALevelFieldReadsAsValueDid`: объект, массив и
+  строка как «объект» × 11 ключей (true, false, 3, -2, 4e9, 3.7, строка, null, массив, объект, отсутствует) × 10
+  типов (bool, int, uint32, float, double, int64, uint64, перечисление, строка, json) — 330 чтений, каждое сверено
+  с самим `value()`: где он не бросает, `Value` даёт то же; где бросает — умолчание, а под областью — бросок; то
+  же для `As` против `get<T>()`. Контроль: `float` / `int` перестают брать boolean (как у `jsonfield::Get`) — FAIL
+  «... -- int 't': the editor's read is neither value()'s nor the fallback»; файл возвращён байт в байт, mtime
+  тронут. Читателей подшаг не меняет (через `Value` ещё никто не читает), поэтому байты сохранения, дампы и
+  картинка — в R9.6b, где появятся первые; действие области в живой загрузке — там же. Три конфигурации,
+  `check_*.py` 0, `settings_names` 0, CRLF, обе регрессии PASS.
 - **R6. `Scene` → `World` + `RenderScene`** (`Scene.cpp` — 4080 строк). **R6.1**: `ShadowViewPlanner` в
   `rendering/shadows` (каскады, клипмап, SDSM-кэш, ёмкость локальных видов). **R6.2**: игровое из `Scene` —
   `RaceRef()` (24 вызова в 5 файлах), `SyncRaceBoats`, камеры судна и зрителя — в `game::`, владеет сессия.
