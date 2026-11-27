@@ -48,6 +48,10 @@
 #include "rendering/core/RenderConstants.h" // g_cleanCapture: no selection outline in a `clean` shot
 #include "rendering/core/Screenshot.h"
 #include "ui/ImGuiLayer.h" // g_suppressImGuiDraw: the `clean` screenshot
+#include "app/scene/SceneObjectFactory.h" // R9.3: editor_guide lists the object key tables
+#include "core/schema/KeyTable.h"
+#include "rendering/meshes/StaticMesh.h"
+#include "rendering/renderables/TransparentStaticMesh.h"
 
 namespace
 {
@@ -392,6 +396,32 @@ namespace editormcp
         // Tessy) run at the hand-over (ServiceHandOver from App's Sync), where both halves may be read.
         std::mutex g_handOverMutex;
         std::vector<std::function<void()>> g_handOverWork;
+
+        // Architecture plan R9.3: editor_guide's last section -- an object's keys in the level file, read from the SAME
+        // tables the level loader walks (SceneObjectFactory::StaticMeshKeys / TransparentMeshKeys), so the list cannot
+        // fall behind the loader.
+        template <class S>
+        void ListKeys(std::string& out, const char* type, const schema::Table<S>& table)
+        {
+            out += std::string("\n") + type + ":\n";
+            for (const schema::Key<S>& k : table.keys)
+            {
+                out += std::string("- ") + k.key;
+                if (k.label) { out += std::string(" (") + k.label + ")"; }
+                if (k.hint) { out += std::string(": ") + k.hint; }
+                out += "\n";
+            }
+        }
+
+        std::string LevelFileKeysGuide()
+        {
+            std::string out = "\n\nLEVEL FILE KEYS -- what an object of the level file may say, beside \"type\", \"name\", "
+                              "\"position\", \"scale\" and \"mesh\" / \"model\" / \"material(s)\" (a mesh.json's keys fold "
+                              "under the object's own, the object wins):\n";
+            ListKeys(out, "staticMesh", SceneObjectFactory::StaticMeshKeys());
+            ListKeys(out, "transparentMesh", SceneObjectFactory::TransparentMeshKeys());
+            return out;
+        }
 
         // Architecture plan R9.0: get_readouts carries the open level's state -- `level` {path, loading, dirty} -- when
         // the editor registered its level host; without one (the gate) the app's answer goes out as it came.
@@ -1073,7 +1103,8 @@ namespace editormcp
                 "cannot do something, it is C++ in sources/editor/intent/EditorActionRegistry.cpp "
                 "and can be added.\n\n" +
                 intentprompt::BuildSystemPrompt(ctx.document, actionCtx.assets, vocabulary,
-                    "Claude Code (over MCP)", gbnf);
+                    "Claude Code (over MCP)", gbnf) +
+                LevelFileKeysGuide();
             return result;
         }
 

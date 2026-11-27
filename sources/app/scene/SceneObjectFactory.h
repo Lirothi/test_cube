@@ -15,7 +15,9 @@
 
 class RenderableObjectBase;
 class StaticMesh;
+class TransparentStaticMesh;
 class Scene;
+namespace schema { template <class S> struct Table; }
 
 // Shared creation of the data-driven mesh object types (staticMesh,
 // transparentMesh) used by both level loading and (later) the editor. Demo- or
@@ -32,9 +34,13 @@ namespace SceneObjectFactory
     nlohmann::json ResolveMeshAsset(const nlohmann::json& objectJson,
                                     MeshAssetScanCache* cache = nullptr);
 
-    // Apply the shared staticMesh JSON fields to an already-created StaticMesh
-    // (or subclass): rotationDeg, texOffsScale, normalStrength, useMR,
-    // metalRough, renderLayer.
+    // Architecture plan R9.3: a static mesh object's keys (the object's, with its mesh.json folded in), one row each
+    // with its label and hint (core/schema/KeyTable.h) -- what the factory reads and MCP editor_guide lists.
+    const schema::Table<StaticMesh>& StaticMeshKeys();
+    const schema::Table<TransparentStaticMesh>& TransparentMeshKeys(); // the same for a glass object
+
+    // Apply the shared staticMesh JSON fields to an already-created StaticMesh (or subclass): every row of
+    // StaticMeshKeys(), in order.
     void ApplyStaticMeshJsonProperties(StaticMesh& mesh, const nlohmann::json& objectJson);
 
     // Create a plain StaticMesh from a level/editor object JSON entry: model,

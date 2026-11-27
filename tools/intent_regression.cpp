@@ -1425,6 +1425,15 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
               "get_readouts carries the open level (path, loading, dirty) beside what the app measured: " + text(withLevel));
         editormcp::SetLevelHost(nullptr);
     }
+    // Architecture plan R9.3: editor_guide ends with the level file's object keys, from the loader's own tables.
+    {
+        const std::optional<json> guide = call(1291, "tools/call", { { "name", "editor_guide" } });
+        const std::string g = text(guide);
+        Check(g.find("LEVEL FILE KEYS") != std::string::npos &&
+              g.find("- castShadow (Cast shadow): false = out of every shadow") != std::string::npos &&
+              g.find("transparentMesh:\n- recomputeNormalSlots") != std::string::npos,
+              "editor_guide lists the level file's object keys from SceneObjectFactory's tables");
+    }
     const std::optional<json> profile = call(1202, "tools/call", { { "name", "get_profile" },
         { "arguments", { { "filter", "VSM" }, { "reset", true } } } });
     Check(text(profile) == "{\"gpu\":[]}" && runtime.profileFilter == "VSM" && runtime.profileReset,
