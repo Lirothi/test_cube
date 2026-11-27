@@ -10,7 +10,7 @@
 #include "core/diagnostics/DiagPaths.h"
 #include <mimalloc.h>
 #include "physics/PhysicsWorld.h"
-#include "app/scene/VesselGates.h" // R14.3a: the boats' gates beside the physics'
+#include "app/scene/PlayerGates.h" // R14.3a / R14.6: the world layer's gates (the boats', the player's) beside the physics'
 #include "app/App.h"
 #include "app/BuildVersion.h"
 #include "app/GpuRequirements.h"
@@ -352,7 +352,7 @@ int RunHarnessTools(const char* lpCmdLine)
                     const char* end = std::strchr(value, ' ');
                     name = end ? std::string(value, end) : std::string(value);
                 }
-                return physics::RunGates(name, VesselGates());
+                return physics::RunGates(name, SceneGates());
             }
         }
 

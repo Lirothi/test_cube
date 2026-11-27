@@ -87,7 +87,7 @@
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
-#include "app/scene/VesselGates.h"            // R14.3a: and the boats' gates
+#include "app/scene/PlayerGates.h"            // R14.3a / R14.6: and the world layer's gates (the boats', the player's)
 #include "app/game/RaceBot.h"                  // TestRaceCourseAndBot
 #include "app/game/RaceCourseJson.h"
 #include "editor/commands/SetVesselTuneCommand.h" // TestRaceCourseAndBot: a boat's own numbers
@@ -930,9 +930,9 @@ void TestPhysicsRoad(const EditorActionContext& actionCtx)
 {
     using nlohmann::json;
     EditorContext& ctx = actionCtx.editor;
-    Check(physics::RunGates("", VesselGates()) == 0, "the physics gates pass, the boats' too (session log: physics gate:)");
+    Check(physics::RunGates("", SceneGates()) == 0, "the physics gates pass, the boats' and the player's too (session log: physics gate:)");
     // R14.3a: by name too -- a RunGates that dropped the gates handed to it would pass the line above with the boat's gate unrun.
-    Check(physics::RunGates("vessel", VesselGates()) == 0, "the boat's gate runs, handed in by its layer (physics gate: vessel)");
+    Check(physics::RunGates("vessel", SceneGates()) == 0, "the boat's gate runs, handed in by its layer (physics gate: vessel)");
 
     EditorCommandStack stack;
     DirectMcpHost host(actionCtx, stack);
