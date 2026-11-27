@@ -180,12 +180,16 @@ namespace
 class HandOverObjects final : public RuntimeObjects
 {
 public:
-    HandOverObjects(World& world, Renderer* renderer) : world_(world), renderer_(renderer) {}
+    // R13.3: `journal` / `rollBack` -- the session's journal (Scene::OpenSessionJournal): a session object made while
+    // `record` is written into the first, and whatever goes is crossed out of both.
+    HandOverObjects(World& world, Renderer* renderer, std::vector<const RenderableObjectBase*>& journal,
+                    std::vector<const RenderableObjectBase*>& rollBack, bool record)
+        : world_(world), renderer_(renderer), journal_(journal), rollBack_(rollBack), record_(record) {}
     HandOverObjects(const HandOverObjects&) = delete;
     HandOverObjects& operator=(const HandOverObjects&) = delete;
     ~HandOverObjects() { Flush(); }
 
-    RenderableObjectBase* Spawn(std::unique_ptr<RenderableObjectBase> object) override
+    RenderableObjectBase* Spawn(std::unique_ptr<RenderableObjectBase> object, Lifetime lifetime) override
     {
         if (!renderer_ || !object || flushed_) { return nullptr; }
         if (!begun_)
@@ -194,13 +198,20 @@ public:
             begun_ = true;
         }
         RenderableObjectBase* raw = object.get();
-        return world_.AddInitializedObject(*renderer_, uploads_, std::move(object)) ? raw : nullptr;
+        if (!world_.AddInitializedObject(*renderer_, uploads_, std::move(object))) { return nullptr; }
+        if (lifetime == Lifetime::Session && record_) { journal_.push_back(raw); }
+        return raw;
     }
 
     std::size_t Despawn(const std::vector<const RenderableObjectBase*>& gone) override
     {
         // As the race's own road did: no renderer (a tool's scene), nothing goes.
         if (!renderer_ || gone.empty()) { return 0; }
+        for (const RenderableObjectBase* object : gone)
+        {
+            std::erase(journal_, object); // R13.3: gone by the road -- nothing for the journal to take out
+            std::erase(rollBack_, object);
+        }
         return world_.RemoveRuntimeObjects(*renderer_, gone);
     }
 
@@ -215,6 +226,9 @@ public:
 private:
     World& world_;
     Renderer* renderer_ = nullptr;
+    std::vector<const RenderableObjectBase*>& journal_;
+    std::vector<const RenderableObjectBase*>& rollBack_;
+    bool record_ = false;
     UploadBatch uploads_;
     bool begun_ = false;
     bool failed_ = false;
@@ -240,8 +254,15 @@ void Scene::Sync(Renderer* renderer)
     // they read the frame's CalcMatrices before.
     physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
     // The race's own boats (game::Race): made for a race where its grid is, gone when it is over -- here, the render half parked.
-    HandOverObjects runtimeObjects(*this, renderer); // R13.1: the one road objects come and go by while the world runs
+    HandOverObjects runtimeObjects(*this, renderer, sessionSpawned_, sessionRollBack_, sessionJournalOpen_); // R13.1, R13.3
     if (gameHandOver_) { gameHandOver_(renderer, runtimeObjects); } // R6.2a: the game's part (game::PlayWorld::HandOver)
+    // R13.3: a session that stopped -- after its systems took out their own (just above), what it made and left goes.
+    if (!sessionRollBack_.empty())
+    {
+        const std::vector<const RenderableObjectBase*> left = std::exchange(sessionRollBack_, {});
+        const std::size_t removed = runtimeObjects.Despawn(left);
+        LOG_INFO(logging::LogCategory::Scene, "session: {} object(s) made in Play and left in the world taken out at Stop", removed);
+    }
     // The boats' wake on the water (ocean/OceanWake): every hull as this frame draws it, with its footprint (resolved from
     // its geometry once a shape, then a cache hit), to the ocean's render half -- parked here.
     if (OceanRenderable* ocean = FindOceanRenderable())
@@ -506,4 +527,16 @@ void Scene::Clear()
     TC_CHECK_GAME_PARKED_OR_SYNC("Scene::Clear");
     render_.Clear(); // R6.4a: the render half first -- every pointer it holds into the objects below goes
     World::Clear();  // R6.4b: the game half -- the objects, their ids, the lights, the sky
+    sessionSpawned_.clear();  // R13.3: the journal's objects went with the level (a session goes on in the next one)
+    sessionRollBack_.clear();
+}
+
+void Scene::CloseSessionJournal()
+{
+    // R13.3: Stop. What the session made and its makers have not taken out yet goes at the next hand-over, after the
+    // game's own part -- the race queued its boats a moment ago (Race::End) and takes them out there first.
+    TC_CHECK_GAME("Scene::CloseSessionJournal");
+    sessionJournalOpen_ = false;
+    sessionRollBack_.insert(sessionRollBack_.end(), sessionSpawned_.begin(), sessionSpawned_.end());
+    sessionSpawned_.clear();
 }

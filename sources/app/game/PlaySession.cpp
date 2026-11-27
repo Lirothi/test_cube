@@ -79,6 +79,7 @@ void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, c
     status_.clear();
     if (input.IsMouseCaptured()) { input.SetMouseCapture(false); }
     PlaceAtStart(renderer, scene, start);
+    scene.OpenSessionJournal(); // R13.3: what the session makes is written down, and taken out after Stop if left
     const game::RaceCourse none{};
     for (game::GameSystem* system : world_.Systems()) { system->OnSessionBegin(scene, course ? *course : none); } // R13.2
 }
@@ -90,6 +91,7 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     possessed_ = false;
     LeaveHelm(scene, false);
     for (game::GameSystem* system : world_.Systems()) { system->OnSessionEnd(scene); } // R13.2: the race's pilots off, its boats to go
+    scene.CloseSessionJournal(); // R13.3: what the session made and left goes at the next hand-over, after the systems' own
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
     game::ScriptCamera() = scriptCameraBefore_;
@@ -291,6 +293,7 @@ void PlaySession::StopForLevel(Scene& scene, InputManager& input)
     world_.vesselCamera.End();
     playing_ = false;
     possessed_ = false;
+    scene.CloseSessionJournal(); // R13.3: the level took what the session made with it; nothing is left to write down
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
     game::ScriptCamera() = scriptCameraBefore_;

@@ -70,11 +70,27 @@ public:
     // Both halves: the render half's pointers into the objects first, then the world (World::Clear).
     void Clear();
 
+    // R13.3: the play session's journal. Open (Play starts): every object the hand-over's road makes for the session
+    // (RuntimeObjects::Lifetime::Session) is written down, and whatever goes by the road is crossed out. Close (Stop):
+    // at the next hand-over, after the game's own part (its systems take theirs out first), what is still written down
+    // goes -- the session leaves nothing it made in the world. A level that goes takes the journal's objects with it.
+    void OpenSessionJournal()
+    {
+        TC_CHECK_GAME("Scene::OpenSessionJournal");
+        sessionJournalOpen_ = true;
+    }
+    void CloseSessionJournal();
+
 private:
     void StaticSetChanged() override; // R6.4b: World::BumpStaticSetVersion -> RenderScene::ApplyStaticSet
     void SyncObjectsForRender(SceneObjectSyncReason reason);
 
     std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
+    // R13.3: the session's journal -- what the running session made (crossed out as it goes), what a closed one left to
+    // take out at the next hand-over.
+    std::vector<const RenderableObjectBase*> sessionSpawned_;
+    std::vector<const RenderableObjectBase*> sessionRollBack_;
+    bool sessionJournalOpen_ = false;
 
     // R6.4a: the render half -- what Sync hands it and what it keeps to draw (RenderScene.h). Declared after the world's
     // containers it holds references to (World, the base, is made first and goes last).

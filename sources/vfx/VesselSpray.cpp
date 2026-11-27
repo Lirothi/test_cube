@@ -115,7 +115,8 @@ bool VesselSpray::Create(RuntimeObjects& objects, Set& set)
         desc.spawnRate = 0.0f;
         auto emitter = std::make_unique<ParticleEmitterObject>(desc);
         ParticleEmitterObject* raw = emitter.get();
-        if (!objects.Spawn(std::move(emitter))) { ok = false; return nullptr; }
+        // R13.3: an effect of the world -- kept for the next boat that comes, Play or not (its set is taken over).
+        if (!objects.Spawn(std::move(emitter), RuntimeObjects::Lifetime::World)) { ok = false; return nullptr; }
         return raw;
     };
     const uint32_t base = static_cast<uint32_t>(sets_.size()) * 16u + 7u;

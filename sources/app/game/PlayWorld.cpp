@@ -240,7 +240,8 @@ void RaceSystem::OnHandOver(Scene& scene, Renderer* renderer, RuntimeObjects& ob
         {
             if (!one) { continue; }
             RenderableObject* renderable = one->AsRenderableObject();
-            if (objects.Spawn(std::move(one)) && !vessel) { vessel = renderable; }
+            // R13.3: the session's -- the race takes its boats out itself (Race::End), the journal after it if it did not.
+            if (objects.Spawn(std::move(one), RuntimeObjects::Lifetime::Session) && !vessel) { vessel = renderable; }
         }
         race.OnSpawned(spawn.ticket, vessel);
         LOG_INFO(logging::LogCategory::Scene, "race: a boat {} for the grid", vessel ? "made" : "NOT made");

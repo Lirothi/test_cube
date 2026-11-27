@@ -13,12 +13,17 @@ class RenderableObjectBase;
 class RuntimeObjects
 {
 public:
+    // R13.3: how long an object made here lives. Session: it belongs to the play session that made it -- written in the
+    // session's journal while one runs (Scene::OpenSessionJournal), and taken out after Stop if its maker left it in the
+    // world. World: an effect of the world (a boat's spray), kept until the level goes, Play or not.
+    enum class Lifetime : unsigned char { Session, World };
+
     // A runtime object (no editor identity, never saved) into the world, initialized into the hand-over's one upload
     // batch -- it goes to the GPU, waited for, once the hand-over's objects are made (before anything draws them). The
     // object as it is in the world, or null: not made (no renderer, the batch could not start, its Init refused).
-    virtual RenderableObjectBase* Spawn(std::unique_ptr<RenderableObjectBase> object) = 0;
+    virtual RenderableObjectBase* Spawn(std::unique_ptr<RenderableObjectBase> object, Lifetime lifetime) = 0;
     // Runtime objects out of the world now, their physics entries with them, their GPU resources once the frames in flight
-    // are done (World::RemoveRuntimeObjects). How many went.
+    // are done (World::RemoveRuntimeObjects); crossed out of the session's journal. How many went.
     virtual std::size_t Despawn(const std::vector<const RenderableObjectBase*>& gone) = 0;
 
 protected:
