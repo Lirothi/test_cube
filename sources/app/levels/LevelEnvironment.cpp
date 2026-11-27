@@ -151,17 +151,10 @@ void ApplyColorPipeline(Scene& scene, const json* section)
     scene.SetColorPipeline(color);
 }
 
-void ApplyCameraExposure(Scene& scene, const json* exposure, const json* colorPipeline)
+void ApplyCameraExposure(Scene& scene, const json* exposure)
 {
     render::CameraExposureSettings settings{};
     if (exposure) { render::PhotographicSettingsJson::ApplyOverrides(*exposure, settings); }
-    // The P3B local-exposure fields used to live in `colorPipeline`; lift them if this level still writes them there.
-    // Done AFTER the camera parse so an explicit new-block value wins.
-    if (colorPipeline)
-    {
-        render::PhotographicSettingsJson::MigrateLegacyLocalExposure(
-            *colorPipeline, exposure ? *exposure : json::object(), settings);
-    }
     scene.SetCameraExposure(settings);
 }
 } // namespace levelenv

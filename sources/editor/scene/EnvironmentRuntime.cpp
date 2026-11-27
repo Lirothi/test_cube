@@ -209,19 +209,9 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     {
         // P1: rebuilt from defaults on every edit rather than patched in place, so clearing a
         // field in the inspector returns it to the documented default instead of keeping whatever
-        // the previous edit left behind.
-        // The P3B fields moved here from the Color Pipeline object; an unconverted document still
-        // has them over there, so lift them rather than snapping the level back to neutral.
-        const nlohmann::json* colorPipeline = nullptr;
-        for (const EditorObject& other : ctx.document.Environment())
-        {
-            if (other.type == "colorPipeline")
-            {
-                colorPipeline = &other.properties;
-                break;
-            }
-        }
-        levelenv::ApplyCameraExposure(ctx.scene, &p, colorPipeline); // R9.4: the level loader's road
+        // the previous edit left behind. R9.5: the P3B fields an older level kept in its colour
+        // pipeline were moved onto the camera when the document was read (levelmigrate::Migrate).
+        levelenv::ApplyCameraExposure(ctx.scene, &p); // R9.4: the level loader's road
     }
     else if (env.type == "gtao")
     {
@@ -247,9 +237,10 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
             const auto it = p.find(key);
             return (it != p.end() && it->is_object()) ? *it : kEmpty;
         };
-        // R9.4: the level loader's road, group by group. The camera here takes NO lift from the colour pipeline's old
-        // local-exposure keys, which the loader does (PostProcessSection) -- as before; R9.5 decides it.
-        levelenv::ApplyCameraExposure(ctx.scene, &sub("cameraExposure"), nullptr);
+        // R9.4: the level loader's road, group by group. R9.5: the colour pipeline's old P3B local-exposure keys are
+        // the camera's in the document already (levelmigrate::Migrate) -- before, an edit here dropped them where only
+        // the colour pipeline still carried them, while the loader lifted them, and the level looked other than it loaded.
+        levelenv::ApplyCameraExposure(ctx.scene, &sub("cameraExposure"));
         levelenv::ApplyColorPipeline(ctx.scene, &sub("colorPipeline"));
         levelenv::ApplyGtao(ctx.scene, &sub("gtao"));
         levelenv::ApplyHeightFog(ctx.scene, &sub("heightFog"));
@@ -266,16 +257,8 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
     {
         // P3C: rebuilt from defaults on every edit, same reasoning as cameraExposure above.
         levelenv::ApplyColorPipeline(ctx.scene, &p); // R9.4
-        // Legacy documents still carry the local-exposure fields here; keep the camera in step so
-        // an old level behaves the same as before the move until it is re-saved.
-        for (const EditorObject& other : ctx.document.Environment())
-        {
-            if (other.type == "cameraExposure")
-            {
-                levelenv::ApplyCameraExposure(ctx.scene, &other.properties, &p);
-                break;
-            }
-        }
+        // R9.5: no camera re-apply here any more -- the local-exposure keys an older level kept in its colour
+        // pipeline are the camera's in the document (levelmigrate::Migrate), and this object's keys reach no camera.
     }
     else if (env.type == "camera")
     {

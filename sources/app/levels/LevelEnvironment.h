@@ -34,7 +34,7 @@ void ApplyGtao(Scene& scene, const nlohmann::json* section);
 void ApplyHeightFog(Scene& scene, const nlohmann::json* section);
 void ApplyBloom(Scene& scene, const nlohmann::json* section);
 void ApplyColorPipeline(Scene& scene, const nlohmann::json* section);
-// The camera, and the P3B local-exposure keys a level written before them still carries in its colour pipeline
-// (`colorPipeline`, null = no lift; MigrateLegacyLocalExposure).
-void ApplyCameraExposure(Scene& scene, const nlohmann::json* exposure, const nlohmann::json* colorPipeline);
+// The camera. R9.5: the P3B local-exposure keys an older level carries in its colour pipeline were moved onto the
+// camera by levelmigrate::Migrate before this reads it.
+void ApplyCameraExposure(Scene& scene, const nlohmann::json* exposure);
 } // namespace levelenv

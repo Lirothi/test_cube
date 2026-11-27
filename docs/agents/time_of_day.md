@@ -20,9 +20,9 @@ before the switch, the incoming one from 0 after it. Anything that writes `Scene
 overwritten on the next Tick: knobs go through `Scene::SunLightRef()`, a direction through
 `Scene::SetSunToward()` (which solves the time and the path).
 
-Levels written before 2026-10-13 carry the sun as `directionalLight`. Exactly two places know that:
-`JsonLevel` (the runtime reader) and `EditorSceneDocument`'s section table, both through
-`TimeOfDaySettingsJson::FromDirectionalLight`, which solves the simple path's time and yaw so the sun
+Levels written before 2026-10-13 carry the sun as `directionalLight`. Exactly one place knows that since
+R9.5 (2026-11-27): `levelmigrate::Migrate` (`app/levels/LevelMigration.cpp`), run first by `JsonLevel` (the
+runtime reader) and `EditorSceneDocument`, through `TimeOfDaySettingsJson::FromDirectionalLight`, which solves the simple path's time and yaw so the sun
 stands exactly where it was authored -- the frame does not change (measured, within noise). A level takes
 the new section the next time it is saved. `--tod-legacy-light` reads the old section as before (runtime
 only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--time-freeze`,

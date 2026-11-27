@@ -33,40 +33,8 @@
 #include "app/scene/DirectionalLightJson.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
 
-// P8B: the level-wide look settings live under one "postProcess" section now. A level written
-// before that carries them as top-level sections, and must keep loading unchanged -- so this
-// prefers the folded section and falls back to the legacy key, per group. Both forms are read
-// forever; only the WRITER changed.
-namespace
-{
-    const nlohmann::json* PostProcessSection(const nlohmann::json& level, const char* key)
-    {
-        const auto folded = level.find("postProcess");
-        if (folded != level.end() && folded->is_object())
-        {
-            const auto sub = folded->find(key);
-            if (sub != folded->end() && sub->is_object())
-            {
-                return &(*sub);
-            }
-        }
-        const auto legacy = level.find(key);
-        return (legacy != level.end() && legacy->is_object()) ? &(*legacy) : nullptr;
-    }
-
-    // The height fog's section used to be called "atmosphere", which read as the SKY atmosphere and
-    // cost a working day of chasing the wrong subsystem: the Inspector group carrying these very
-    // fields was even labelled "Aerial Perspective". The canonical name is "heightFog" (UE's
-    // ExponentialHeightFogComponent); every level written before the rename is still read here, and
-    // takes the new name the next time it is saved. Nothing else in the codebase looks at the old
-    // spelling -- this is the ONE place that knows about it, deliberately.
-    const nlohmann::json* HeightFogSection(const nlohmann::json& level)
-    {
-        if (const nlohmann::json* section = PostProcessSection(level, "heightFog")) { return section; }
-        return PostProcessSection(level, "atmosphere");
-    }
-}
 #pragma warning(pop)
+#include "app/levels/LevelMigration.h" // R9.5: the older formats, read in one place
 
 #include "rendering/view/Camera.h"
 #include "rendering/core/PhotographicSettingsJson.h"
@@ -94,6 +62,16 @@ namespace
 std::wstring Widen(const std::string& s)
 {
     return vfs::Widen(s);
+}
+
+// P8B: the level-wide look settings live under one "postProcess" section. An older level's top-level groups and the
+// height fog's old name "atmosphere" were moved under it by levelmigrate::Migrate before anything here reads the file.
+const json* PostProcessGroup(const json& level, const char* group)
+{
+    const auto folded = level.find("postProcess");
+    if (folded == level.end() || !folded->is_object()) { return nullptr; }
+    const auto sub = folded->find(group);
+    return (sub != folded->end() && sub->is_object()) ? &*sub : nullptr;
 }
 
 float3 ToFloat3(const json& j, const float3& def = float3(0.0f, 0.0f, 0.0f))
@@ -252,6 +230,16 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
             return;
         }
     }
+    // R9.5: an older level's keys become today's here, once; everything below (and the editor's document) reads only
+    // today's names. `--tod-legacy-light` keeps the old sun section for the legacy branch below.
+    levelmigrate::Report migration;
+    j = levelmigrate::Migrate(std::move(j), g_timeOfDayConvertsDirectionalLight, &migration);
+    if (!migration.moved.empty())
+    {
+        std::string moved;
+        for (const std::string& m : migration.moved) { moved += (moved.empty() ? "" : "; ") + m; }
+        LOG_INFO(logging::LogCategory::Scene, "level '{}' is in an older format, read as today's: {}", sourcePath_, moved);
+    }
 
 #if WITH_EDITOR
     if (ctx.editorDocument)
@@ -354,29 +342,26 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
 
     // Time-of-day plan: the level's light is its TIME OF DAY -- the entity hands the scene's one
     // directional light to the sun by day and to the moon by night (app/scene/TimeOfDay.h). A level
-    // written before it (2026-10-13) carries its sun as `directionalLight`; that section is converted
-    // here, the sun solved onto the simple path exactly where it was authored, and the file takes the
-    // new section when it is next saved. This and EditorSceneDocument's section table are the ONLY two
-    // places that know the old key. `--tod-legacy-light` reads it as before (rollback, and the "before"
-    // of the conversion check). Reset on every load, so no level inherits the previous one's clock.
+    // written before it (2026-10-13) carries its sun as `directionalLight`; levelmigrate::Migrate converted that
+    // section above, the sun solved onto the simple path exactly where it was authored, and the file takes the
+    // new section when it is next saved. `--tod-legacy-light` keeps the old section and reads it as before (rollback,
+    // and the "before" of the conversion check). Reset on every load, so no level inherits the previous one's clock.
     {
         TimeOfDaySettings timeOfDay{};
         DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
         const auto todIt = j.find("timeOfDay");
-        const auto dlIt = j.find("directionalLight");
+        const auto dlIt = j.find("directionalLight"); // only under --tod-legacy-light: Migrate erased it otherwise
         const bool haveTimeOfDay = todIt != j.end() && todIt->is_object();
         const bool haveSun = dlIt != j.end() && dlIt->is_object();
         if (haveTimeOfDay)
         {
             TimeOfDaySettingsJson::ApplyOverrides(*todIt, timeOfDay, sun);
-        }
-        else if (haveSun && g_timeOfDayConvertsDirectionalLight)
-        {
-            const json converted = TimeOfDaySettingsJson::FromDirectionalLight(*dlIt);
-            TimeOfDaySettingsJson::ApplyOverrides(converted, timeOfDay, sun);
-            LOG_INFO(logging::LogCategory::Scene,
-                     "level light: directionalLight -> timeOfDay (time {:.4f} h, path yaw {:.3f}, tilt {:.2f})",
-                     timeOfDay.timeHours, timeOfDay.pathYawDeg, timeOfDay.pathTiltDeg);
+            if (migration.sunConverted)
+            {
+                LOG_INFO(logging::LogCategory::Scene,
+                         "level light: directionalLight -> timeOfDay (time {:.4f} h, path yaw {:.3f}, tilt {:.2f})",
+                         timeOfDay.timeHours, timeOfDay.pathYawDeg, timeOfDay.pathTiltDeg);
+            }
         }
         else if (haveSun)
         {
@@ -393,9 +378,9 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     // compatibility story for old levels, so there is deliberately no fallback to the directional
     // light's legacy `exposure` here. P4 is where those two meet.
     {
-        // R9.4: the camera over its defaults, then the P3B local-exposure keys a level written before them still
-        // carries in its colour pipeline (lifted AFTER the camera parse, so an explicit new-block value wins).
-        levelenv::ApplyCameraExposure(scene, PostProcessSection(j, "cameraExposure"), PostProcessSection(j, "colorPipeline"));
+        // R9.4: the camera over its defaults. R9.5: the P3B local-exposure keys an older level still carries in its
+        // colour pipeline were moved onto the camera by levelmigrate::Migrate (one the camera owns wins).
+        levelenv::ApplyCameraExposure(scene, PostProcessGroup(j, "cameraExposure"));
         // Plan section 6.4: a level load invalidates the adapted value. Without this the camera
         // would spend the first seconds of a new level adapting down from the previous one's
         // brightness, which is exactly the "spend seconds adapting from stale history" that
@@ -406,17 +391,17 @@ void JsonLevel::LoadFromSource_(const LevelLoadContext& ctx)
     // P6B: screen-space AO. A level without the section keeps the struct defaults, whose
     // `enabled = false` reproduces the pre-P6B image exactly.
     {
-        levelenv::ApplyGtao(scene, PostProcessSection(j, "gtao")); // R9.4
+        levelenv::ApplyGtao(scene, PostProcessGroup(j, "gtao")); // R9.4
 
-        levelenv::ApplyHeightFog(scene, HeightFogSection(j));
+        levelenv::ApplyHeightFog(scene, PostProcessGroup(j, "heightFog")); // R9.5: "atmosphere" migrated above
 
         // P8: a level without the section gets the struct defaults, i.e. bloom OFF.
-        levelenv::ApplyBloom(scene, PostProcessSection(j, "bloom"));
+        levelenv::ApplyBloom(scene, PostProcessGroup(j, "bloom"));
     }
 
     // P3: display transform. A level without the section gets the struct defaults, i.e. AgX.
     {
-        levelenv::ApplyColorPipeline(scene, PostProcessSection(j, "colorPipeline")); // R9.4
+        levelenv::ApplyColorPipeline(scene, PostProcessGroup(j, "colorPipeline")); // R9.4
     }
 
     ctx.scene.SetLevelPlayerStart(std::nullopt);

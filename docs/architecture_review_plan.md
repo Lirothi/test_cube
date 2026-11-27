@@ -4780,6 +4780,49 @@ Debug, реестр настроек и таблица графики, вкла�
   сегодняшнем полу 0.19-0.24 %) и два уровня с прожекторами, чередуя (`fog_spot_test` эталон-после 0.0000 % при
   поле 0.0001 %, `local_shadow_test` 0.040 % при поле 0.031-0.049 %), кадры просмотрены. По пути: include
   загрузчика снова встал внутрь `#if WITH_EDITOR` (Release не собрался) — перенесён.
+
+  **Сделано R9.5 (2026-11-27).** `app/levels/LevelMigration.h/.cpp` — `levelmigrate::Migrate(json, convertSun,
+  Report*)`, единственное место, которое знает прежние форматы уровня; идемпотентна (уровень сегодняшнего формата
+  возвращается без изменений). Что переносит: пять групп вида (`cameraExposure`, `colorPipeline`, `gtao`,
+  `heightFog`, `bloom`) под `postProcess` — группа, уже лежащая под `postProcess`, важнее верхней копии (так было у
+  обоих читателей), верхние ключи уходят, группа-не-объект не берётся; старое имя тумана `atmosphere` → `heightFog`;
+  ключи локальной экспозиции P3B из `colorPipeline` — на камеру, только те, которыми камера не владеет, и только
+  числа (как `MigrateLegacyLocalExposure`), старая копия остаётся на месте (цветовой конвейер их не читает, байты
+  сохранения не меняются); `directionalLight` → `timeOfDay` (`FromDirectionalLight`), если у уровня нет своего, —
+  кроме `--tod-legacy-light`: там секция остаётся для прежней ветки загрузчика (вторая семантика, только рантайм).
+  Читатели: `JsonLevel::Load` мигрирует сразу после разбора (строка Info «level ... is in an older format, read as
+  today's: <переносы>»; прежняя строка о переводе солнца сохранена) и дальше читает только сегодняшние имена;
+  документ редактора — в `ResetFromLevelJson`, всегда с переводом солнца (документ держит объект Time of Day и под
+  `--tod-legacy-light`, как раньше). Удалены: `PostProcessSection` / `HeightFogSection` загрузчика, таблица старых
+  имён и ветка `directionalLight` в `RebuildEnvironmentEntities`, `PhotographicSettingsJson::
+  MigrateLegacyLocalExposure`, параметр `colorPipeline` у `levelenv::ApplyCameraExposure` и перекрёстные подъёмы в
+  ветках `cameraExposure` / `colorPipeline` / `postProcess` `EnvironmentRuntime`. Защитные `erase` старых ключей в
+  `LevelDocumentSerializer` оставлены (теперь ничего не находят). Новый уровень редактора (`BuildNewLevelJson`)
+  пишет камеру сразу под `postProcess`. `AGENTS.md` («Naming: sky, fog…», «Time of day owns…») и заметки
+  `sky_fog_and_ue.md`, `time_of_day.md` — «одно место» вместо «двух». Два изменения поведения, оба не задевают ни
+  одного уровня репозитория: (1) находка R9.4 закрыта — правка Post Process в редакторе на уровне, где ключи
+  локальной экспозиции есть только в `colorPipeline`, больше не сбрасывает их (документ держит их на камере);
+  (2) поднятое значение проходит зажимы камеры (`FinishCamera`), раньше подъём шёл после них. Старые ключи
+  (`legacy_keys.py` рабочей папки) — у 14 из 16 уровней `data/levels`; ключи локальной экспозиции в
+  `colorPipeline` — у `wind_test`, `occlusion_test`, `ssr_bronze_palms`, и у всех трёх камера ими владеет: подъём
+  не срабатывает ни на одном уровне. Проверено: тест `TestAnOldLevelIsReadAsTodays` (свёртка и её приоритет,
+  `atmosphere`, группа-не-объект, солнце, свой `timeOfDay` против старого солнца, `--tod-legacy-light`, P3B,
+  идемпотентность, объект Post Process документа). Контроль: `Migrate` забывает `atmosphere` — FAIL «the height
+  fog's old name and the top-level groups move under postProcess» (первый прогон контроля упал исключением `.at()`,
+  а не проверкой: доступ в тесте сделан безопасным, повтор упал проверкой); та же поломка в Release — дампы
+  `demo`, `fog_spot_test`, `occlusion_test` расходятся с эталоном (`fog.enabled` 1 → 0 и ещё 2-9 имён), у
+  `demo_bckp` и `ssr_bronze_palms` (`atmosphere: {}`, умолчания в обоих случаях) и `wind_test` (ключа нет) — нет;
+  файл возвращён байт в байт, mtime тронут. Цикл «открыть копию — сохранить» — 16 из 16 уровней байт в байт равны
+  эталону R9.0 (`imgui.ini`, `editor_state.json` на месте); дампы реестра 16 уровней — 0 отличий от эталона R9.0.
+  Вторая семантика солнца: дампы с `--tod-legacy-light` эталон / после — 0 отличий на 16 уровнях (сам ключ двигает
+  дамп у 14 уровней — `sun.azimuth`, `sun.elevation`, `tod.time`, `tod.pathYawDeg` — ветка видна дампу); кадры с
+  `--tod-legacy-light` на `demo1` и `ssr_bronze_palms`, эталон и после по очереди, три круга: `demo1` эталон-эталон
+  0.36-0.59 %, после-после 0.31-0.46 %, эталон-после 0.18-0.53 % (пол даёт вода); `ssr_bronze_palms` 0.001-0.010 /
+  0.0000-0.0001 / 0.0004-0.0046 % — в коридоре пола, кадры просмотрены. Три конфигурации, `check_*.py` 0,
+  `settings_names` 0, CRLF, обе регрессии PASS; Release `--scene-stress=150 --rt-audit` — CLEAN, `rt audit: PASS` (455 кадров, 74
+  объекта), 604 простоя GPU — как у эталона, строки миграции в логе на каждой загрузке старого уровня.
+  Не покрыто: уровень с ключом локальной экспозиции только в `colorPipeline` и вне зажимов камеры (таких нет);
+  правка Post Process в живом редакторе на таком уровне — только тестом документа.
 - **R6. `Scene` → `World` + `RenderScene`** (`Scene.cpp` — 4080 строк). **R6.1**: `ShadowViewPlanner` в
   `rendering/shadows` (каскады, клипмап, SDSM-кэш, ёмкость локальных видов). **R6.2**: игровое из `Scene` —
   `RaceRef()` (24 вызова в 5 файлах), `SyncRaceBoats`, камеры судна и зрителя — в `game::`, владеет сессия.

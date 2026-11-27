@@ -24,9 +24,11 @@ it is applied only where `z > kEps`; the sky already contains that integral (`Sk
 returns before the AP branch). The height fog, by contrast, IS applied to the sky, which is UE's own
 behaviour (`bOnlyOnRenderedOpaque` is false — `SceneRendering.cpp:909`).
 
-Levels written before 2026-09-10 carry the fog under the old key `atmosphere`. Exactly two places
-know that: `JsonLevel::HeightFogSection` and `EditorSceneDocument`'s section table. Do not spread the
-alias any further; a level takes the new key the next time it is saved. An old `--set=atmosphere.*`
+Levels written before 2026-09-10 carry the fog under the old key `atmosphere`. Exactly one place
+knows that since R9.5 (2026-11-27): `levelmigrate::Migrate` (`app/levels/LevelMigration.cpp`), which the
+loader and the editor's document both run first (before: `JsonLevel::HeightFogSection` and
+`EditorSceneDocument`'s section table). Do not spread the alias any further; a level takes the new key the
+next time it is saved. An old `--set=atmosphere.*`
 is not silently dropped — it logs `UNKNOWN SETTING (ignored)`.
 
 ## Sun / Sky Calibration -- the Sky's SHAPE, Not Only Its Energy

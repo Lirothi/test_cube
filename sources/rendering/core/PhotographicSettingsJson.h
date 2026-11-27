@@ -157,35 +157,10 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     CameraKeys().Read(j, out);
 }
 
-// P3B fields moved from `colorPipeline` to `cameraExposure` (they are an exposure operation, not a
-// grade). Levels written before the move still carry them in the old block, so JsonLevel and the
-// editor runtime call this AFTER parsing both sections: anything still sitting in `colorPipeline`
-// is lifted onto the camera. Absent keys change nothing, so a converted level is unaffected and
-// re-saving writes them in the new place.
-inline void MigrateLegacyLocalExposure(const nlohmann::json& colorPipelineJson,
-                                       const nlohmann::json& cameraJson,
-                                       CameraExposureSettings& camera)
-{
-    if (!colorPipelineJson.is_object())
-    {
-        return;
-    }
-    // ONLY lift a key the camera block does not already own. Lifting unconditionally means the
-    // stale `colorPipeline` copy overwrites whatever was just edited on the camera -- which is
-    // exactly what happened: every inspector edit was stomped back by the old value and the
-    // control looked dead.
-    const auto lift = [&](const char* key, float& dst)
-    {
-        if (cameraJson.is_object() && cameraJson.contains(key)) { return; }
-        const auto it = colorPipelineJson.find(key);
-        if (it != colorPipelineJson.end() && it->is_number()) { dst = it->get<float>(); }
-    };
-    lift("localHighlightContrast",  camera.localHighlightContrast);
-    lift("localShadowContrast",     camera.localShadowContrast);
-    lift("localDetailStrength",     camera.localDetailStrength);
-    lift("localHighlightThreshold", camera.localHighlightThreshold);
-    lift("localShadowThreshold",    camera.localShadowThreshold);
-}
+// P3B fields moved from `colorPipeline` to `cameraExposure` (they are an exposure operation, not a grade). A level
+// written before the move still carries them in the old block: levelmigrate::Migrate (app/levels/LevelMigration.cpp,
+// R9.5) copies each one the camera does not own onto the camera before anything reads the level -- ONLY those: lifting
+// unconditionally let the stale copy stomp every Inspector edit back, and the control looked dead.
 
 // Architecture plan R9.2: the colour pipeline's table of keys (core/schema/KeyTable.h). The tone curve serialises as a
 // NAME (P3); every number clamps into its range after it is read, as the hand code clamped the struct at its end.

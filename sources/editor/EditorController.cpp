@@ -1123,7 +1123,8 @@ namespace
         // P16.6: a FIXED sunny-16 camera. Auto exposure is deliberately off -- with the lights in
         // real lux there is nothing to adapt to, and the whole point is that the defaults expose an
         // outdoor scene correctly with nobody typing a number.
-        root["cameraExposure"] = {
+        // R9.5: written in today's format, under "postProcess" (it was a top-level section the document folded).
+        root["postProcess"]["cameraExposure"] = {
             { "enabled", true },
             { "autoExposure", false },
             { "apertureFStop", 16.0f },

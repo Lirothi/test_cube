@@ -232,16 +232,16 @@ registered AND called in `EditorController::Draw`'s `drawPanel` list, or it neve
 - The sky's camera froxel volume on geometry only = aerial perspective = `sky.aerialPerspective`, `Main_SkyAerial`.
 
 "Atmosphere" alone names the SKY, never the fog. Aerial perspective is only the sky's volume, applied where z > eps;
-the height fog IS applied to the sky (as UE does). The fog's old level key `atmosphere`: only
-`JsonLevel::HeightFogSection` and `EditorSceneDocument`'s section table know it -- don't spread it.
+the height fog IS applied to the sky (as UE does). The fog's old level key `atmosphere`, like every older level key:
+only `levelmigrate::Migrate` (`app/levels/LevelMigration.cpp`) knows it -- don't spread it.
 
 ## Time of day owns the directional light
 
 A level's light is its `timeOfDay` section (`app/scene/TimeOfDay.h`): every frame it places the sun and the moon and
 hands the scene's ONE `DirectionalLight` to whichever is up; the sky always takes the SUN (`SceneFrameData::skyLight`).
 A write to `Scene::DirectionalLightRef()` is overwritten next Tick: knobs via `Scene::SunLightRef()`, a direction via
-`Scene::SetSunToward()`. Old `directionalLight` sections: only `JsonLevel` and `EditorSceneDocument` read them
-(`TimeOfDaySettingsJson::FromDirectionalLight`). Headless: `--time=HH:MM`, `--date=`, `--time-speed=`,
+`Scene::SetSunToward()`. Old `directionalLight` sections: only `levelmigrate::Migrate` converts them
+(`TimeOfDaySettingsJson::FromDirectionalLight`; `--tod-legacy-light` keeps one for the loader). Headless: `--time=HH:MM`, `--date=`, `--time-speed=`,
 `--time-freeze`, `--set tod.<key>`; editor: `setTime`, `setDate`, `setEnvironment`. A level's numbers (sky, fog,
 exposure) are its file's: read `data/levels/<level>.json`, not a note's description of it.
 

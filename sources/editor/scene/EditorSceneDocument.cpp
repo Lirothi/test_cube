@@ -1,5 +1,6 @@
 #include "editor/scene/EditorSceneDocument.h"
-#include "app/scene/TimeOfDaySettingsJson.h" // T3: the old `directionalLight` section converted on load
+#include "app/levels/LevelMigration.h" // R9.5: an older level read as today's
+#include "app/scene/TimeOfDaySettingsJson.h" // T4: WithAllKeys
 #if WITH_EDITOR
 
 #include <exception>
@@ -223,7 +224,11 @@ void EditorSceneDocument::ResetFromLevelJson(const std::string& path, const nloh
     nextId_ = 1;
     dirty_ = false;
     levelPath_ = path;
-    rootJson_ = levelJson; // preserve top-level sections (camera/skybox/ocean/lights) for save
+    // Preserve top-level sections (camera/skybox/ocean/lights) for save. R9.5: in today's format -- an older level's
+    // keys become today's here (levelmigrate::Migrate; idempotent, so the loader's already-migrated copy passes
+    // unchanged), and nothing below reads an old name. The sun is converted even under `--tod-legacy-light`: the
+    // document always holds the Time of Day object, as before.
+    rootJson_ = levelmigrate::Migrate(levelJson, /*convertDirectionalLight*/ true);
 }
 
 EditorObjectId EditorSceneDocument::ReadOrAllocateObjectId(const nlohmann::json& objectJson)
@@ -314,17 +319,14 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
 
     addSingleton("camera", "camera", "Camera");
     // Time-of-day plan T3: the level's light is its Time of Day, which drives the sun and the moon. A
-    // level written before it carries the sun as `directionalLight`; it is converted HERE, on load
-    // (TimeOfDaySettingsJson::FromDirectionalLight: every light property moves across, the clock is
-    // still, the path solved so the sun stands where it was authored), and the file takes the new
-    // section when it is saved -- the serializer erases the old one. This and JsonLevel are the ONLY
-    // two places that know the old key, as with `atmosphere` -> `heightFog`.
+    // level written before it carries the sun as `directionalLight`; levelmigrate::Migrate converted it
+    // in ResetFromLevelJson (every light property moves across, the clock is still, the path solved so
+    // the sun stands where it was authored), and the file takes the new section when it is saved -- the
+    // serializer erases the old one.
     {
         const auto timeOfDay = rootJson_.find("timeOfDay");
-        const auto sun = rootJson_.find("directionalLight");
         EditorObject e;
         if (timeOfDay != rootJson_.end() && timeOfDay->is_object()) { e.properties = *timeOfDay; }
-        else if (sun != rootJson_.end() && sun->is_object()) { e.properties = TimeOfDaySettingsJson::FromDirectionalLight(*sun); }
         if (e.properties.is_object())
         {
             // T4: every key present, at the value it already means -- setEnvironment (the command
@@ -354,10 +356,9 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     // effect -- the engine already had an unbound post-process volume, it was just spelled out in
     // five names.
     //
-    // MIGRATION IS ON LOAD, not on save: a level authored against the old top-level sections is
-    // read into this object here, and only takes the new shape in the file when it is next saved.
-    // That is why the fallback below reads the legacy key -- deleting it would silently reset every
-    // level that predates this step.
+    // MIGRATION IS ON LOAD, not on save: a level authored against the old top-level sections (or the
+    // height fog's old name `atmosphere`) was folded under `postProcess` by levelmigrate::Migrate in
+    // ResetFromLevelJson, and only takes the new shape in the file when it is next saved.
     {
         EditorObject e;
         e.id = AllocateId();
@@ -367,31 +368,15 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
 
         const auto folded = rootJson_.find("postProcess");
         const bool haveFolded = folded != rootJson_.end() && folded->is_object();
-        // `heightFog` was called `atmosphere` until the name was found to be the reason people --
-        // and Claude -- kept reaching for the SKY atmosphere when they meant the height fog. The
-        // alias below is the editor's half of the migration (JsonLevel::HeightFogSection is the
-        // runtime's); a level keeps loading under either spelling and is written under the new one.
-        struct Section { const char* key; const char* legacyKey; };
-        const Section sections[] = {
-            { "cameraExposure", nullptr }, { "colorPipeline", nullptr }, { "gtao", nullptr },
-            { "heightFog", "atmosphere" }, { "bloom", nullptr },
-        };
-        for (const Section& s : sections)
+        for (const char* key : { "cameraExposure", "colorPipeline", "gtao", "heightFog", "bloom" })
         {
-            const char* const names[] = { s.key, s.legacyKey };
-            bool found = false;
-            for (const char* name : names)
+            nlohmann::json group = nlohmann::json::object();
+            if (haveFolded)
             {
-                if (name == nullptr) { continue; }
-                if (haveFolded)
-                {
-                    const auto sub = folded->find(name);
-                    if (sub != folded->end() && sub->is_object()) { e.properties[s.key] = *sub; found = true; break; }
-                }
-                const auto legacy = rootJson_.find(name);
-                if (legacy != rootJson_.end() && legacy->is_object()) { e.properties[s.key] = *legacy; found = true; break; }
+                const auto sub = folded->find(key);
+                if (sub != folded->end() && sub->is_object()) { group = *sub; }
             }
-            if (!found) { e.properties[s.key] = nlohmann::json::object(); }
+            e.properties[key] = std::move(group);
         }
         environment_.push_back(std::move(e));
     }

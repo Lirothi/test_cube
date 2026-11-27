@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "app/levels/LevelManager.h"
+#include "app/levels/LevelMigration.h" // R9.5
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
 #include "editor/scene/EditorPlayerStart.h"
@@ -4973,6 +4974,84 @@ void TestOldSunBecomesTheTimeOfDay()
           "the saved level carries timeOfDay and no directionalLight");
 }
 
+// Architecture plan R9.5: levelmigrate::Migrate is the ONE place that knows a level's older formats -- the loader and the
+// editor's document read only today's names after it. The look groups fold under postProcess (a folded group wins
+// over its top-level copy, as both readers had it), the height fog's old name `atmosphere` becomes heightFog, the old
+// sun becomes the Time of Day unless the level has one or `--tod-legacy-light` keeps it, and today's format comes back
+// unchanged.
+void TestAnOldLevelIsReadAsTodays()
+{
+    const Json old = {
+        { "gtao", { { "enabled", true }, { "radius", 2.0 } } },
+        { "postProcess", { { "gtao", { { "radius", 3.0 } } }, { "bloom", { { "intensity", 0.5 } } } } },
+        { "atmosphere", { { "fogDensity", 0.02 } } },
+        { "colorPipeline", { { "toneCurve", "AgX" } } },
+        { "cameraExposure", nullptr }, // not an object: neither reader ever took it
+        { "directionalLight", { { "direction", Json::array({ 0.0, -1.0, 0.2 }) }, { "lightSourceAngle", 1.5 } } },
+        { "skyAtmosphere", Json::object() },
+        { "objects", Json::array() } };
+    // A key the migration did not write reads as null here, so a broken migration fails its own Check, not .at().
+    const auto key = [](const Json& j, const char* name) -> Json {
+        if (!j.is_object()) { return Json(); }
+        const auto it = j.find(name);
+        return it == j.end() ? Json() : *it;
+    };
+    levelmigrate::Report report;
+    const Json now = levelmigrate::Migrate(old, /*convertDirectionalLight*/ true, &report);
+    const Json pp = key(now, "postProcess");
+    Check(key(pp, "gtao") == Json{ { "radius", 3.0 } } && key(pp, "bloom") == old.at("postProcess").at("bloom"),
+          "a group already under postProcess wins over its top-level copy");
+    Check(key(pp, "heightFog") == old.at("atmosphere") && key(pp, "colorPipeline") == old.at("colorPipeline"),
+          "the height fog's old name and the top-level groups move under postProcess");
+    Check(!pp.contains("cameraExposure") && !pp.contains("atmosphere"), "a group that is not an object is not taken");
+    bool stale = false;
+    for (const char* name : { "gtao", "atmosphere", "heightFog", "colorPipeline", "cameraExposure", "bloom", "directionalLight" })
+    {
+        stale = stale || now.contains(name);
+    }
+    Check(!stale, "no old top-level key is left beside today's");
+    Check(key(now, "skyAtmosphere") == Json::object() && key(now, "objects").is_array(), "the rest of the level is as it was");
+    Check(report.sunConverted && key(now, "timeOfDay") == TimeOfDaySettingsJson::FromDirectionalLight(old.at("directionalLight")),
+          "the old sun becomes the Time of Day, by the T3 conversion");
+    Check(levelmigrate::Migrate(now, true) == now, "today's format comes back unchanged (twice = once)");
+    const Json legacyLight = levelmigrate::Migrate(old, /*convertDirectionalLight*/ false);
+    Check(key(legacyLight, "directionalLight") == old.at("directionalLight") && !legacyLight.contains("timeOfDay"),
+          "--tod-legacy-light keeps the old sun for the loader's legacy branch");
+    Json both = old;
+    both["timeOfDay"] = Json{ { "timeHours", 9.0 } };
+    const Json kept = levelmigrate::Migrate(both, true);
+    Check(key(kept, "timeOfDay") == both.at("timeOfDay") && !kept.contains("directionalLight"),
+          "a level's own Time of Day wins, and the stale old sun beside it goes");
+
+    // P3B: the local-exposure keys the colour pipeline still carries go onto the camera where it does not own them.
+    const Json p3b = { { "postProcess", {
+        { "cameraExposure", { { "localShadowContrast", 0.5 } } },
+        { "colorPipeline", { { "localShadowContrast", 1.7 }, { "localDetailStrength", 0.8 },
+                             { "localHighlightThreshold", "two" } } } } } };
+    const Json lifted = levelmigrate::Migrate(p3b, true);
+    const Json camera = key(key(lifted, "postProcess"), "cameraExposure");
+    Check(key(camera, "localShadowContrast") == 0.5 && key(camera, "localDetailStrength") == 0.8,
+          "a local-exposure key the camera lacks is lifted onto it, one it owns stays its own");
+    Check(!camera.contains("localHighlightThreshold"), "only a number is lifted, as at apply time before");
+    Check(key(key(lifted, "postProcess"), "colorPipeline") == p3b.at("postProcess").at("colorPipeline") &&
+              levelmigrate::Migrate(lifted, true) == lifted,
+          "the stale copy stays where it was (the saved bytes keep it), and a second pass changes nothing");
+
+    // The editor's document holds the migrated level: its Post Process object carries what moved.
+    EditorSceneDocument document;
+    document.ResetFromLevelJson("regression_old_format.json", old);
+    document.RebuildEnvironmentEntities();
+    const EditorObject* postProcess = nullptr;
+    for (const EditorObject& entity : document.Environment())
+    {
+        if (entity.type == "postProcess") { postProcess = &entity; }
+    }
+    Check(postProcess != nullptr && key(postProcess->properties, "heightFog") == old.at("atmosphere") &&
+              key(postProcess->properties, "gtao") == Json{ { "radius", 3.0 } } &&
+              key(postProcess->properties, "cameraExposure") == Json::object(),
+          "the editor's Post Process object reads the moved groups (a missing one as {})");
+}
+
 // Time-of-day plan T4: setTime / setDate over MCP are the Inspector slider's road -- one
 // EditEnvironmentCommand on the Time of Day object, ONE undo entry, the scene's clock moved by the same
 // EnvironmentRuntime apply -- and a time is said the way people say it.
@@ -6599,6 +6678,7 @@ int main(int argc, char** argv)
 
         TestEnvironmentSettingsAreEnumeratedFromTheLevel();
         TestOldSunBecomesTheTimeOfDay();
+        TestAnOldLevelIsReadAsTodays(); // R9.5
         {
             EditorSceneDocument envDocument = MakeEnvironmentDocument();
             EditorSelection envSelection;
