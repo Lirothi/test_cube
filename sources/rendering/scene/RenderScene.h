@@ -58,6 +58,9 @@ public:
     // The render half's sun: the scene light (with the atmosphere's transmittance) as Sync copied it.
     const DirectionalLight& RenderSun() const { TC_CHECK_RENDER("RenderScene::RenderSun"); return renderSun_; }
     const SceneFrameData& FrameData() const { TC_CHECK_RENDER("RenderScene::FrameData"); return frameData_; }
+    // R6.4c: the frame's address, unchecked -- for a renderable made on the game half (the ocean) that keeps it and reads
+    // it only while it records (its own TC_CHECK_RENDER there). Taking the address reads nothing.
+    const SceneFrameData* FrameDataAddress() const { return &frameData_; }
 
     const render::LocalShadowCache& GetLocalShadowCache() const { return localShadowCache_; } // S7 readout
     // Rung 2: the virtual-shadow-map page pool + page table (dev-window "VSM" tab reads its stats).

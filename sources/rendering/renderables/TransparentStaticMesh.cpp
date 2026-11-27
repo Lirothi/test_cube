@@ -4,7 +4,6 @@
 #include <array>
 #include <cstdint>
 
-#include "app/scene/Scene.h"
 #include "rendering/view/Camera.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -28,9 +27,8 @@ namespace
 class TransparentStaticMesh::TransparentUniformBinder final : public RenderableObject::UniformBinder
 {
 public:
-    TransparentUniformBinder(Scene* scene, TransparentStaticMesh* owner)
-        : scene_(scene)
-        , owner_(owner)
+    explicit TransparentUniformBinder(TransparentStaticMesh* owner)
+        : owner_(owner)
     {
     }
 
@@ -114,17 +112,14 @@ private:
         Material::CBFieldHandle proj;
     } shadowCb_{};
 
-    Scene* scene_ = nullptr;
     TransparentStaticMesh* owner_ = nullptr;
 };
 
-TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
-    const std::string& modelName,
+TransparentStaticMesh::TransparentStaticMesh(const std::string& modelName,
     const float3& position,
     const float3& scale,
     float rotationSpeedRad)
     : RenderableObject("PosNormTanUV", L"shaders/glass.hlsl")
-    , scene_(scene)
     , modelName_(modelName)
     , rotationSpeed_(rotationSpeedRad)
 {
@@ -135,7 +130,7 @@ TransparentStaticMesh::TransparentStaticMesh(Scene* scene,
 
     allowWireframe_ = false;
 
-    SetUniformBinder(std::make_unique<TransparentUniformBinder>(scene_, this));
+    SetUniformBinder(std::make_unique<TransparentUniformBinder>(this));
 }
 
 void TransparentStaticMesh::SetRecomputeNormalSlots(std::vector<uint32_t> slots)
@@ -183,7 +178,7 @@ void TransparentStaticMesh::Tick(float deltaTime)
 
 bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
-    if (!renderer || !scene_)
+    if (!renderer)
     {
         return false;
     }

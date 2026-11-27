@@ -6,13 +6,12 @@
 #include "materials/Texture2D.h"
 #include "rendering/renderables/RenderableObject.h"
 
-class Scene;
-
 class TransparentStaticMesh final : public RenderableObject
 {
 public:
-    TransparentStaticMesh(Scene* scene,
-        const std::string& modelName,
+    // R6.4c: no Scene -- it only kept the pointer and refused to draw without one; every pass input it reads comes
+    // through the renderer (DirectInputs().Glass()) and the camera the pass hands it.
+    TransparentStaticMesh(const std::string& modelName,
         const float3& position,
         const float3& scale,
         float rotationSpeedRad);
@@ -53,7 +52,6 @@ protected:
 private:
     class TransparentUniformBinder;
 
-    Scene* scene_ = nullptr;
     std::string modelName_;
     float rotationSpeed_ = 0.0f;
 

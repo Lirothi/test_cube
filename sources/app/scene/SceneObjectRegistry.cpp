@@ -223,7 +223,7 @@ SceneObjectRegistry::ObjectList CreateOcean(SceneObjectRegistry::CreationContext
     OceanSimulation* oceanSimulation = Systems::CreateOceanSimulation(Widen(presetPath));
     if (oceanSimulation)
     {
-        objects.push_back(std::make_unique<OceanRenderable>(&ctx.scene.CameraRef(), &ctx.scene, oceanSimulation));
+        objects.push_back(std::make_unique<OceanRenderable>(&ctx.scene.CameraRef(), ctx.scene.FrameDataAddress(), oceanSimulation));
     }
     return objects;
 }

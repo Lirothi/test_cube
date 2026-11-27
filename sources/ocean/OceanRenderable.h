@@ -140,12 +140,14 @@ inline bool g_vsDepthProbe_game = false;
 inline const bool g_vsDepthProbe_knob = ::knob::Register(g_vsDepthProbe_game, g_vsDepthProbe, "ocean::g_vsDepthProbe");
 }
 
-class Scene;
+struct SceneFrameData;
 
 class OceanRenderable : public RenderableObject
 {
 public:
-    OceanRenderable(Camera* camera, Scene* scene, OceanSimulation* simulation);
+    // `frame`: the render half's frame (Scene::FrameDataAddress) -- the sun, the camera, the sky and the glint the surface
+    // records with (architecture plan R6.4c: the ocean knows no Scene). `camera`: the game camera, the depth fallback.
+    OceanRenderable(Camera* camera, const SceneFrameData* frame, OceanSimulation* simulation);
     ~OceanRenderable() override = default;
 
     void Init(Renderer* renderer,
@@ -383,7 +385,7 @@ private:
     friend class OceanReadback;
 
     Camera* camera_ = nullptr;
-    Scene* scene_ = nullptr;
+    const SceneFrameData* frame_ = nullptr; // R6.4c: read only while recording (FrameSun / FrameCamera / FrameSky)
     OceanSimulation* simulation_ = nullptr;
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
     std::unique_ptr<OceanWake> wake_;

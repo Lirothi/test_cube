@@ -770,7 +770,7 @@ namespace
             return false;
         }
 
-        auto renderable = std::make_unique<OceanRenderable>(&scene.CameraRef(), &scene, ocean);
+        auto renderable = std::make_unique<OceanRenderable>(&scene.CameraRef(), scene.FrameDataAddress(), ocean);
         UploadBatch uploads;
         if (!uploads.Begin(&renderer))
         {

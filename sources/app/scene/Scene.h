@@ -23,6 +23,7 @@ public:
     // The render half's sun (RenderScene::RenderSun).
     const DirectionalLight& RenderSun() const { return render_.RenderSun(); }
     const SceneFrameData& FrameData() const { return render_.FrameData(); } // RenderScene::FrameData
+    const SceneFrameData* FrameDataAddress() const { return render_.FrameDataAddress(); } // RenderScene::FrameDataAddress
 
     // R6.4a: the render half's readouts and services (RenderScene says what each is).
     const render::LocalShadowCache& GetLocalShadowCache() const { return render_.GetLocalShadowCache(); }

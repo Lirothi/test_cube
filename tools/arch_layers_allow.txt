@@ -11,7 +11,6 @@ app/scene/Scene.cpp -> app/Systems.h
 app/scene/SceneObjectRegistry.cpp -> app/Systems.h
 app/ui/DeveloperWindow.cpp -> editor/EditorController.h
 materials/MaterialData.cpp -> rendering/renderables/InstanceTypes.h
-ocean/OceanRenderable.cpp -> app/scene/Scene.h
 ocean/WaterMask.cpp -> physics/PhysicsWorld.h
 physics/PhysicsWorld.cpp -> ocean/OceanReadback.h
 physics/PhysicsWorld.cpp -> ocean/OceanRenderable.h
@@ -30,7 +29,6 @@ rendering/renderables/RenderableObject.cpp -> ocean/WaterMask.h
 rendering/renderables/RenderableObject.cpp -> physics/PhysicsWorld.h
 rendering/renderables/RenderableObject.h -> ocean/BuoyancyLayout.h
 rendering/renderables/RenderableObject.h -> physics/PhysicsTypes.h
-rendering/renderables/TransparentStaticMesh.cpp -> app/scene/Scene.h
 rendering/streaming/StreamingBounds.cpp -> rendering/renderables/GBufferRenderable.h
 rendering/streaming/StreamingBounds.cpp -> rendering/renderables/RenderableObject.h
 rendering/streaming/StreamingBounds.cpp -> rendering/scene/SceneFrameData.h

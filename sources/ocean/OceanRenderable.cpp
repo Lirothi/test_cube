@@ -13,7 +13,8 @@
 #include <vector>
 
 #include "rendering/view/Camera.h"
-#include "app/scene/Scene.h"
+#include "rendering/scene/SceneFrameData.h" // R6.4c: the render half's frame -- the sun, the camera, the sky, the glint
+#include "core/threading/ThreadRole.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -616,10 +617,33 @@ private:
     Material::CBFieldHandle depthParamsHandle_{};
 };
 
-OceanRenderable::OceanRenderable(Camera* camera, Scene* scene, OceanSimulation* simulation)
+namespace
+{
+// Architecture plan R6.4c: what the surface records with comes from the render half's frame (RenderScene::FrameData:
+// the sun and the glint taken at Sync, the camera and the sky at PrepareViews), read only while it records -- the
+// render-role check Scene::RenderSun / RenderCamera / FrameData made before. Null before a frame publishes them.
+const DirectionalLight* FrameSun(const SceneFrameData* frame)
+{
+    TC_CHECK_RENDER("OceanRenderable: the frame's sun");
+    return frame ? frame->dirLight : nullptr;
+}
+
+const Camera* FrameCamera(const SceneFrameData* frame)
+{
+    TC_CHECK_RENDER("OceanRenderable: the frame's camera");
+    return frame ? frame->camera : nullptr;
+}
+
+Skybox* FrameSky(const SceneFrameData* frame)
+{
+    return frame ? frame->skybox : nullptr; // as Scene::GetSkybox: unchecked
+}
+} // namespace
+
+OceanRenderable::OceanRenderable(Camera* camera, const SceneFrameData* frame, OceanSimulation* simulation)
     : RenderableObject("PosLevelUV", L"shaders/ocean_surface.hlsl")
     , camera_(camera)
-    , scene_(scene)
+    , frame_(frame)
     , simulation_(simulation)
 {
     const FoamParams defaultFoam = FoamParams::GetDefault();
@@ -934,7 +958,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
 
     const auto& deferred = renderer->GetDeferredForFrame();
-    Skybox* sky = scene_ ? scene_->GetSkybox() : nullptr;
+    Skybox* sky = FrameSky(frame_);
 
     // The stand-in for any slot this draw does not fill. It must be a resource that is SHADER-
     // READABLE while the transparent pass runs, and `scene` is NOT: compose writes it as a UAV, so
@@ -2023,7 +2047,8 @@ Math::float4 OceanRenderable::GetSpecularParams() const
 {
     const OceanRenderConfig& render = GetRenderConfig();
     // Time-of-day N4: the moon's glints fade with its phase beyond its light (TimeOfDay::GlintScale).
-    const float glint = scene_ ? scene_->FrameData().sunGlintScale : 1.0f; // taken at Sync (game thread plan G2)
+    TC_CHECK_RENDER("OceanRenderable: the frame's glint");
+    const float glint = frame_ ? frame_->sunGlintScale : 1.0f; // taken at Sync (game thread plan G2)
     return Math::float4(
         render.specularStrength * glint,
         render.roughnessScale,
@@ -2377,9 +2402,9 @@ Math::float4 OceanRenderable::GetSunDirAmbient() const
 {
     Math::float3 dir = Math::float3(0.0f, -1.0f, 0.0f);
     float ambient = 0.1f;
-    if (scene_)
+    if (const DirectionalLight* sun = FrameSun(frame_))
     {
-        const auto& light = scene_->RenderSun(); // the render half's copy (game thread plan G2)
+        const auto& light = *sun; // the render half's copy (game thread plan G2)
         dir = light.GetDirection();
         // P4: this reaches ONLY `LitFoamColor` in ocean_surface.hlsl -- it is a foam sky term, not
         // a fill for the water surface. See the note in DirectionalLight.h.
@@ -2395,13 +2420,10 @@ Math::float4 OceanRenderable::GetSkyParams() const
     // two different things depending on where you were looking.
     float intensity = 1.0f;
     float specMips = 0.0f; // 0 = this sky has no prefiltered derivatives; the shader keeps its old path
-    if (scene_)
+    if (const Skybox* sky = FrameSky(frame_))
     {
-        if (const Skybox* sky = scene_->GetSkybox())
-        {
-            intensity = sky->GetExposure();
-            if (sky->HasIbl()) { specMips = (float)sky->GetSpecMips(); }
-        }
+        intensity = sky->GetExposure();
+        if (sky->HasIbl()) { specMips = (float)sky->GetSpecMips(); }
     }
     // z: P16.1 pre-exposure. The ocean writes into scene colour in the transparent pass, which runs
     // AFTER compose, so compose's own scaling never reaches it and it must apply the factor itself.
@@ -2414,9 +2436,9 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
 {
     Math::float3 color = Math::float3(1.0f, 1.0f, 1.0f);
     float exposure = 1.0f;
-    if (scene_)
+    if (const DirectionalLight* sun = FrameSun(frame_))
     {
-        const auto& light = scene_->RenderSun();
+        const auto& light = *sun;
         // P4: the shader computes `xyz * w`, so the sun intensity riding in the colour with a
         // retired 1.0 multiplier is the same product the legacy pair produced.
         color = light.GetEffectiveColor();
@@ -2431,8 +2453,9 @@ Math::float4 OceanRenderable::GetSunShapeParams() const
     // same number lighting_cs gives EvalBRDF (UE's sphere light), so a wave facet shows the disc at
     // its own radiance x F instead of a Blinn-Phong spot of ~1/1000 of it.
     // y: its soft radius (UE SoftSourceRadius), which widens the glint's roughness as lighting_cs does.
-    const float radius = scene_ ? scene_->RenderSun().GetSunHalfApexRadians() : 0.0f;
-    const float softRadius = scene_ ? scene_->RenderSun().GetSoftSourceRadius() : 0.0f;
+    const DirectionalLight* sun = FrameSun(frame_);
+    const float radius = sun ? sun->GetSunHalfApexRadians() : 0.0f;
+    const float softRadius = sun ? sun->GetSoftSourceRadius() : 0.0f;
     // z, w: the sun's shadow from geometry on the water (OceanSunShadow) and its SMRT rays -- ocean::g_sunShadow(Rays).
     return Math::float4(radius, softRadius, ocean::g_sunShadow ? 1.0f : 0.0f,
                         static_cast<float>(std::max(ocean::g_sunShadowRays, 0)));
@@ -2551,7 +2574,8 @@ Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) cons
 
 Math::float2 OceanRenderable::GetDepthParams() const
 {
-    const Camera* camera = scene_ ? &scene_->RenderCamera() : camera_; // the camera of the frame being recorded
+    const Camera* frameCamera = FrameCamera(frame_);
+    const Camera* camera = frameCamera ? frameCamera : camera_; // the camera of the frame being recorded
     const float zNear = camera ? camera->GetZNear() : 0.01f;
     const float zFar = camera ? camera->GetZFar() : 10000.0f;
     return { zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear) };

@@ -608,14 +608,14 @@ namespace SceneObjectFactory
         return mesh;
     }
 
-    std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const json& oIn)
+    std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& /*scene: the glass needs none, R6.4c*/, const json& oIn)
     {
         const json o = ResolveMeshAsset(oIn); // J1: transparent meshes may reference a mesh asset too
         const std::string model = jsonfield::Value(o, "model", std::string{});
         const float3 pos = ToFloat3(jsonfield::Value(o, "position", json::array()));
         const float3 scale = ToFloat3(jsonfield::Value(o, "scale", json::array()), float3(1.0f, 1.0f, 1.0f));
 
-        auto glass = std::make_unique<TransparentStaticMesh>(&scene, model, pos, scale, 0.0f);
+        auto glass = std::make_unique<TransparentStaticMesh>(model, pos, scale, 0.0f);
         TransparentMeshKeys().Read(o, *glass);
         return glass;
     }
