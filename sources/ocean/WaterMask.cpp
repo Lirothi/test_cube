@@ -22,6 +22,7 @@
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 #include "core/task/TaskSystem.h"
+#include "ocean/OceanBuoyancy.h"   // R7.2b: a floater's settings (its draft)
 #include "physics/PhysicsWorld.h"
 #include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the object tells the registry when it leaves the world
 #include "rendering/renderables/RenderableObject.h"
@@ -1770,7 +1771,7 @@ namespace watermask
                 // Where still water stands on it: a boat's draft (over its origin), else a floater's (over its lowest point).
                 float waterline = 3.0e38f, draftOverLowest = -3.0e38f;
                 if (const physics::VesselSettings* vessel = entry.object->GetVesselSettings()) { waterline = vessel->draft; }
-                else if (entry.object->IsBuoyant()) { draftOverLowest = entry.object->GetBuoyancySettings().draft; }
+                else if (physics::IsBuoyant(*entry.object)) { draftOverLowest = OceanBuoyancy::SettingsOf(*entry.object).draft; }
                 const std::string& path = entry.object->GetGeometryPath();
                 WaterMaskBakeKey bakeKey;
                 if (path.empty() || !MakeBakeKey(path, glass, waterline, draftOverLowest, bakeKey))

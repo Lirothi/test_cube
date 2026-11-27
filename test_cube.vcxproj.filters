@@ -963,6 +963,9 @@
     <ClCompile Include="sources/physics/PhysicsBody.cpp">
       <Filter>sources\physics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsObjects.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/physics/VesselBench.cpp">
       <Filter>sources\physics</Filter>
     </ClCompile>

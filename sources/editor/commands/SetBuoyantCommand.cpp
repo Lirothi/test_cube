@@ -4,6 +4,7 @@
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/commands/SetPhysicsCommand.h" // VesselAsset: a vessel floats by default
+#include "physics/PhysicsWorld.h" // R7.2b: physics::SetBuoyant
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 
@@ -32,7 +33,7 @@ void SetBuoyantCommand::Apply(EditorContext& ctx, EditorObjectId id, bool buoyan
     {
         if (RenderableObject* object = base->As<RenderableObject>())
         {
-            object->SetBuoyant(buoyant);
+            physics::SetBuoyant(*object, buoyant); // R7.2b: the physics' switch
         }
     }
     ctx.document.SetDirty(true);

@@ -6,9 +6,8 @@
 #include <stdexcept>
 #include <cstring>
 
-#include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
 #include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
-#include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the modules that keep something of the object (the water mask)
+#include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the modules that keep something of the object (the water mask, the buoyancy, the physics' table)
 
 #include <utility>
 #include "rendering/core/Renderer.h"
@@ -84,16 +83,14 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
 
 RenderableObject::~RenderableObject()
 {
-    if (buoyant_) { OceanBuoyancy::Unregister(this); }
-    if (worldLinks_) { worldlinks::Detached(*this, worldLinks_); } // R7.2: the water mask
+    if (worldLinks_) { worldlinks::Detached(*this, worldLinks_); } // R7.2: the water mask, the buoyancy, the physics' table
     if (physicsRegistered_) { physics::Unregister(this); }
 }
 
 void RenderableObject::DetachFromWorld()
 {
     // As the destructor, now; the flags cleared so it does not again.
-    if (buoyant_) { OceanBuoyancy::Unregister(this); buoyant_ = false; }
-    if (worldLinks_) { worldlinks::Detached(*this, std::exchange(worldLinks_, std::uint8_t{ 0 })); } // R7.2: the water mask
+    if (worldLinks_) { worldlinks::Detached(*this, std::exchange(worldLinks_, std::uint8_t{ 0 })); } // R7.2: the water mask, the buoyancy, the physics' table
     if (physicsRegistered_) { physics::Unregister(this); physicsRegistered_ = false; }
 }
 
@@ -123,22 +120,6 @@ void RenderableObject::SetVesselSettings(std::shared_ptr<const physics::VesselSe
     vesselSettings_ = std::move(settings);
     ++bodyRevision_;
     if (physicsRegistered_) { physics::NotifyChanged(this); }
-}
-
-void RenderableObject::SetBuoyant(bool buoyant)
-{
-    if (buoyant == buoyant_) { return; }
-    buoyant_ = buoyant;
-    if (buoyant)
-    {
-        OceanBuoyancy::Register(this);
-    }
-    else
-    {
-        OceanBuoyancy::Unregister(this);
-        ClearRenderOffset();
-    }
-    if (physicsRegistered_) { physics::NotifyChanged(this); } // kinematic against static
 }
 
 void RenderableObject::Init(Renderer* renderer,

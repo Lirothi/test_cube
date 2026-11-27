@@ -14,7 +14,6 @@
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "core/math/AABB.h"
-#include "ocean/BuoyancyLayout.h" // buoyancy::Settings, held per object
 #include "physics/PhysicsTypes.h" // physics::Motion, physics::CollisionSettings, held per object
 
 class Renderer;
@@ -58,7 +57,7 @@ public:
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
-    void DetachFromWorld() override; // buoyancy, water mask, physics (the destructor's three)
+    void DetachFromWorld() override; // its world links (the water mask, the buoyancy, the physics' table) and the physics world
 
     TC_RENDERABLE_CAPABILITY(RenderableObject); // R7.3: As<RenderableObject>()
     void* QueryCapability(const void* tag) override
@@ -144,21 +143,9 @@ public:
     // frame's wave into the level.
     Math::mat4 GetAuthoredModelMatrix() const;
 
-    // --- Buoyancy ----------------------------------------------------------------------------
-    // Level object "buoyant": true floats it on the ocean (when the level has a visible one);
-    // "buoyancy" -- normally from the asset's mesh.json -- says where and how. See
-    // ocean/BuoyancyLayout.h.
-    // Also (un)registers with OceanBuoyancy, which then never walks the scene to find what floats;
-    // turning it off puts the object straight back where the level placed it.
-    void SetBuoyant(bool buoyant);
-    bool IsBuoyant() const { return buoyant_; }
-    void SetBuoyancySettings(buoyancy::Settings settings)
-    {
-        buoyancySettings_ = std::move(settings);
-        ++buoyancyRevision_;
-    }
-    const buoyancy::Settings& GetBuoyancySettings() const { return buoyancySettings_; }
-    std::uint32_t GetBuoyancyRevision() const { return buoyancyRevision_; }
+    // --- Buoyancy: not the object's (architecture plan R7.2b). Level object "buoyant" is the physics' switch
+    // (physics::SetBuoyant); "buoyancy" -- where and how, normally from the asset's mesh.json -- the ocean's
+    // (OceanBuoyancy::SetSettings). Both keep them in their tables, which the object's world links empty when it goes.
 
     // --- Physics -----------------------------------------------------------------------------
     // docs/physics_plan.md. Level object "physics" (absent = Static) and "collision" -- normally from the asset's mesh.json.
@@ -459,9 +446,6 @@ private:
     Math::float3 rotEuler_{};
     Math::mat4 renderOffset_;
     bool hasRenderOffset_ = false;
-    bool buoyant_ = false;
-    std::uint32_t buoyancyRevision_ = 0;
-    buoyancy::Settings buoyancySettings_;
     physics::Motion physicsMotion_ = physics::Motion::None;
     std::uint32_t bodyRevision_ = 0;
     std::shared_ptr<const physics::VesselSettings> vesselSettings_;

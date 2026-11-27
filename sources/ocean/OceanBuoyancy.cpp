@@ -13,6 +13,7 @@
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/renderables/ObjectWorldLinks.h" // R7.2b: the settings table forgets an object that leaves the world
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 
@@ -49,36 +50,72 @@ namespace
         return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
     }
 
-    // Never destroyed: objects living in statics are torn down after function-local statics made
-    // later, and an Unregister from a destructor must not find the registry already gone.
-    struct Registry
+    // R7.2b: the objects' buoyancy settings. Never destroyed: objects living in statics are torn down after function-local
+    // statics made later, and a link's ObjectDetached from a destructor must not find the table already gone.
+    struct SettingsEntry
+    {
+        buoyancy::Settings settings;
+        std::uint32_t revision = 0;
+    };
+    struct SettingsTable
     {
         std::mutex mutex;
-        std::vector<RenderableObject*> objects;
+        std::unordered_map<const RenderableObjectBase*, SettingsEntry> entries;
     };
-    Registry& TheRegistry()
+    SettingsTable& TheSettings()
     {
-        static Registry* registry = new Registry();
-        return *registry;
+        static SettingsTable* table = new SettingsTable();
+        return *table;
+    }
+
+    // The object leaves the world (RenderableObjectBase::DetachFromWorld, or its destructor): its settings go. A key only.
+    class BuoyancyLink final : public ObjectWorldLink
+    {
+    public:
+        const char* Name() const override { return "buoyancy"; }
+        void ObjectDetached(RenderableObjectBase& object) override
+        {
+            SettingsTable& table = TheSettings();
+            std::lock_guard<std::mutex> lock(table.mutex);
+            table.entries.erase(&object);
+        }
+    };
+
+    unsigned BuoyancyLinkBit()
+    {
+        static BuoyancyLink link;
+        static const unsigned bit = worldlinks::Add(link);
+        return bit;
     }
 }
 
-void OceanBuoyancy::Register(RenderableObject* object)
+void OceanBuoyancy::SetSettings(RenderableObject& object, buoyancy::Settings settings)
 {
-    Registry& registry = TheRegistry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    if (std::find(registry.objects.begin(), registry.objects.end(), object) == registry.objects.end())
+    const unsigned bit = BuoyancyLinkBit();
     {
-        registry.objects.push_back(object);
+        SettingsTable& table = TheSettings();
+        std::lock_guard<std::mutex> lock(table.mutex);
+        SettingsEntry& entry = table.entries[&object];
+        entry.settings = std::move(settings);
+        ++entry.revision;
     }
+    object.LinkToWorld(bit, true);
 }
 
-void OceanBuoyancy::Unregister(RenderableObject* object)
+buoyancy::Settings OceanBuoyancy::SettingsOf(const RenderableObject& object)
 {
-    Registry& registry = TheRegistry();
-    std::lock_guard<std::mutex> lock(registry.mutex);
-    registry.objects.erase(std::remove(registry.objects.begin(), registry.objects.end(), object),
-        registry.objects.end());
+    SettingsTable& table = TheSettings();
+    std::lock_guard<std::mutex> lock(table.mutex);
+    const auto it = table.entries.find(&object);
+    return it != table.entries.end() ? it->second.settings : buoyancy::Settings{};
+}
+
+std::uint32_t OceanBuoyancy::RevisionOf(const RenderableObject& object)
+{
+    SettingsTable& table = TheSettings();
+    std::lock_guard<std::mutex> lock(table.mutex);
+    const auto it = table.entries.find(&object);
+    return it != table.entries.end() ? it->second.revision : 0u;
 }
 
 Math::mat4 OceanBuoyancy::TiltMatrix(const Math::float3& tilt)
@@ -100,9 +137,9 @@ bool OceanBuoyancy::Setup(Body& body, const RenderableObject& object, const Ocea
     body = Body{};
     body.built = true;
     body.geometry = object.GetGeometryPath();
-    body.settingsRevision = object.GetBuoyancyRevision();
+    body.settingsRevision = RevisionOf(object);
     body.authored = object.GetAuthoredModelMatrix();
-    body.layout = buoyancy::Resolve(object.GetBuoyancySettings(), body.geometry);
+    body.layout = buoyancy::Resolve(SettingsOf(object), body.geometry);
     const buoyancy::Layout& layout = body.layout;
     if (!layout.Valid())
     {
@@ -303,7 +340,7 @@ void OceanBuoyancy::SyncReadback(OceanRenderable* ocean, Renderer& renderer)
     readback.Poll(&renderer, *ocean);
 }
 
-void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime)
+void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime, const std::vector<Floater>& floaters)
 {
     CPU_SCOPE(ProfilerScopes::kSceneTickBuoyancy);
     if (ocean != lastOcean_)
@@ -311,22 +348,17 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         bodies_.clear();
         lastOcean_ = ocean;
     }
-    std::vector<RenderableObject*>& registered = registered_;
-    {
-        Registry& registry = TheRegistry();
-        std::lock_guard<std::mutex> lock(registry.mutex);
-        if (registry.objects.empty() && bodies_.empty()) { return; } // nothing floats: free
-        registered = registry.objects; // into the kept capacity
-    }
+    if (floaters.empty() && bodies_.empty()) { return; } // nothing floats: free
     const bool oceanOn = ocean && ocean->IsVisibleGame() && ocean->GetSimulation();
     std::vector<RenderableObject*>& floating = floating_;
     floating.clear();
     worldFloaters_ = false;
-    for (RenderableObject* object : registered)
+    for (const Floater& floater : floaters)
     {
+        RenderableObject* object = floater.object;
         // A "buoyant" Dynamic object is the physics world's body (physics/PhysicsWorld.cpp SampleWater): it writes the offset, and it
         // reads the surface copied below.
-        if (object->GetPhysicsMotion() == physics::Motion::Dynamic)
+        if (floater.worldBody)
         {
             worldFloaters_ = worldFloaters_ || (oceanOn && object->IsVisibleGame());
             continue;
@@ -366,7 +398,7 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         Body& body = bodies_[object];
         const Math::mat4 authored = object->GetAuthoredModelMatrix();
         const bool stale = !body.built || body.geometry != object->GetGeometryPath() ||
-            body.settingsRevision != object->GetBuoyancyRevision() ||
+            body.settingsRevision != RevisionOf(*object) ||
             std::memcmp(&body.authored.m, &authored.m, sizeof(authored.m)) != 0;
         if (stale) { Setup(body, *object, *ocean); }
         if (!body.valid)

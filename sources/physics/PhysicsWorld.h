@@ -58,6 +58,22 @@ namespace physics
     void Unregister(RenderableObject* object);
     void NotifyChanged(RenderableObjectBase* object);
 
+    // R7.2: what the physics keeps of an object, in its own table and not on the object (which names no module;
+    // physics/PhysicsObjects.cpp). Thread-safe (a level load builds objects on workers). An object leaving the world (its
+    // destructor, DetachFromWorld) leaves the table through its world links (rendering/renderables/ObjectWorldLinks.h).
+    // The buoyant switch (level object "buoyant"; on for a copy of a "vessel" asset): a Dynamic body floats on the world's
+    // water by Jolt's buoyancy; anything else is floated by the ocean's buoyancy (ocean/OceanBuoyancy, which the scene's world
+    // hands CollectFloaters' list) and its body follows, kinematic. Off puts the object back where the level placed it.
+    void SetBuoyant(RenderableObject& object, bool buoyant);
+    bool IsBuoyant(const RenderableObject& object);
+    struct Floater
+    {
+        RenderableObject* object = nullptr;
+        bool dynamic = false; // a Dynamic body: the world floats it, not the ocean's buoyancy
+    };
+    // Every buoyant object, in the order it became so.
+    void CollectFloaters(std::vector<Floater>& out);
+
     // The player's body and how it moves: UE's UCharacterMovementComponent, its formulas and numbers in metres (docs/play_mode_plan.md). --set / MCP player.*, a level's
     // Player Start may say its own (app/game/PlayerStart.h). height, crouchHeight and radius are read when the body is made, the rest every frame.
     struct PlayerSettings

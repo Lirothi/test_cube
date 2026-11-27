@@ -1744,7 +1744,7 @@ namespace physics
 
                 GateBody boat;
                 boat.SetCollisionSettings(customBox(Math::float3(1.0f, 0.5f, 1.0f)));
-                boat.SetBuoyant(true);
+                SetBuoyant(boat, true);
                 boat.SetPhysicsMotion(Motion::Static);
                 World world;
                 float worst = 0.0f;
@@ -1854,7 +1854,7 @@ namespace physics
                     GateBody ball;
                     ball.SetCollisionSettings(customBall(0.25f));
                     ball.SetPosition(Math::float3(0.0f, 2.0f, 0.0f));
-                    ball.SetBuoyant(true);
+                    SetBuoyant(ball, true);
                     ball.SetPhysicsMotion(Motion::Dynamic);
                     World world;
                     for (int i = 0; i < 600; ++i)

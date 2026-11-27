@@ -428,7 +428,7 @@ namespace
         shape.primitives.push_back(box);
         boat->SetCollisionSettings(shape);
         boat->SetVesselSettings(std::make_shared<VesselSettings>());
-        boat->SetBuoyant(true);
+        physics::SetBuoyant(*boat, true);
         boat->SetPhysicsMotion(Motion::Dynamic);
         physics::World world;
         VesselSystem vessels(world);
@@ -462,7 +462,7 @@ namespace
             auto hull = std::make_unique<GateObject>();
             hull->SetCollisionSettings(shape);
             hull->SetVesselSettings(std::make_shared<VesselSettings>());
-            hull->SetBuoyant(true);
+            physics::SetBuoyant(*hull, true);
             hull->SetPhysicsMotion(Motion::Dynamic);
             physics::World afloat;
             VesselSystem boats(afloat);

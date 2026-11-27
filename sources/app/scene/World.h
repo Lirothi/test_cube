@@ -309,6 +309,8 @@ protected:
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
+    std::vector<physics::Floater> physicsFloaters_;  // R7.2b: who floats, the physics' list (TickBuoyancy)
+    std::vector<OceanBuoyancy::Floater> floaters_;   // and as the ocean's buoyancy takes it
     std::function<void(Renderer*, RuntimeObjects&)> gameHandOver_; // R6.2a: SetGameHooks
     std::function<void()> gameForget_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
@@ -334,4 +336,5 @@ protected:
 private:
     void TickNightLamps(float deltaTime);
     void TickPhysics(float deltaTime, Renderer& renderer);
+    void TickBuoyancy(float deltaTime, Renderer& renderer); // R7.2b: the physics' buoyant objects to the ocean's buoyancy
 };

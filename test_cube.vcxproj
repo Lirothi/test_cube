@@ -605,6 +605,7 @@
     <ClCompile Include="sources/physics/PhysicsCharacter.cpp" />
     <ClCompile Include="sources/physics/PhysicsVessel.cpp" />
     <ClCompile Include="sources/physics/PhysicsBody.cpp" />
+    <ClCompile Include="sources/physics/PhysicsObjects.cpp" />
     <ClCompile Include="sources/physics/VesselBench.cpp" />
     <ClCompile Include="sources/app/game/VesselCamera.cpp" />
     <ClCompile Include="sources/physics/PhysicsShapes.cpp" />

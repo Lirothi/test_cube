@@ -478,7 +478,7 @@ void World::Tick(float deltaTime, Renderer& renderer) {
 
     // Buoyancy after the objects' Tick (the ocean clock is this frame's now); the render offsets it writes are folded
     // into this frame's model matrices at the hand-over (Scene::Sync, SyncSceneState).
-    buoyancy_.Tick(FindOceanRenderable(), renderer, deltaTime);
+    TickBuoyancy(deltaTime, renderer);
     TickPhysics(deltaTime, renderer);
 
     {
@@ -500,7 +500,7 @@ void World::Tick(float deltaTime, Renderer& renderer) {
         }
     }
 
-    buoyancy_.Tick(FindOceanRenderable(), renderer, deltaTime);
+    TickBuoyancy(deltaTime, renderer);
     TickPhysics(deltaTime, renderer);
 
     {
@@ -550,6 +550,15 @@ void World::Tick(float deltaTime, Renderer& renderer) {
     timeOfDay_.Tick(deltaTime, dirLight_, skySun_);
     // Plan L: then the lamps, by where the time of day has just put the sun.
     TickNightLamps(deltaTime);
+}
+
+// R7.2b: the buoyant switch is the physics' (physics::SetBuoyant); the ocean's buoyancy floats what the world does not.
+void World::TickBuoyancy(float deltaTime, Renderer& renderer)
+{
+    physics::CollectFloaters(physicsFloaters_);
+    floaters_.clear();
+    for (const physics::Floater& floater : physicsFloaters_) { floaters_.push_back(OceanBuoyancy::Floater{ floater.object, floater.dynamic }); }
+    buoyancy_.Tick(FindOceanRenderable(), renderer, deltaTime, floaters_);
 }
 
 void World::TickPhysics(float deltaTime, Renderer& renderer)

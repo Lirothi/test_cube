@@ -31,20 +31,28 @@ class Renderer;
 class OceanBuoyancy
 {
 public:
+    // A buoyant object as the scene's world hands it over (R7.2b: the physics' list, physics::CollectFloaters).
+    struct Floater
+    {
+        RenderableObject* object = nullptr;
+        bool worldBody = false; // a Dynamic body: the physics world floats it (its SampleWater) and reads the surface copied here
+    };
     // Once a frame from Scene::Tick: after the objects' Tick (the ocean clock is this frame's),
     // before their PostTick (which folds the offsets written here into the model matrices).
-    // Works from the REGISTRY below, never a walk of the scene: a level where nothing floats pays one
+    // Works from the list it is handed, never a walk of the scene: a level where nothing floats pays one
     // empty check, and one where five boats float pays for five boats, not for 1400 objects.
-    void Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime);
+    void Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime, const std::vector<Floater>& floaters);
     // Game thread plan G4e: the readback ring is the render half's (Main_OceanReadback writes it). At the hand-over
     // (Scene::Sync), where nothing records, the next copy is requested and a finished one adopted; Tick samples the
     // adopted surface, frozen until the next hand-over.
     void SyncReadback(OceanRenderable* ocean, Renderer& renderer);
 
-    // The floating objects: RenderableObject::SetBuoyant(true) registers, SetBuoyant(false) and the
-    // destructor unregister. Thread-safe (a level load may build objects on workers).
-    static void Register(RenderableObject* object);
-    static void Unregister(RenderableObject* object);
+    // R7.2b: where and how an object floats (level object / mesh.json "buoyancy"), kept here and not on the object; without
+    // them it floats by its geometry's default layout. Who floats is the physics' switch (physics::SetBuoyant). Thread-safe
+    // (a level load builds objects on workers); an object leaving the world leaves the table through its world links.
+    static void SetSettings(RenderableObject& object, buoyancy::Settings settings);
+    static buoyancy::Settings SettingsOf(const RenderableObject& object);
+    static std::uint32_t RevisionOf(const RenderableObject& object); // 0 = never set; up by one with every SetSettings
 
     // World-space pontoons (xyz = centre, w = radius) of a floating object as they sit this frame.
     // False when the object is not floating. For the editor's overlay.
@@ -109,7 +117,6 @@ private:
     std::unordered_map<const RenderableObject*, Body> bodies_;
     // Tick's working lists, kept between frames for their capacity (as locals, with a set of the
     // living, they were ~12 allocations a frame for five boats).
-    std::vector<RenderableObject*> registered_;
     std::vector<RenderableObject*> floating_;
     bool worldFloaters_ = false; // a Dynamic "buoyant" object wants the surface too, floated by the physics world
     // A different ocean (a level switch) drops every body: an object pointer reused by the new level

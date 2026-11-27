@@ -1134,7 +1134,7 @@ namespace
             std::vector<Math::float4> pontoons;
             if (object && ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons))
             {
-                const buoyancy::Settings& settings = object->GetBuoyancySettings();
+                const buoyancy::Settings settings = OceanBuoyancy::SettingsOf(*object); // R7.2b: the ocean's table
                 ImGui::TextDisabled("%d %s pontoons, inertia %.2f, damping %.2f",
                     static_cast<int>(pontoons.size()), settings.pontoons.empty() ? "automatic" : "authored",
                     settings.inertia, settings.damping);

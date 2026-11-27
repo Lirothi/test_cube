@@ -7,7 +7,7 @@
 // Floats an object on the ocean, or stops it floating: the document's "buoyant" property -- written
 // only where it differs from the asset's default (off; ON for a copy of a "vessel" asset, which floats
 // unless it says otherwise), so a level that never floated anything saves byte-identical -- and the
-// runtime object's flag, which ocean/OceanBuoyancy picks up (or lets go of) on the next frame. Undoable;
+// runtime object's switch (physics::SetBuoyant, R7.2b), which ocean/OceanBuoyancy picks up (or lets go of) on the next frame. Undoable;
 // Undo restores what the object had before, not the opposite of the request.
 class SetBuoyantCommand : public EditorCommand
 {

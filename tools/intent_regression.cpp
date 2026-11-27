@@ -79,6 +79,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
 #include "rendering/meshes/StaticMesh.h"          // TestRenderStateHandOver (R7.1)
+#include "ocean/OceanBuoyancy.h"                   // TestWorldTablesForgetAnObject (R7.2b)
 #include "core/threading/ThreadRole.h"            // TestRenderStateHandOver: the game's write, the hand-over
 #include "vfx/ParticlePresets.h"                   // TestParticleFieldsOfAnotherTypeAreLeftAlone
 #include "text/FontAtlas.h"                        // TestAFontTgaIsSizedByItsBytesNotItsHeader (LoadFontTga8)
@@ -1924,6 +1925,49 @@ void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
 // Architecture plan R7.1: every field of an object's render state (ObjectRenderState) comes from the hand-over -- a write
 // of the game's waits for Sync while the render half runs, and Sync copies it. A field the copy forgets is named here by
 // its field's name (the control: one copy left out of SyncSwitchesToRender / SyncSceneState).
+// R7.2b: the buoyant switch is the physics' and the buoyancy settings are the ocean's -- tables, not the object's fields -- and an
+// object that leaves the world leaves both (its world links). A floater left in the physics' list would be a dangling pointer the
+// ocean's buoyancy steps every frame (R7.2a's control crashed the same way through the water mask).
+void TestWorldTablesForgetAnObject()
+{
+    std::vector<physics::Floater> floaters;
+    const auto listed = [&floaters](const RenderableObject* object, bool* dynamic = nullptr)
+    {
+        physics::CollectFloaters(floaters);
+        for (const physics::Floater& f : floaters)
+        {
+            if (f.object == object)
+            {
+                if (dynamic) { *dynamic = f.dynamic; }
+                return true;
+            }
+        }
+        return false;
+    };
+    auto a = std::make_unique<StaticMesh>("", "", "", L"");
+    auto b = std::make_unique<StaticMesh>("", "", "", L"");
+    Check(!physics::IsBuoyant(*a) && !listed(a.get()), "R7.2b: a new object does not float");
+    physics::SetBuoyant(*a, true);
+    physics::SetBuoyant(*b, true);
+    buoyancy::Settings settings;
+    settings.draft = 0.7f;
+    OceanBuoyancy::SetSettings(*a, settings);
+    bool dynamic = true;
+    Check(physics::IsBuoyant(*a) && listed(a.get(), &dynamic) && !dynamic && listed(b.get()), "R7.2b: buoyant, both are in the physics' list (not dynamic)");
+    Check(OceanBuoyancy::RevisionOf(*a) == 1u && Near(OceanBuoyancy::SettingsOf(*a).draft, 0.7f) && OceanBuoyancy::RevisionOf(*b) == 0u,
+          "R7.2b: the ocean's table holds a's settings, b has none");
+    b->SetRenderOffset(Math::mat4::Translation(Math::float3(0.0f, 1.0f, 0.0f)));
+    physics::SetBuoyant(*b, false);
+    Check(!listed(b.get()) && !b->HasRenderOffset(), "R7.2b: switched off it leaves the list, back where the level put it");
+    a->DetachFromWorld();
+    Check(!physics::IsBuoyant(*a) && !listed(a.get()) && OceanBuoyancy::RevisionOf(*a) == 0u,
+          "R7.2b: an object that leaves the world leaves the physics' list and the ocean's table");
+    physics::SetBuoyant(*b, true);
+    const RenderableObject* gone = b.get();
+    b.reset();
+    Check(!listed(gone), "R7.2b: a destroyed floater is not in the physics' list");
+}
+
 void TestRenderStateHandOver()
 {
     StaticMesh mesh("", "", "", L"");
@@ -7031,6 +7075,7 @@ int main(int argc, char** argv)
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestCastShadowIsAFlagThatUndoes(actionCtx);
         TestRenderStateHandOver(); // R7.1
+        TestWorldTablesForgetAnObject(); // R7.2b
         TestEditorRaceTracks(actionCtx);
         TestRaceCourseAndBot(actionCtx);
         TestNightLampsSwitch();

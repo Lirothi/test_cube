@@ -682,11 +682,11 @@ namespace physics
                     continue;
                 }
                 const bool dynamicBody = object.GetPhysicsMotion() == Motion::Dynamic;
-                const bool kinematicBody = !dynamicBody && object.IsBuoyant();
+                const bool kinematicBody = !dynamicBody && IsBuoyant(object);
                 const ShapeKind kind = ResolveShapeKind(object.GetCollisionSettings().shape, dynamicBody);
                 std::string shapeKey = ShapeKeyOf(object.GetGeometryPath(), kind == ShapeKind::Custom ? std::string() : GeometryStamp(object.GetGeometryPath()), object.GetCollisionSettings(), kind);
 
-                const bool floats = dynamicBody && object.IsBuoyant();
+                const bool floats = dynamicBody && IsBuoyant(object);
                 const bool same = !entry.body.IsInvalid() && entry.shapeKey == shapeKey && entry.motion == object.GetPhysicsMotion() &&
                     entry.kinematic == kinematicBody && entry.floats == floats && entry.revision == object.GetBodyRevision() &&
                     entry.scale.x == object.GetScale().x && entry.scale.y == object.GetScale().y && entry.scale.z == object.GetScale().z;
@@ -752,12 +752,12 @@ namespace physics
                 Entry& entry = *w.entry;
                 RenderableObject& object = *entry.object;
                 const BuiltShape& built_ = shapes.find(w.key)->second;
-                const VesselSettings* vesselSettings = object.GetPhysicsMotion() == Motion::Dynamic && object.IsBuoyant() ? object.GetVesselSettings() : nullptr;
+                const VesselSettings* vesselSettings = object.GetPhysicsMotion() == Motion::Dynamic && IsBuoyant(object) ? object.GetVesselSettings() : nullptr;
                 entry.motion = object.GetPhysicsMotion();
                 entry.shapeKey = w.key;
                 entry.scale = object.GetScale();
                 entry.revision = object.GetBodyRevision();
-                entry.kinematic = entry.motion != Motion::Dynamic && object.IsBuoyant();
+                entry.kinematic = entry.motion != Motion::Dynamic && IsBuoyant(object);
                 if (!built_.shape) { continue; } // nothing solid in it: only leaves
 
                 std::string error;
@@ -812,7 +812,7 @@ namespace physics
                     entry.rolling = settings.rollingResistance;
                     entry.rollingRadius = scaled->GetInnerRadius();
                     entry.velocityY = 0.0f;
-                    if (object.IsBuoyant())
+                    if (IsBuoyant(object))
                     {
                         // Waves move under it: it must not fall asleep on them.
                         creation.mAllowSleeping = false;

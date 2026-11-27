@@ -14,6 +14,8 @@
 #include "core/vfs/Vfs.h"
 #include "ocean/BuoyancyJson.h"
 #include "ocean/WaterMask.h" // R7.2: ocean::watermask::Set
+#include "ocean/OceanBuoyancy.h" // R7.2b: OceanBuoyancy::SetSettings
+#include "physics/PhysicsWorld.h" // R7.2b: physics::SetBuoyant
 #include "physics/CollisionJson.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
@@ -513,7 +515,7 @@ namespace SceneObjectFactory
             schema::Custom<S>("buoyant", [](const json& o, S& mesh) {
                 if (o.contains("buoyant") && o["buoyant"].is_boolean())
                 {
-                    mesh.SetBuoyant(o["buoyant"].get<bool>());
+                    physics::SetBuoyant(mesh, o["buoyant"].get<bool>()); // R7.2b: the physics' switch
                 }
             }, nullptr).Label("Buoyant", 0.0f, "Floats on the ocean (the object's switch; absent = off, a vessel = on)."),
             schema::Custom<S>("buoyancy", [](const json& o, S& mesh) {
@@ -522,7 +524,7 @@ namespace SceneObjectFactory
                     buoyancy::Settings settings;
                     if (buoyancy::ReadSettings(o["buoyancy"], settings))
                     {
-                        mesh.SetBuoyancySettings(std::move(settings));
+                        OceanBuoyancy::SetSettings(mesh, std::move(settings)); // R7.2b: the ocean's table
                     }
                 }
             }, nullptr).Label("Buoyancy", 0.0f, "Where and how it floats (normally the asset's mesh.json)."),
@@ -554,7 +556,7 @@ namespace SceneObjectFactory
                     physics::ReadVesselSettings(o["vessel"], *vessel);
                     mesh.SetVesselSettings(std::move(vessel));
                     motion = physics::Motion::Dynamic;
-                    if (!o.contains("buoyant")) { mesh.SetBuoyant(true); }
+                    if (!o.contains("buoyant")) { physics::SetBuoyant(mesh, true); }
                 }
                 if (o.contains("physics") && o["physics"].is_string()) { physics::MotionFromName(o["physics"].get<std::string>(), motion); }
                 mesh.SetPhysicsMotion(motion);
