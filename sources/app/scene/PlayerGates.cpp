@@ -41,8 +41,8 @@ namespace
             box.center = Math::float3(0.0f, -1.0f, 0.0f);
             box.halfExtents = Math::float3(100.0f, 1.0f, 100.0f);
             shape.primitives.push_back(box);
-            SetCollisionSettings(shape);
-            SetPhysicsMotion(Motion::Static);
+            physics::SetCollision(*this, shape);
+            physics::SetMotion(*this, Motion::Static);
         }
         const std::string& GetGeometryPath() const override { return path_; }
         bool IsSimpleRender() const override { return false; }

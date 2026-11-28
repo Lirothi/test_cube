@@ -134,9 +134,9 @@ void SetVesselTuneCommand::Apply(EditorContext& ctx, EditorObjectId id, const nl
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value))
     {
         RenderableObject* object = base->As<RenderableObject>();
-        if (object && object->GetVesselSettings())
+        if (object && physics::VesselOf(*object))
         {
-            object->SetVesselSettings(std::make_shared<const physics::VesselSettings>(EffectiveSettings(*obj)));
+            physics::SetVessel(*object, std::make_shared<const physics::VesselSettings>(EffectiveSettings(*obj))); // R7.2c: the physics' table
         }
     }
 }

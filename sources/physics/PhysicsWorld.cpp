@@ -253,7 +253,7 @@ namespace physics
     }
 
     void Register(RenderableObject* object) { Post(EventKind::Added, object, object); }
-    void Unregister(RenderableObject* object) { Post(EventKind::Removed, object); }
+    void Unregister(RenderableObjectBase* object) { Post(EventKind::Removed, object); }
     void NotifyChanged(RenderableObjectBase* object) { Post(EventKind::Changed, object); }
 
     struct World::Impl
@@ -490,8 +490,8 @@ namespace physics
         // What this object wants of the world right now.
         static bool WantsBody(const RenderableObject& object)
         {
-            return object.GetPhysicsMotion() != Motion::None && object.IsVisibleGame() &&
-                object.GetCollisionSettings().shape != ShapeKind::None && !object.GetGeometryPath().empty();
+            return MotionOf(object) != Motion::None && object.IsVisibleGame() &&
+                CollisionOf(object).shape != ShapeKind::None && !object.GetGeometryPath().empty();
         }
 
         void Forget(Entry& entry)
@@ -650,7 +650,7 @@ namespace physics
             if (it == shapes.end())
             {
                 const RenderableObject& object = *wanted.entry->object;
-                it = shapes.emplace(key, BuildAssetShape(object.GetGeometryPath(), BakeScale(object.GetCollisionSettings(), scale), wanted.dynamicBody)).first;
+                it = shapes.emplace(key, BuildAssetShape(object.GetGeometryPath(), BakeScale(CollisionOf(object), scale), wanted.dynamicBody)).first;
                 RecountShapes();
             }
             if (!it->second.shape) { error = it->second.error; }
@@ -678,17 +678,17 @@ namespace physics
                 {
                     Forget(entry);
                     ClearOffset(entry);
-                    entry.motion = object.GetPhysicsMotion();
+                    entry.motion = MotionOf(object);
                     continue;
                 }
-                const bool dynamicBody = object.GetPhysicsMotion() == Motion::Dynamic;
+                const bool dynamicBody = MotionOf(object) == Motion::Dynamic;
                 const bool kinematicBody = !dynamicBody && IsBuoyant(object);
-                const ShapeKind kind = ResolveShapeKind(object.GetCollisionSettings().shape, dynamicBody);
-                std::string shapeKey = ShapeKeyOf(object.GetGeometryPath(), kind == ShapeKind::Custom ? std::string() : GeometryStamp(object.GetGeometryPath()), object.GetCollisionSettings(), kind);
+                const ShapeKind kind = ResolveShapeKind(CollisionOf(object).shape, dynamicBody);
+                std::string shapeKey = ShapeKeyOf(object.GetGeometryPath(), kind == ShapeKind::Custom ? std::string() : GeometryStamp(object.GetGeometryPath()), CollisionOf(object), kind);
 
                 const bool floats = dynamicBody && IsBuoyant(object);
-                const bool same = !entry.body.IsInvalid() && entry.shapeKey == shapeKey && entry.motion == object.GetPhysicsMotion() &&
-                    entry.kinematic == kinematicBody && entry.floats == floats && entry.revision == object.GetBodyRevision() &&
+                const bool same = !entry.body.IsInvalid() && entry.shapeKey == shapeKey && entry.motion == MotionOf(object) &&
+                    entry.kinematic == kinematicBody && entry.floats == floats && entry.revision == BodyRevisionOf(object) &&
                     entry.scale.x == object.GetScale().x && entry.scale.y == object.GetScale().y && entry.scale.z == object.GetScale().z;
                 if (same)
                 {
@@ -730,7 +730,7 @@ namespace physics
                     MEM_SCOPE(MemTag::Physics);
                     const Wanted& w = *toBuild[i];
                     const RenderableObject& object = *w.entry->object;
-                    built[i] = BuildAssetShape(object.GetGeometryPath(), object.GetCollisionSettings(), w.dynamicBody);
+                    built[i] = BuildAssetShape(object.GetGeometryPath(), CollisionOf(object), w.dynamicBody);
                 }, 1);
             for (size_t i = 0; i < toBuild.size(); ++i)
             {
@@ -752,11 +752,12 @@ namespace physics
                 Entry& entry = *w.entry;
                 RenderableObject& object = *entry.object;
                 const BuiltShape& built_ = shapes.find(w.key)->second;
-                const VesselSettings* vesselSettings = object.GetPhysicsMotion() == Motion::Dynamic && IsBuoyant(object) ? object.GetVesselSettings() : nullptr;
-                entry.motion = object.GetPhysicsMotion();
+                const std::shared_ptr<const VesselSettings> vesselHeld = MotionOf(object) == Motion::Dynamic && IsBuoyant(object) ? VesselOf(object) : nullptr;
+                const VesselSettings* vesselSettings = vesselHeld.get();
+                entry.motion = MotionOf(object);
                 entry.shapeKey = w.key;
                 entry.scale = object.GetScale();
-                entry.revision = object.GetBodyRevision();
+                entry.revision = BodyRevisionOf(object);
                 entry.kinematic = entry.motion != Motion::Dynamic && IsBuoyant(object);
                 if (!built_.shape) { continue; } // nothing solid in it: only leaves
 
@@ -788,7 +789,7 @@ namespace physics
                 entry.fellOut = false; // a new body, where the level has it
 
                 const bool dynamicBody = entry.motion == Motion::Dynamic;
-                const CollisionSettings& settings = object.GetCollisionSettings();
+                const CollisionSettings& settings = CollisionOf(object);
                 const JPH::EMotionType motionType = dynamicBody ? JPH::EMotionType::Dynamic
                     : entry.kinematic ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static;
                 JPH::BodyCreationSettings creation(scaled.GetPtr(), pose.position, pose.rotation, motionType,

@@ -52,15 +52,23 @@ namespace physics
         Math::float3 gravity_;
     };
 
-    // The objects: RenderableObject::SetPhysicsMotion registers, its destructor unregisters, its setters notify. Thread-safe
-    // (a level load may build objects on workers): they only queue, and the world reads the object at its next Tick.
-    void Register(RenderableObject* object);
-    void Unregister(RenderableObject* object);
-    void NotifyChanged(RenderableObjectBase* object);
-
-    // R7.2: what the physics keeps of an object, in its own table and not on the object (which names no module;
-    // physics/PhysicsObjects.cpp). Thread-safe (a level load builds objects on workers). An object leaving the world (its
-    // destructor, DetachFromWorld) leaves the table through its world links (rendering/renderables/ObjectWorldLinks.h).
+    // R7.2: what the physics keeps of an object -- what a world builds its body from -- in its own table and not on the object
+    // (which names no module; physics/PhysicsObjects.cpp). Thread-safe (a level load builds objects on workers). A change
+    // reaches the worlds by itself; the object's moves and visibility reach them through its world links
+    // (rendering/renderables/ObjectWorldLinks.h), and so does its leaving the world (its destructor, DetachFromWorld).
+    // Level object "physics" (absent = Static; a copy of a "vessel" asset: Dynamic). The first motion registers the object with
+    // the worlds, which never walk the scene.
+    void SetMotion(RenderableObject& object, Motion motion);
+    Motion MotionOf(const RenderableObject& object); // None until set
+    // "collision" (normally from the asset's mesh.json): how its shape is made.
+    void SetCollision(RenderableObject& object, CollisionSettings settings);
+    CollisionSettings CollisionOf(const RenderableObject& object);
+    // mesh.json "vessel" (with a placed copy's own numbers over it): a powered boat; null = not one. A world takes a copy when
+    // it builds the body, so a change rebuilds it.
+    void SetVessel(RenderableObject& object, std::shared_ptr<const VesselSettings> settings);
+    std::shared_ptr<const VesselSettings> VesselOf(const RenderableObject& object);
+    // Moves with what the body is built from: the collision, the vessel's numbers.
+    std::uint32_t BodyRevisionOf(const RenderableObject& object);
     // The buoyant switch (level object "buoyant"; on for a copy of a "vessel" asset): a Dynamic body floats on the world's
     // water by Jolt's buoyancy; anything else is floated by the ocean's buoyancy (ocean/OceanBuoyancy, which the scene's world
     // hands CollectFloaters' list) and its body follows, kinematic. Off puts the object back where the level placed it.

@@ -22,8 +22,6 @@ rendering/meshes/GpuInstancedModels.cpp -> rendering/renderables/InstanceTypes.h
 rendering/meshes/GpuInstancedModels.h -> rendering/renderables/GBufferRenderable.h
 rendering/meshes/MeshManager.cpp -> rendering/shadows/TessySettings.h
 rendering/meshes/StaticMesh.h -> rendering/renderables/GBufferRenderable.h
-rendering/renderables/RenderableObject.cpp -> physics/PhysicsWorld.h
-rendering/renderables/RenderableObject.h -> physics/PhysicsTypes.h
 rendering/streaming/StreamingBounds.cpp -> rendering/renderables/GBufferRenderable.h
 rendering/streaming/StreamingBounds.cpp -> rendering/renderables/RenderableObject.h
 rendering/streaming/StreamingBounds.cpp -> rendering/scene/SceneFrameData.h

@@ -15,7 +15,7 @@
 // sea): the level object's "vessel" block, which SceneObjectFactory::ResolveMeshAsset lays key by key over its asset's
 // mesh.json "vessel". A key is written only while it differs from the asset's, so a copy tuned and put back saves
 // byte-identical. The runtime object takes the numbers at once and the physics world rebuilds its body from them
-// (RenderableObject::SetVesselSettings): the card in Play, the helm and a race bot all read them from there. Undo restores
+// (physics::SetVessel, R7.2c): the card in Play, the helm and a race bot all read them from there. Undo restores
 // the block the object had.
 class SetVesselTuneCommand : public EditorCommand
 {

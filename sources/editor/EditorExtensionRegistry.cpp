@@ -633,7 +633,8 @@ namespace
         static void DrawBoat(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj, RenderableObjectBase* runtime)
         {
             RenderableObject* object = runtime ? runtime->As<RenderableObject>() : nullptr;
-            const physics::VesselSettings* live = object ? object->GetVesselSettings() : nullptr;
+            const std::shared_ptr<const physics::VesselSettings> liveHeld = object ? physics::VesselOf(*object) : nullptr; // R7.2c: the physics' table
+    const physics::VesselSettings* live = liveHeld.get();
             if (!live) { return; }
             ImGui::SeparatorText("Boat");
             ImGui::PushID("boat");

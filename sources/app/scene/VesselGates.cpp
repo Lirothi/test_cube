@@ -426,10 +426,10 @@ namespace
         box.kind = PrimitiveKind::Box;
         box.halfExtents = Math::float3(5.0f, 1.35f, 1.17f);
         shape.primitives.push_back(box);
-        boat->SetCollisionSettings(shape);
-        boat->SetVesselSettings(std::make_shared<VesselSettings>());
+        physics::SetCollision(*boat, shape);
+        physics::SetVessel(*boat, std::make_shared<VesselSettings>());
         physics::SetBuoyant(*boat, true);
-        boat->SetPhysicsMotion(Motion::Dynamic);
+        physics::SetMotion(*boat, Motion::Dynamic);
         physics::World world;
         VesselSystem vessels(world);
         frame(world, 1.0f / 60.0f);
@@ -460,10 +460,10 @@ namespace
         {
             FlatWater water;
             auto hull = std::make_unique<GateObject>();
-            hull->SetCollisionSettings(shape);
-            hull->SetVesselSettings(std::make_shared<VesselSettings>());
+            physics::SetCollision(*hull, shape);
+            physics::SetVessel(*hull, std::make_shared<VesselSettings>());
             physics::SetBuoyant(*hull, true);
-            hull->SetPhysicsMotion(Motion::Dynamic);
+            physics::SetMotion(*hull, Motion::Dynamic);
             physics::World afloat;
             VesselSystem boats(afloat);
             for (int i = 0; i < 300; ++i)

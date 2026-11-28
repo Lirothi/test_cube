@@ -1966,6 +1966,77 @@ void TestWorldTablesForgetAnObject()
     const RenderableObject* gone = b.get();
     b.reset();
     Check(!listed(gone), "R7.2b: a destroyed floater is not in the physics' list");
+
+    // R7.2c: the motion, the collision and the vessel's numbers likewise; the body's revision moves with the last two.
+    auto c = std::make_unique<StaticMesh>("", "", "", L"");
+    Check(physics::MotionOf(*c) == physics::Motion::None && physics::BodyRevisionOf(*c) == 0u && !physics::VesselOf(*c), "R7.2c: a new object has no motion, revision or boat");
+    physics::CollisionSettings collision;
+    collision.mass = 12.0f;
+    physics::SetCollision(*c, collision);
+    physics::SetVessel(*c, std::make_shared<const physics::VesselSettings>());
+    physics::SetBuoyant(*c, true);
+    physics::SetMotion(*c, physics::Motion::Dynamic);
+    Check(physics::BodyRevisionOf(*c) == 2u && Near(physics::CollisionOf(*c).mass, 12.0f) && physics::VesselOf(*c) && physics::MotionOf(*c) == physics::Motion::Dynamic,
+          "R7.2c: the physics' table holds the collision, the boat and the motion; the revision moved twice");
+    dynamic = false;
+    Check(listed(c.get(), &dynamic) && dynamic, "R7.2c: a buoyant Dynamic body is the world's to float");
+    c->DetachFromWorld();
+    Check(physics::MotionOf(*c) == physics::Motion::None && !physics::VesselOf(*c) && physics::BodyRevisionOf(*c) == 0u && !listed(c.get()),
+          "R7.2c: an object that leaves the world leaves the physics' table");
+}
+
+// R7.2c: the object no longer knows it has a body (physicsRegistered_ is gone) -- its moves, its visibility and its end reach the
+// worlds through its world links (the physics' table). A box in a world, a ray straight down on it.
+void TestPhysicsHearsTheObject()
+{
+    class TableBox final : public RenderableObject
+    {
+    public:
+        TableBox() : RenderableObject("", L"") {}
+        const std::string& GetGeometryPath() const override { return path_; }
+        bool IsSimpleRender() const override { return false; }
+
+    private:
+        std::string path_ = "r72c-box"; // a custom shape reads no file; the world only wants a name
+    };
+    threading::RoleScope game(threading::ThreadRole::Game);
+    auto box = std::make_unique<TableBox>();
+    physics::CollisionSettings shape;
+    shape.shape = physics::ShapeKind::Custom;
+    physics::CollisionPrimitive part;
+    part.kind = physics::PrimitiveKind::Box;
+    part.halfExtents = Math::float3(1.0f, 1.0f, 1.0f);
+    shape.primitives.push_back(part);
+    physics::SetCollision(*box, shape);
+    physics::SetMotion(*box, physics::Motion::Static);
+    physics::World world;
+    const auto frame = [&world]()
+    {
+        world.Tick(1.0f / 60.0f);
+        world.KickStep();
+        world.FinishStep();
+        world.SyncPoses();
+    };
+    const auto hitAt = [&world, &box](float x)
+    {
+        physics::RayHit hit;
+        return world.RayCast(Math::float3(x, 10.0f, 0.0f), Math::float3(0.0f, -1.0f, 0.0f), 20.0f, hit) && hit.object == box.get();
+    };
+    frame();
+    Check(hitAt(0.0f) && !hitAt(5.0f), "R7.2c: the box's body stands where the box does");
+    box->SetPosition(Math::float3(5.0f, 0.0f, 0.0f));
+    frame();
+    Check(!hitAt(0.0f) && hitAt(5.0f), "R7.2c: a move of the box reaches the world (its world links)");
+    box->SetVisible(false);
+    frame();
+    Check(!hitAt(5.0f), "R7.2c: a hidden box has no body");
+    box->SetVisible(true);
+    frame();
+    Check(hitAt(5.0f), "R7.2c: shown again, the body is back");
+    box.reset();
+    frame();
+    physics::RayHit hit;
+    Check(!world.RayCast(Math::float3(5.0f, 10.0f, 0.0f), Math::float3(0.0f, -1.0f, 0.0f), 20.0f, hit), "R7.2c: a destroyed box leaves the world");
 }
 
 void TestRenderStateHandOver()
@@ -7075,7 +7146,8 @@ int main(int argc, char** argv)
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestCastShadowIsAFlagThatUndoes(actionCtx);
         TestRenderStateHandOver(); // R7.1
-        TestWorldTablesForgetAnObject(); // R7.2b
+        TestWorldTablesForgetAnObject(); // R7.2b, R7.2c
+        TestPhysicsHearsTheObject(); // R7.2c
         TestEditorRaceTracks(actionCtx);
         TestRaceCourseAndBot(actionCtx);
         TestNightLampsSwitch();

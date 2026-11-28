@@ -1770,7 +1770,7 @@ namespace watermask
                 entry.object->SeeThroughSlots(glass);
                 // Where still water stands on it: a boat's draft (over its origin), else a floater's (over its lowest point).
                 float waterline = 3.0e38f, draftOverLowest = -3.0e38f;
-                if (const physics::VesselSettings* vessel = entry.object->GetVesselSettings()) { waterline = vessel->draft; }
+                if (const std::shared_ptr<const physics::VesselSettings> vessel = physics::VesselOf(*entry.object)) { waterline = vessel->draft; }
                 else if (physics::IsBuoyant(*entry.object)) { draftOverLowest = OceanBuoyancy::SettingsOf(*entry.object).draft; }
                 const std::string& path = entry.object->GetGeometryPath();
                 WaterMaskBakeKey bakeKey;

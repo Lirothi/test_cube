@@ -135,6 +135,13 @@ namespace physics
 
     class StepBody; // physics/PhysicsBody.h (R14.2)
 
+    // The worlds' queue (PhysicsWorld.cpp): an object's first motion registers it, and its table's link tells of its moves and
+    // unregisters it (physics/PhysicsObjects.cpp, R7.2c). Thread-safe (a level load builds objects on workers): they only queue,
+    // and a world reads the object at its next Tick.
+    void Register(RenderableObject* object);
+    void Unregister(RenderableObjectBase* object);
+    void NotifyChanged(RenderableObjectBase* object);
+
     // PhysicsCharacter.cpp: a capsule on the ground, UE's walking mode. Not a body: collision queries only, pushing bodies by
     // impulses as it goes (Jolt's CharacterVirtual). `Feet` is its origin.
     // A boat (PhysicsVessel.cpp). Its shape: the hull with its weight low and over the water's lift, so it lies level at its draft; `floatFactor` is what Jolt's buoyancy takes for that. Null = it

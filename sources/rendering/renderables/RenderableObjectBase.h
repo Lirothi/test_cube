@@ -56,7 +56,7 @@ class MaterialData;
 class Mesh;
 class RenderableObject;
 class RenderableObjectBase;
-namespace physics { void NotifyChanged(RenderableObjectBase* object); }
+namespace worldlinks { void Changed(RenderableObjectBase& object, std::uint8_t links); } // R7.2: ObjectWorldLinks.h
 
 // Architecture plan R7.3: a class that answers As<Class>() (RenderableObjectBase::QueryCapability) -- its tag (one address
 // a class, no central list of types) and its name as the owner of that tag (As<T> refuses a T whose tag is a base's).
@@ -386,7 +386,7 @@ public:
         const bool changed = gameVisible_ != visible;
         gameVisible_ = visible;
         if (threading::GameParkedOrSync()) { render_.visible = visible; }
-        if (changed && physicsRegistered_) { physics::NotifyChanged(this); } // a hidden object has no body
+        if (changed && worldLinks_) { worldlinks::Changed(*this, worldLinks_); } // R7.2c: a hidden object has no body
     }
     // The game's switches (visibility, a mesh's shadow switch) into the render half's copies.
     virtual void SyncSwitchesToRender() { render_.visible = gameVisible_; }
@@ -424,7 +424,6 @@ protected:
     std::uint64_t cameraVisibleFrame_ = ~0ull;
     ObjectRenderState render_; // R7.1: the render half's copy (RenderState)
     std::uint8_t worldLinks_ = 0; // R7.2: the modules that keep something of this object (ObjectWorldLinks.h), a bit each
-    bool physicsRegistered_ = false; // the world knows this object (RenderableObject::SetPhysicsMotion)
     bool gameVisible_ = true; // the game's
     bool gbufferIndirect_ = false;
     bool cameraOccluded_ = false;

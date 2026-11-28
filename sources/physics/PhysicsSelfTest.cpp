@@ -1475,8 +1475,8 @@ namespace physics
                 floorShape.shape = ShapeKind::Custom;
                 floorShape.primitives.push_back(GatePrimitive(PrimitiveKind::Box, Math::float3(40.0f, 1.0f, 40.0f), 0.0f));
                 floor.SetPosition(Math::float3(0.0f, -1.0f, 0.0f));
-                floor.SetCollisionSettings(floorShape);
-                floor.SetPhysicsMotion(Motion::Static);
+                SetCollision(floor, floorShape);
+                SetMotion(floor, Motion::Static);
                 CollisionSettings ballShape;
                 ballShape.shape = ShapeKind::Custom;
                 ballShape.rollingResistance = 0.4f;
@@ -1486,8 +1486,8 @@ namespace physics
                     for (int d = 0; d < (i * scatter) % 5; ++d) { decoys.push_back(std::make_unique<GateBody>()); }
                     auto ball = std::make_unique<GateBody>();
                     ball->SetPosition(Math::float3(0.7f * static_cast<float>(i % 8), 0.5f + 0.05f * static_cast<float>(i), 0.7f * static_cast<float>(i / 8)));
-                    ball->SetCollisionSettings(ballShape);
-                    ball->SetPhysicsMotion(Motion::Dynamic);
+                    SetCollision(*ball, ballShape);
+                    SetMotion(*ball, Motion::Dynamic);
                     balls.push_back(std::move(ball));
                 }
             }
@@ -1743,9 +1743,9 @@ namespace physics
                 }
 
                 GateBody boat;
-                boat.SetCollisionSettings(customBox(Math::float3(1.0f, 0.5f, 1.0f)));
+                SetCollision(boat, customBox(Math::float3(1.0f, 0.5f, 1.0f)));
                 SetBuoyant(boat, true);
-                boat.SetPhysicsMotion(Motion::Static);
+                SetMotion(boat, Motion::Static);
                 World world;
                 float worst = 0.0f;
                 float top = 0.0f;
@@ -1771,15 +1771,15 @@ namespace physics
             // A pose, and Stop.
             {
                 GateBody floor;
-                floor.SetCollisionSettings(customBox(Math::float3(40.0f, 1.0f, 40.0f)));
+                SetCollision(floor, customBox(Math::float3(40.0f, 1.0f, 40.0f)));
                 floor.SetPosition(Math::float3(0.0f, -1.0f, 0.0f));
-                floor.SetPhysicsMotion(Motion::Static);
+                SetMotion(floor, Motion::Static);
                 GateBody ball;
-                ball.SetCollisionSettings(customBall(0.25f));
+                SetCollision(ball, customBall(0.25f));
                 ball.SetPosition(Math::float3(1.0f, 3.0f, -2.0f));
                 ball.SetScale(Math::float3(2.0f, 2.0f, 2.0f));
                 ball.SetRotationEulerDeg(Math::float3(0.0f, 40.0f, 0.0f));
-                ball.SetPhysicsMotion(Motion::Dynamic);
+                SetMotion(ball, Motion::Dynamic);
                 World world;
                 int frames = 0;
                 do
@@ -1815,8 +1815,8 @@ namespace physics
                 const float killY = settings.killY;
                 settings.killY = -5.0f;
                 GateBody ball;
-                ball.SetCollisionSettings(customBall(0.25f));
-                ball.SetPhysicsMotion(Motion::Dynamic);
+                SetCollision(ball, customBall(0.25f));
+                SetMotion(ball, Motion::Dynamic);
                 World world;
                 int frames = 0;
                 while (world.GetStats().fellOut == 0 && ++frames < 900) { frame(world, 1.0f / 60.0f); }
@@ -1852,10 +1852,10 @@ namespace physics
                 const auto drop = [&](const WaterSurface* water, float& centreY, std::uint32_t& fellOut)
                 {
                     GateBody ball;
-                    ball.SetCollisionSettings(customBall(0.25f));
+                    SetCollision(ball, customBall(0.25f));
                     ball.SetPosition(Math::float3(0.0f, 2.0f, 0.0f));
                     SetBuoyant(ball, true);
-                    ball.SetPhysicsMotion(Motion::Dynamic);
+                    SetMotion(ball, Motion::Dynamic);
                     World world;
                     for (int i = 0; i < 600; ++i)
                     {
@@ -1889,9 +1889,9 @@ namespace physics
             // gravity takes from it holds the ball where it was put; removed, the ball falls.
             {
                 GateBody ball;
-                ball.SetCollisionSettings(customBall(0.25f));
+                SetCollision(ball, customBall(0.25f));
                 ball.SetPosition(Math::float3(0.0f, 2.0f, 0.0f));
-                ball.SetPhysicsMotion(Motion::Dynamic);
+                SetMotion(ball, Motion::Dynamic);
                 World world;
                 frame(world, 1.0f / 60.0f); // builds the body
                 const BodyKey key = world.BodyOf(&ball);
@@ -1937,14 +1937,14 @@ namespace physics
                 shape.primitives.push_back(box);
 
                 GateBody stretched;
-                stretched.SetCollisionSettings(shape);
+                SetCollision(stretched, shape);
                 stretched.SetScale(Math::float3(1.0f, 3.0f, 1.0f));
-                stretched.SetPhysicsMotion(Motion::Static);
+                SetMotion(stretched, Motion::Static);
                 GateBody mirrored;
-                mirrored.SetCollisionSettings(shape);
+                SetCollision(mirrored, shape);
                 mirrored.SetPosition(Math::float3(0.0f, 0.0f, 20.0f));
                 mirrored.SetScale(Math::float3(-1.0f, 1.0f, 1.0f));
-                mirrored.SetPhysicsMotion(Motion::Static);
+                SetMotion(mirrored, Motion::Static);
                 World world;
                 frame(world, 1.0f / 60.0f);
                 float stretchedTrunk = 0.0f, stretchedBox = 0.0f, mirroredTrunk = 0.0f, mirroredBox = 0.0f;

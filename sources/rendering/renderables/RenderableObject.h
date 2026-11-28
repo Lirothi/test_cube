@@ -14,7 +14,6 @@
 #include "core/math/Math.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "core/math/AABB.h"
-#include "physics/PhysicsTypes.h" // physics::Motion, physics::CollisionSettings, held per object
 
 class Renderer;
 class Camera;
@@ -57,7 +56,7 @@ public:
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
     virtual ~RenderableObject();
-    void DetachFromWorld() override; // its world links (the water mask, the buoyancy, the physics' table) and the physics world
+    void DetachFromWorld() override; // its world links: the water mask, the buoyancy, the physics (its table and the worlds)
 
     TC_RENDERABLE_CAPABILITY(RenderableObject); // R7.3: As<RenderableObject>()
     void* QueryCapability(const void* tag) override
@@ -147,23 +146,14 @@ public:
     // (physics::SetBuoyant); "buoyancy" -- where and how, normally from the asset's mesh.json -- the ocean's
     // (OceanBuoyancy::SetSettings). Both keep them in their tables, which the object's world links empty when it goes.
 
-    // --- Physics -----------------------------------------------------------------------------
-    // docs/physics_plan.md. Level object "physics" (absent = Static) and "collision" -- normally from the asset's mesh.json.
-    // The first SetPhysicsMotion registers with the world (physics/PhysicsWorld.h), which never walks the scene; the transform
-    // setters and SetVisible then tell it what changed. The body's pose comes back through SetRenderOffset.
-    void SetPhysicsMotion(physics::Motion motion);
-    physics::Motion GetPhysicsMotion() const { return physicsMotion_; }
-    void SetCollisionSettings(physics::CollisionSettings settings);
-    const physics::CollisionSettings& GetCollisionSettings() const { return collisionSettings_; }
+    // --- Physics: not the object's (architecture plan R7.2c; docs/physics_plan.md). Level object "physics" (absent = Static),
+    // "collision" -- normally from the asset's mesh.json -- and a "vessel" asset's numbers are the physics' table
+    // (physics::SetMotion / SetCollision / SetVessel): the first motion registers the object with the worlds, which never walk
+    // the scene, and its world links tell them of its moves, its visibility and its leaving. The body's pose comes back through
+    // SetRenderOffset.
     // A boat under way: the GI probes' rays pass through it (rt::kInstanceMaskGiProbe). The game half says, the render half's TLAS reads: a frame either way is nothing, the probes average it.
     void SetLeavesGiProbes(bool leaves) { leavesGiProbes_.store(leaves, std::memory_order_relaxed); }
     bool LeavesGiProbes() const { return leavesGiProbes_.load(std::memory_order_relaxed); }
-    // mesh.json "vessel" (with a placed copy's own numbers over it): a powered boat. Null = not one. The world takes a copy
-    // when it builds the body, so a change rebuilds it (game thread only: the editor's, the factory's).
-    void SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings);
-    const physics::VesselSettings* GetVesselSettings() const { return vesselSettings_.get(); }
-    // Moves with what the body is built from: the collision settings, the vessel's numbers.
-    std::uint32_t GetBodyRevision() const { return bodyRevision_; }
     // The geometry an automatic pontoon layout analyses (StaticMesh: its .mesh.bin). Empty = none.
     virtual const std::string& GetGeometryPath() const
     {
@@ -446,11 +436,7 @@ private:
     Math::float3 rotEuler_{};
     Math::mat4 renderOffset_;
     bool hasRenderOffset_ = false;
-    physics::Motion physicsMotion_ = physics::Motion::None;
-    std::uint32_t bodyRevision_ = 0;
-    std::shared_ptr<const physics::VesselSettings> vesselSettings_;
     std::atomic<bool> leavesGiProbes_{ false };
-    physics::CollisionSettings collisionSettings_;
     bool resetMotionOnSync_ = false;
     bool transformDirty_ = true;
     bool prevModelMatrixValid_ = false;

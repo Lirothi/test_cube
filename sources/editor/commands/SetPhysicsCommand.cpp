@@ -23,7 +23,7 @@ bool SetPhysicsCommand::VesselAsset(EditorContext& ctx, EditorObjectId id)
 {
     const RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
     const RenderableObject* object = base ? base->As<RenderableObject>() : nullptr;
-    return object && object->GetVesselSettings() != nullptr;
+    return object && physics::VesselOf(*object) != nullptr;
 }
 
 physics::Motion SetPhysicsCommand::DocumentMotion(const EditorObject& obj, bool vesselAsset)
@@ -55,13 +55,13 @@ void SetPhysicsCommand::Apply(EditorContext& ctx, EditorObjectId id, physics::Mo
     {
         if (RenderableObject* object = base->As<RenderableObject>())
         {
-            physics::CollisionSettings collision = object->GetCollisionSettings();
+            physics::CollisionSettings collision = physics::CollisionOf(*object); // R7.2c: the physics' table
             if (collision.mass != mass)
             {
                 collision.mass = mass;
-                object->SetCollisionSettings(std::move(collision));
+                physics::SetCollision(*object, std::move(collision));
             }
-            object->SetPhysicsMotion(motion);
+            physics::SetMotion(*object, motion);
         }
     }
     ctx.document.SetDirty(true);

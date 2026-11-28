@@ -15,7 +15,7 @@
 #include "ocean/BuoyancyJson.h"
 #include "ocean/WaterMask.h" // R7.2: ocean::watermask::Set
 #include "ocean/OceanBuoyancy.h" // R7.2b: OceanBuoyancy::SetSettings
-#include "physics/PhysicsWorld.h" // R7.2b: physics::SetBuoyant
+#include "physics/PhysicsWorld.h" // R7.2b / R7.2c: the physics' table (buoyant, motion, collision, vessel)
 #include "physics/CollisionJson.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
@@ -547,19 +547,19 @@ namespace SceneObjectFactory
                 }
                 // The object's own kilograms (the Inspector's Mass) over the asset's density.
                 if (o.contains("mass") && o["mass"].is_number()) { collision.mass = o["mass"].get<float>(); }
-                mesh.SetCollisionSettings(std::move(collision));
+                physics::SetCollision(mesh, std::move(collision)); // R7.2c: the physics' table
                 physics::Motion motion = physics::Motion::Static;
                 // A boat is a boat wherever it is put (docs/play_mode_plan.md): a copy of a "vessel" asset floats and moves unless the object says otherwise.
                 if (o.contains("vessel") && o["vessel"].is_object())
                 {
                     auto vessel = std::make_shared<physics::VesselSettings>();
                     physics::ReadVesselSettings(o["vessel"], *vessel);
-                    mesh.SetVesselSettings(std::move(vessel));
+                    physics::SetVessel(mesh, std::move(vessel));
                     motion = physics::Motion::Dynamic;
                     if (!o.contains("buoyant")) { physics::SetBuoyant(mesh, true); }
                 }
                 if (o.contains("physics") && o["physics"].is_string()) { physics::MotionFromName(o["physics"].get<std::string>(), motion); }
-                mesh.SetPhysicsMotion(motion);
+                physics::SetMotion(mesh, motion);
             }, nullptr).Label("Collision / physics", 0.0f, "\"collision\" (how), \"mass\" (kg), \"vessel\" (a boat: dynamic, "
                               "buoyant), \"physics\" (static / dynamic / kinematic; absent = static)."),
             // Plan L: "onAt": "night" (or "day") -- the mesh's emissive (a bulb, a lit window) comes on with the night

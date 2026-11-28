@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <cstring>
 
-#include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
 #include "rendering/renderables/ObjectWorldLinks.h" // R7.2: the modules that keep something of the object (the water mask, the buoyancy, the physics' table)
 
 #include <utility>
@@ -50,7 +49,7 @@ void RenderableObject::SetPosition(const Math::float3& p)
     }
     pos_ = p;
     MarkTransformDirty();
-    if (physicsRegistered_) { physics::NotifyChanged(this); }
+    if (worldLinks_) { worldlinks::Changed(*this, worldLinks_); } // R7.2c: the physics' table tells the worlds
 }
 
 void RenderableObject::SetScale(const Math::float3& s)
@@ -61,7 +60,7 @@ void RenderableObject::SetScale(const Math::float3& s)
     }
     scale_ = s;
     MarkTransformDirty();
-    if (physicsRegistered_) { physics::NotifyChanged(this); }
+    if (worldLinks_) { worldlinks::Changed(*this, worldLinks_); } // R7.2c: the physics' table tells the worlds
 }
 
 void RenderableObject::SetRotationEulerRad(const Math::float3& eulerXYZ)
@@ -72,7 +71,7 @@ void RenderableObject::SetRotationEulerRad(const Math::float3& eulerXYZ)
     }
     rotEuler_ = eulerXYZ;
     MarkTransformDirty();
-    if (physicsRegistered_) { physics::NotifyChanged(this); }
+    if (worldLinks_) { worldlinks::Changed(*this, worldLinks_); } // R7.2c: the physics' table tells the worlds
 }
 
 void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
@@ -83,43 +82,13 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
 
 RenderableObject::~RenderableObject()
 {
-    if (worldLinks_) { worldlinks::Detached(*this, worldLinks_); } // R7.2: the water mask, the buoyancy, the physics' table
-    if (physicsRegistered_) { physics::Unregister(this); }
+    if (worldLinks_) { worldlinks::Detached(*this, worldLinks_); } // R7.2: the water mask, the buoyancy, the physics (its table, the worlds)
 }
 
 void RenderableObject::DetachFromWorld()
 {
     // As the destructor, now; the flags cleared so it does not again.
-    if (worldLinks_) { worldlinks::Detached(*this, std::exchange(worldLinks_, std::uint8_t{ 0 })); } // R7.2: the water mask, the buoyancy, the physics' table
-    if (physicsRegistered_) { physics::Unregister(this); physicsRegistered_ = false; }
-}
-
-void RenderableObject::SetPhysicsMotion(physics::Motion motion)
-{
-    physicsMotion_ = motion;
-    if (!physicsRegistered_)
-    {
-        physicsRegistered_ = true;
-        physics::Register(this);
-    }
-    else
-    {
-        physics::NotifyChanged(this);
-    }
-}
-
-void RenderableObject::SetCollisionSettings(physics::CollisionSettings settings)
-{
-    collisionSettings_ = std::move(settings);
-    ++bodyRevision_;
-    if (physicsRegistered_) { physics::NotifyChanged(this); }
-}
-
-void RenderableObject::SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings)
-{
-    vesselSettings_ = std::move(settings);
-    ++bodyRevision_;
-    if (physicsRegistered_) { physics::NotifyChanged(this); }
+    if (worldLinks_) { worldlinks::Detached(*this, std::exchange(worldLinks_, std::uint8_t{ 0 })); } // R7.2: the water mask, the buoyancy, the physics (its table, the worlds)
 }
 
 void RenderableObject::Init(Renderer* renderer,
