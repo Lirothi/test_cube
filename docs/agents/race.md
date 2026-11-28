@@ -415,7 +415,8 @@ it", then "teach the bot to take the characteristics into account so it drives a
   `SetVesselTuneCommand`: every selected boat, one undo entry, a key written only while it differs from the asset's (a
   copy put back saves byte-identical), clamped to the key's range. MCP / command bar `run_action setVessel {key, value}`
   ({key, reset: true}, {reset: true} = every one); `get_readouts` vessels[] carry `geometry` now. The running copy takes
-  the numbers at once: `RenderableObject::SetVesselSettings` moves `GetBodyRevision` (was the collision's alone) and the
+  the numbers at once: `RenderableObject::SetVesselSettings` (since R7.2c `physics::SetVessel`, the physics' table) moves
+  `GetBodyRevision` (`physics::BodyRevisionOf`; was the collision's alone) and the
   physics world rebuilds the body from them -- its entry kept a copy made at the build, so before this a change reached
   nothing until a respawn. The Physics row's "Mass (kg)" is gone from a boat: its body weighs `vessel.mass`
   (`SetVesselBody`), the row moved nothing. Gate `intent_regression TestRaceCourseAndBot`: the same bot on a 60 m circle

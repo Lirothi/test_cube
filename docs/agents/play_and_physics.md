@@ -28,7 +28,7 @@ playing (the camera back where it stood at Play, the world running on; owner, 20
 
 - **The pose is a render offset.** A body moves its object through `RenderableObject::SetRenderOffset`, at the hand-over (`World::SyncPoses`; in `Scene::Tick` on a frame with no step or under `physics.async:0`), so the authored transform, the document and a Save
   never see it; only Keep writes it. Numbers cross as they are (position and quaternion, never a matrix), no change of handedness: the gate `pose` holds it.
-- **What does not move does not pay.** Objects arrive through a registry (`SetPhysicsMotion`, the transform setters and `SetVisible` queue an event; nothing walks the scene), and without an awake
+- **What does not move does not pay.** Objects arrive through a registry (`physics::SetMotion` -- the physics' own table since architecture plan R7.2c, with `SetCollision`, `SetVessel`, `SetBuoyant`; the object holds only its world links -- and the transform setters and `SetVisible` through `worldlinks::Changed` queue an event; nothing walks the scene), and without an awake
   body or a moving boat `PhysicsSystem::Update` is not called: `Scene::TickPhysics` 0.001 ms. An object's destructor
   only POSTS its removal: until the world's next Drain its entry holds the dead pointer, which `FindVessel` /
   `CollectHulls` hand out and `Scene::Sync` dereferences. So every removal in Scene ends with `physics_.ForgetRemoved()`
